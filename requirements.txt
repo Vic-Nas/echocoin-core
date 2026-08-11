@@ -1,0 +1,8 @@
+flask>=3.0
+requests>=2.31
+PyNaCl>=1.5
+pqcrypto>=0.4.0
+markdown>=3.5
+miniupnpc>=2.1
+pytest>=8.0
+libtorrent>=2.0.0
