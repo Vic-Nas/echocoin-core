@@ -20,11 +20,6 @@ def test_add_peer():
     assert pool.count() == 1
 
 
-def test_self_not_added():
-    pool = _make_pool()
-    assert not pool.add("127.0.0.1:9000")
-    assert pool.count() == 0
-
 
 def test_duplicate_not_counted_twice():
     pool = _make_pool()

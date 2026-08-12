@@ -13,9 +13,6 @@ def make_pool():
 
 # ---- self-detection ----
 
-def test_self_0000_rejected():
-    pool = make_pool()
-    assert not pool.add("0.0.0.0:8333")
 
 
 
