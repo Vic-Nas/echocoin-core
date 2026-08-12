@@ -298,9 +298,9 @@ class Discovery:
 
     def _bep44_put(self, ses, slot_index, my_addr):
         sk_64, pk = self._bep44_slot_keypair(slot_index)
-        value = json.dumps({"addr": my_addr, "ts": int(time.time())})
+        value = json.dumps({"addr": my_addr, "ts": int(time.time())}).encode()
         try:
-            ses.dht_put_mutable_item(sk_64, pk, value, "poolcoin-v1")
+            ses.dht_put_mutable_item(sk_64, pk, value, b"poolcoin-v1")
             log.info("[dht] BEP44 put  slot=%d  addr=%s",
                      slot_index, my_addr)
         except Exception:
@@ -313,7 +313,7 @@ class Discovery:
                 continue   # never read our own slot -- we already know our address
             _, pk = self._bep44_slot_keypair(i)
             try:
-                ses.dht_get_mutable_item(pk, "poolcoin-v1")
+                ses.dht_get_mutable_item(pk, b"poolcoin-v1")
             except Exception:
                 pass
         log.debug("[dht] BEP44 get  slots=%d", BEP44_SLOT_COUNT - (1 if my_slot is not None else 0))

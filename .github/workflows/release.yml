@@ -61,7 +61,7 @@ jobs:
             echo "TESTNET=False: skipping GENESIS_TIMESTAMP update"
             exit 0
           fi
-          TIMESTAMP=$(python3 -c "import time; print(int(time.time()) + 300)")
+          TIMESTAMP=$(python3 -c "import time; print(int(time.time()))")
           sed -i "s/^GENESIS_TIMESTAMP = .*/GENESIS_TIMESTAMP = $TIMESTAMP/" params.py
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
