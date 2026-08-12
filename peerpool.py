@@ -90,7 +90,7 @@ class PeerPool:
             was_new = addr not in self._peers
             self._peers[addr] = time.time()
         if was_new:
-            log.info("[peer] added  addr=%s", addr)
+            log.debug("[peer] added  addr=%s", addr)
         return was_new
 
     def touch(self, addr):

@@ -48,7 +48,7 @@ class Syncer:
         if remote_height == local_height and remote_tip_hash >= local_tip_hash:
             return False
 
-        log.debug("[sync] peer %s is at height %d (local %d), fetching chain",
+        log.info("[sync] peer %s is ahead  remote=%d  local=%d  fetching chain",
                  peer, remote_height, local_height)
         chain = self.fetch_chain_from(peer)
         if chain:

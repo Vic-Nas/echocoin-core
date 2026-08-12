@@ -126,7 +126,7 @@ class Discovery:
                     data = json.loads(raw)
                     addr = data.get("addr", "")
                     if addr and ":" in addr:
-                        log.info("[dht] BEP44 found node  addr=%s", addr)
+                        log.debug("[dht] BEP44 found node  addr=%s", addr)
                         self._validate_executor.submit(self._validate_and_add, addr)
                 except Exception:
                     pass
@@ -164,7 +164,7 @@ class Discovery:
                 self.pool.remove(connect_addr)
                 return
             if self.pool.add(connect_addr):
-                log.info("[peer] connected  addr=%s", connect_addr)
+                log.info("[peer] connected  addr=%s  pool=%d", connect_addr, self.pool.count())
         except Exception:
             log.debug("[peer] validation failed  addr=%s", connect_addr, exc_info=True)
             self.pool.strike(connect_addr)
@@ -216,7 +216,7 @@ class Discovery:
                 ses.dht_get_mutable_item(pk, "poolcoin-v1")
             except Exception:
                 pass
-        log.info("[dht] BEP44 get  slots=%d", BEP44_SLOT_COUNT)
+        log.debug("[dht] BEP44 get  slots=%d", BEP44_SLOT_COUNT)
 
     def _make_lt_session(self):
         import libtorrent as lt

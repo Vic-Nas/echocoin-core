@@ -142,12 +142,16 @@ class Node:
         tip = self.chain[-1]
         ok, err = tx_mod.validate(tx_dict, self.state, tip["height"], self._fee_rate_at)
         if not ok:
+            log.debug("[tx] rejected  reason=%s  from=%s",
+                      err, tx_dict.get("from", "?")[:24])
             return False, err
         ok, h = self.mempool.add(tx_dict)
         if not ok:
             return False, h
         self.gossip.relay_tx(tx_dict)
         self._publish_view()
+        log.info("[tx] accepted  hash=%s  from=%s  fee=%s",
+                 h[:12], tx_dict.get("from", "?")[:24], tx_dict.get("fee"))
         return True, h
 
     def submit_tx_from_api(self, tx_dict, timeout=5):
@@ -284,8 +288,9 @@ class Node:
             self._publish_view()
             self.mempool.remove_many(
                 [tx_mod.tx_hash(t) for t in best_blk.get("transactions", [])])
-            log.debug("[wait] applied peer block  height=%d  hash=%s",
-                      best_blk["height"], best_blk["hash"][:12])
+            log.info("[wait] applied peer block  height=%d  hash=%s  tx=%d",
+                     best_blk["height"], best_blk["hash"][:12],
+                     len(best_blk.get("transactions", [])))
 
     def _flush_stale_queue(self):
         pending_blocks = []
@@ -323,9 +328,12 @@ class Node:
         fee_rate   = block_mod.compute_expected_fee_rate(self.chain)
         puzzle     = mining.derive_puzzle(tip["hash"], self.pk)
         self.current_difficulty = difficulty
-        self.mempool.prune_stale(tip["height"], self.state)
-        log.info("[cycle] height=%d  tip=%s  peers=%d  mempool=%d",
-                 tip["height"], tip["hash"][:12], self.pool.count(), self.mempool.size())
+        pruned = self.mempool.prune_stale(tip["height"], self.state)
+        if pruned:
+            log.info("[cycle] mempool pruned  dropped=%d  remaining=%d",
+                     len(pruned), self.mempool.size())
+        log.info("[cycle] building height=%d  tip=%s  peers=%d  mempool=%d",
+                 tip["height"] + 1, tip["hash"][:12], self.pool.count(), self.mempool.size())
         return tip, difficulty, fee_rate, puzzle
 
     def _puzzle_phase(self, cycle_start, tip, difficulty, puzzle):
@@ -385,8 +393,8 @@ class Node:
                     seen_keys.add(key)
                     peer_solutions.append(sol)
 
-        log.debug("[puzzle] done  mine=%d  peers=%d  nonces=%d",
-                  len(my_solutions), len(peer_solutions), nonce)
+        log.info("[puzzle] done  my_solutions=%d  peer_solutions=%d  nonces_tried=%d",
+                 len(my_solutions), len(peer_solutions), nonce)
         return my_solutions, peer_solutions, peer_block_candidates
 
     def _build_phase(self, cycle_start, tip, difficulty, fee_rate,
@@ -431,7 +439,7 @@ class Node:
                     log.warning("[build] reward check failed  reason=%s", err2)
                     return
             if _rng.random() >= self._censorship_score(candidate):
-                log.warning("[build] censorship rejection")
+                log.debug("[build] censorship score rejected block  hash=%s", candidate.get("hash", "?")[:12])
                 return
             if best_block is None or candidate["hash"] < best_block["hash"]:
                 best_block = candidate
@@ -669,7 +677,12 @@ class Node:
         self.state = new_state
         self.storage.save_state(new_state)
         self._publish_view()
-        log.info("[%s] height=%d  fork_point=%d", label, len(self.chain) - 1, fork_point)
+        if label == "reorg":
+            log.warning("[reorg] applied  height=%d  fork_point=%d  rewound=%d",
+                        len(self.chain) - 1, fork_point,
+                        len(candidate_chain) - 1 - fork_point)
+        else:
+            log.info("[sync] applied  height=%d  fork_point=%d", len(self.chain) - 1, fork_point)
         return True, None
 
     def sync_chain(self, remote_chain):
