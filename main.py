@@ -16,6 +16,7 @@ from gossip import Gossip
 from syncer import Syncer
 from node import Node
 from api import create_app
+import params
 from params import DB_PATH
 
 logging.basicConfig(
