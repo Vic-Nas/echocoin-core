@@ -14,7 +14,7 @@ def test_credit_debit():
 def test_debit_below_zero_asserts():
     s = state_mod.State()
     s.credit("alice", 10)
-    with pytest.raises(AssertionError):
+    with pytest.raises(ValueError):
         s.debit("alice", 11)
 
 

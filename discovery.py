@@ -15,7 +15,6 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 import nacl.signing
 
-import block as block_mod
 from params import MIN_PEERS, BEP44_SLOT_COUNT
 
 log = logging.getLogger("pc.discovery")

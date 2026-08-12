@@ -4,7 +4,9 @@ import time
 import queue
 import getpass
 import logging
-import random
+import secrets as _secrets
+
+_rng = _secrets.SystemRandom()  # cryptographically seeded; used for censorship probability
 
 import crypto
 import tx as tx_mod
@@ -271,7 +273,7 @@ class Node:
         # Accept with probability = censorship_score (same direction as _try_adopt).
         # score=1.0 (no missing txs) -> always accept.
         # score<1.0 -> probabilistically reject censoring blocks.
-        if random.random() < self._censorship_score(best_blk):
+        if _rng.random() < self._censorship_score(best_blk):
             self._update_exclusion_ages(best_blk)
             best_probe.apply_rewards(
                 mining.reward_addresses_from_summary(best_blk.get("solver_summaries", [])))
@@ -428,7 +430,7 @@ class Node:
                 if not ok2:
                     log.warning("[build] reward check failed  reason=%s", err2)
                     return
-            if random.random() >= self._censorship_score(candidate):
+            if _rng.random() >= self._censorship_score(candidate):
                 log.warning("[build] censorship rejection")
                 return
             if best_block is None or candidate["hash"] < best_block["hash"]:

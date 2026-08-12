@@ -18,9 +18,6 @@ from pqcrypto.sign.falcon_512 import (
     generate_keypair as _falcon_keygen,
     sign as _falcon_sign,
     verify as _falcon_verify,
-    PUBLIC_KEY_SIZE,
-    SECRET_KEY_SIZE,
-    SIGNATURE_SIZE,
 )
 
 from params import ADDRESS_WORD_COUNT, WORD_BITS

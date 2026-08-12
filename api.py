@@ -201,7 +201,6 @@ def create_app(node, pool, net_in_q):
         alert = ""
         from_addr = node.addr
         v          = node.view
-        tip_height = v.height
         fee_rate   = v.tip["fee_rate"]
         state      = v.state
         nonce      = state.get_nonce(from_addr) + 1
@@ -563,15 +562,8 @@ def create_app(node, pool, net_in_q):
             "minted": 0, "burned_fees": 0, "burned_remainder": 0, "circulating": 0,
         }
 
-        # Compute net emission rate over the last block for display.
-        last = points[-1] if len(points) >= 1 else None
-        prev = points[-2] if len(points) >= 2 else None
-        if last and prev:
-            net_emission_last = last["net_emission"]
-        elif last:
-            net_emission_last = last["net_emission"]
-        else:
-            net_emission_last = 0
+        last = points[-1] if points else None
+        net_emission_last = last["net_emission"] if last else 0
 
         return jsonify({
             "points": points,
