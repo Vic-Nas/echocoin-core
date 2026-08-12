@@ -375,6 +375,8 @@ class Discovery:
             with open(PEER_CACHE_FILE) as f:
                 peers = json.load(f)
             log.info("[peer] cache loaded  count=%d", len(peers))
+            if not peers:
+                return
             with ThreadPoolExecutor(max_workers=min(len(peers), 16)) as ex:
                 for addr in peers:
                     ex.submit(self._validate_and_add, addr)
