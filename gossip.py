@@ -66,31 +66,6 @@ class Gossip:
                 self._seen_tx.popitem(last=False)
             return False
 
-    def request_tx(self, tx_hash):
-        """Fetch a single tx by hash from peers concurrently."""
-        peers = self.pool.get_all()
-        if not peers:
-            return None
-        result = [None]
-        found  = threading.Event()
-
-        def try_peer(peer):
-            if found.is_set():
-                return
-            try:
-                r = requests.get(f"http://{peer}/api/tx/{tx_hash}", timeout=3)
-                if r.status_code == 200 and not found.is_set():
-                    result[0] = r.json()
-                    found.set()
-            except Exception:
-                pass
-
-        with ThreadPoolExecutor(max_workers=min(len(peers), 16)) as ex:
-            for p in peers:
-                ex.submit(try_peer, p)
-        tx = result[0]
-        return tx if isinstance(tx, dict) else None
-
     # ---- Dandelion stem/fluff ----
 
     def dandelion_send(self, tx_dict, remaining_hops):

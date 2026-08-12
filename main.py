@@ -42,12 +42,19 @@ def main():
     parser.add_argument("--keyfile", default="poolcoin_key.json")
     parser.add_argument("--db",      default=DB_PATH)
     parser.add_argument("--peer",    action="append", default=[])
+    parser.add_argument(
+        "--passphrase", default=None,
+        help=(
+            "Key passphrase. WARNING: visible in shell history and process list. "
+            "Only use in non-interactive environments where you accept that risk."
+        ),
+    )
     args = parser.parse_args()
 
     # Key setup
     if not os.path.exists(args.keyfile):
         print("No key file found. Creating new FALCON-512 keypair.")
-        passphrase = _prompt_new_passphrase()
+        passphrase = args.passphrase or _prompt_new_passphrase()
         sk, pk = crypto.generate_keypair()
         crypto.save_key(args.keyfile, sk, pk, passphrase)
         kek = crypto.derive_kek(args.keyfile, passphrase)
@@ -56,7 +63,7 @@ def main():
         log.info("[startup] address=%s", addr)
         del sk, passphrase
     else:
-        passphrase = getpass.getpass("Passphrase: ")
+        passphrase = args.passphrase or getpass.getpass("Passphrase: ")
         try:
             pk = crypto.load_pubkey(args.keyfile)
             kek = crypto.derive_kek(args.keyfile, passphrase)

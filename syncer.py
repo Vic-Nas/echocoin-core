@@ -10,7 +10,10 @@ import requests
 
 log = logging.getLogger("pc.syncer")
 
-FETCH_CHAIN_MAX_BLOCKS = 6_000_000
+# Hard cap on blocks fetched in a single sync to bound memory usage.
+# At one block per 2 minutes, 50,000 blocks is ~70 days of chain history.
+# A node that far behind should sync in multiple passes regardless.
+FETCH_CHAIN_MAX_BLOCKS = 50_000
 
 
 class Syncer:

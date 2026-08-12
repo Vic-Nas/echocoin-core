@@ -14,7 +14,6 @@ class FakeGossip:
     def relay_tx(self, t):               self.relayed_txs.append(t)
     def broadcast_block(self, b):        pass
     def broadcast_solution(self, s, c):  pass
-    def request_tx(self, h):             return None
     def dandelion_send(self, tx, hops):  pass
     def mark_seen(self, h):              pass
     def _broadcast(self, ep, data):      pass

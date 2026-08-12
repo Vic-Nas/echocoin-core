@@ -1,11 +1,10 @@
 """HTTP API + node UI + whitepaper renderer. Thin wrapper over node + pool."""
 
 import os
-import json
 import time
 import logging
 import html
-from collections import defaultdict, OrderedDict
+from collections import OrderedDict
 
 import threading
 
@@ -113,7 +112,10 @@ def _parse_sender(data):
     if port is None:
         return None
     try:
-        return f"{request.remote_addr}:{int(port)}"
+        port_int = int(port)
+        if not 1 <= port_int <= 65535:
+            return None
+        return f"{request.remote_addr}:{port_int}"
     except (TypeError, ValueError):
         return None
 

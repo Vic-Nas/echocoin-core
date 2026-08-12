@@ -14,14 +14,17 @@ class State:
 
     def credit(self, addr, amount):
         """Add amount to address. Amount must be positive."""
-        assert amount > 0, "credit amount must be positive"
+        if amount <= 0:
+            raise ValueError(f"credit amount must be positive, got {amount}")
         self._balances[addr] = self.get_balance(addr) + amount
 
     def debit(self, addr, amount):
         """Subtract amount from address. Amount must be positive. Balance must not go negative."""
-        assert amount > 0, "debit amount must be positive"
+        if amount <= 0:
+            raise ValueError(f"debit amount must be positive, got {amount}")
         bal = self.get_balance(addr)
-        assert bal >= amount, f"debit would make balance negative: {bal} - {amount}"
+        if bal < amount:
+            raise ValueError(f"debit would make balance negative: {bal} - {amount}")
         self._balances[addr] = bal - amount
 
     def set_nonce(self, addr, nonce):
