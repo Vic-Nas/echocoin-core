@@ -114,8 +114,8 @@ class Node:
                 kek = crypto.derive_kek(self.keyfile, passphrase)
                 sk_test = crypto.decrypt_secret_key(self.keyfile, kek=kek)
                 del sk_test
-            except ValueError:
-                raise RuntimeError("wrong passphrase")
+            except (ValueError, FileNotFoundError, OSError) as e:
+                raise RuntimeError(f"could not load key: {e}") from None
             finally:
                 del passphrase
 
@@ -543,29 +543,38 @@ class Node:
                                            {"type": "tx_fluff", "tx": tx_dict})
 
     def _assemble_block(self, tip, solutions, difficulty, fee_rate, build_deadline):
-        """Assemble a block from this node's own mempool."""
+        """Assemble a block from this node's own mempool.
+        Adds txs one at a time, stopping before the block would exceed the
+        size limit, so the block is always valid and never silently dropped.
+        """
         sorted_txs = tx_mod.sort_txs(self.mempool.all_txs())
         test_state = self.state.snapshot()
         valid_txs  = []
+        summaries  = mining.summarize_solutions(solutions)
+
+        def _make_candidate(txs):
+            return block_mod.create(
+                height=tip["height"] + 1, previous_hash=tip["hash"],
+                transactions=txs, solver_summaries=summaries,
+                difficulty_target=difficulty, fee_rate=fee_rate,
+            )
+
         for t in sorted_txs:
             if time.time() >= build_deadline:
                 log.warning("[build] deadline reached, including %d/%d tx(s)",
                             len(valid_txs), len(sorted_txs))
                 break
             ok, _ = tx_mod.validate(t, test_state, tip["height"], self._fee_rate_at)
-            if ok:
-                test_state.apply_tx(t)
-                valid_txs.append(t)
-        candidate = block_mod.create(
-            height=tip["height"] + 1, previous_hash=tip["hash"],
-            transactions=valid_txs,
-            solver_summaries=mining.summarize_solutions(solutions),
-            difficulty_target=difficulty, fee_rate=fee_rate,
-        )
-        if block_mod.block_size(candidate) > BLOCK_SIZE_LIMIT:
-            log.error("[build] block exceeds size limit, not broadcasting")
-            return None
-        return candidate
+            if not ok:
+                continue
+            # Check size before committing this tx.
+            if block_mod.block_size(_make_candidate(valid_txs + [t])) > BLOCK_SIZE_LIMIT:
+                log.debug("[build] tx would exceed block size limit, skipping")
+                continue
+            test_state.apply_tx(t)
+            valid_txs.append(t)
+
+        return _make_candidate(valid_txs)
 
     def _fee_rate_at(self, height):
         if 0 <= height < len(self.chain):

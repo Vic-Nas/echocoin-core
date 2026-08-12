@@ -44,7 +44,7 @@ class Syncer:
         if remote_height < local_height:
             return False
         # Same height: only sync if the remote tip hash is strictly lower
-        # Only sync if remote hash is strictly lower (lowest hash wins).
+        # (lowest hash wins; same or higher means we already have the better chain).
         if remote_height == local_height and remote_tip_hash >= local_tip_hash:
             return False
 

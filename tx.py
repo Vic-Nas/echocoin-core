@@ -93,14 +93,25 @@ def validate(tx_dict, state, chain_tip_height, get_fee_rate_at_height):
     if not isinstance(fee, int) or fee < 0:
         return False, "fee must be a non-negative integer"
 
+    # Pubkey must be a valid hex string before any crypto work
+    pubkey_hex = tx_dict["pubkey"]
+    sig_hex    = tx_dict["signature"]
+    if not isinstance(pubkey_hex, str) or not isinstance(sig_hex, str):
+        return False, "pubkey and signature must be hex strings"
+    try:
+        pubkey_bytes = bytes.fromhex(pubkey_hex)
+        sig_bytes    = bytes.fromhex(sig_hex)
+    except ValueError:
+        return False, "pubkey or signature is not valid hex"
+
     # Pubkey must match from address
-    expected_addr = crypto.public_key_to_address(bytes.fromhex(tx_dict["pubkey"]))
+    expected_addr = crypto.public_key_to_address(pubkey_bytes)
     if expected_addr != tx_dict["from"]:
         return False, "pubkey does not match from address"
 
     # Signature
     msg = crypto.serialize_for_signing(tx_dict)
-    if not crypto.verify(msg, bytes.fromhex(tx_dict["signature"]), bytes.fromhex(tx_dict["pubkey"])):
+    if not crypto.verify(msg, sig_bytes, pubkey_bytes):
         return False, "invalid signature"
 
     # Nonce: must be exactly current + 1
