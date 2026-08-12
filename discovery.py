@@ -175,6 +175,8 @@ class Discovery:
                 log.info("[peer] connected  addr=%s  pool=%d", peer_addr, self.pool.count())
                 # Immediately fetch this peer's peer list so we learn one hop further.
                 self._validate_executor.submit(self._fetch_and_queue_peers, peer_addr)
+        except requests.exceptions.Timeout:
+            log.debug("[peer] validation timed out  addr=%s", peer_addr)
         except Exception:
             log.debug("[peer] validation failed  addr=%s", peer_addr, exc_info=True)
             self.pool.strike(peer_addr)
@@ -255,20 +257,29 @@ class Discovery:
     # BEP44 helpers (moved verbatim from old network.py)
     # ------------------------------------------------------------------
 
+    _PUBLIC_IP_SERVICES = [
+        "https://api.ipify.org",
+        "https://icanhazip.com",
+        "https://checkip.amazonaws.com",
+    ]
+
     def _my_ip(self):
         """Return the best IP to advertise in the DHT: external (UPnP) if available,
-        otherwise LAN IP detected via routing table."""
+        otherwise query a public IP service, falling back to 127.0.0.1."""
         if self._external_ip:
             return self._external_ip
-        try:
-            import socket
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return ip
-        except Exception:
-            return "127.0.0.1"
+        for url in self._PUBLIC_IP_SERVICES:
+            try:
+                r = requests.get(url, timeout=5)
+                if r.status_code == 200:
+                    ip = r.text.strip()
+                    if ip:
+                        log.debug("[ip] public IP via %s: %s", url, ip)
+                        return ip
+            except Exception:
+                pass
+        log.warning("[ip] could not determine public IP, falling back to 127.0.0.1")
+        return "127.0.0.1"
 
     def _bep44_slot_keypair(self, slot_index):
         seed = hashlib.sha256(
