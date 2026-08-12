@@ -2,6 +2,8 @@ __pycache__/
 *.pyc
 *.pyo
 *.db
+*.db-shm
+*.db-wal
 *.json
 !requirements.txt
 *.dat
