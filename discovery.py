@@ -26,6 +26,11 @@ GET_INTERVAL          = 60
 PUT_DELAY             = 30
 PUT_REFRESH_INTERVAL  = 3600  # re-announce our slot at least this often
 
+# Peer-of-peer crawl: fetch peer lists from current peers, rank candidates
+# by nomination count (how many peers listed them), try best-connected first.
+CRAWL_INTERVAL = 600   # crawl every 10 minutes when above MIN_PEERS
+                       # when below MIN_PEERS, crawl on every DHT get cycle
+
 
 class Discovery:
 
@@ -71,6 +76,7 @@ class Discovery:
         last_get   = 0
         last_put   = 0
         last_save  = 0
+        last_crawl = 0
         start_time = time.monotonic()
 
         # Initial get immediately after bootstrap
@@ -91,6 +97,12 @@ class Discovery:
             if now - last_get > get_interval:
                 self._bep44_get_all(ses)
                 last_get = now
+
+            # Peer-of-peer crawl: more aggressive when below MIN_PEERS.
+            crawl_interval = GET_INTERVAL if peer_count < MIN_PEERS else CRAWL_INTERVAL
+            if now - last_crawl > crawl_interval:
+                self._validate_executor.submit(self._crawl_peer_lists)
+                last_crawl = now
 
             # Periodic put: refresh our slot on a fixed cadence, staggered
             # by my_offset (seconds) so nodes don't all put at once.
@@ -146,7 +158,9 @@ class Discovery:
     # ------------------------------------------------------------------
 
     def _validate_and_add(self, peer_addr):
-        """Check a candidate peer's /api/info, add to pool if valid."""
+        """Check a candidate peer's /api/info, add to pool if valid.
+        On successful connection, also fetch their peer list so we learn
+        about the wider network one hop at a time."""
         try:
             r = requests.get(f"http://{peer_addr}/api/info", timeout=3)
             if r.status_code != 200:
@@ -159,9 +173,68 @@ class Discovery:
                 return
             if self.pool.add(peer_addr):
                 log.info("[peer] connected  addr=%s  pool=%d", peer_addr, self.pool.count())
+                # Immediately fetch this peer's peer list so we learn one hop further.
+                self._validate_executor.submit(self._fetch_and_queue_peers, peer_addr)
         except Exception:
             log.debug("[peer] validation failed  addr=%s", peer_addr, exc_info=True)
             self.pool.strike(peer_addr)
+
+    def _fetch_and_queue_peers(self, peer_addr):
+        """Fetch one peer's peer list and submit each unknown address for validation."""
+        try:
+            r = requests.get(f"http://{peer_addr}/api/peers", timeout=5)
+            if r.status_code != 200:
+                return
+            data = r.json()
+            candidates = data.get("peers", [])
+            known = set(self.pool.all_addrs())
+            new_candidates = [c for c in candidates if isinstance(c, str) and c not in known]
+            if new_candidates:
+                log.debug("[peer] %s offered %d candidates (%d new)",
+                          peer_addr, len(candidates), len(new_candidates))
+            for addr in new_candidates:
+                self._validate_executor.submit(self._validate_and_add, addr)
+        except Exception:
+            log.debug("[peer] peer list fetch failed  addr=%s", peer_addr, exc_info=True)
+
+    def _crawl_peer_lists(self):
+        """Periodic one-depth crawl: fetch peer lists from all current peers,
+        count how many peers nominated each candidate (nomination count), then
+        try candidates in descending nomination order.
+
+        High nomination count means multiple peers know this address -- it is
+        likely well-connected and will give us shorter paths to the rest of the
+        network. Trying these first biases connection attempts toward hubs and
+        away from isolated peninsulas.
+        """
+        current_peers = self.pool.get_all()
+        if not current_peers:
+            return
+
+        known = set(self.pool.all_addrs())
+        nominations: dict[str, int] = {}  # addr -> number of peers that listed it
+
+        for peer_addr in current_peers:
+            try:
+                r = requests.get(f"http://{peer_addr}/api/peers", timeout=5)
+                if r.status_code != 200:
+                    continue
+                for addr in r.json().get("peers", []):
+                    if isinstance(addr, str) and addr not in known:
+                        nominations[addr] = nominations.get(addr, 0) + 1
+            except Exception:
+                continue
+
+        if not nominations:
+            return
+
+        # Sort by nomination count descending: most-nominated first.
+        ranked = sorted(nominations, key=lambda a: nominations[a], reverse=True)
+        log.info("[peer] crawl found %d candidates  top_nominations=%d",
+                 len(ranked), nominations[ranked[0]])
+
+        for addr in ranked:
+            self._validate_executor.submit(self._validate_and_add, addr)
 
     # ------------------------------------------------------------------
     # BEP44 helpers (moved verbatim from old network.py)

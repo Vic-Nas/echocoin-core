@@ -45,7 +45,7 @@ class PeerPool:
             log.debug("[peer] added  addr=%s", addr)
         return was_new
 
-    def touch(self, addr):    def touch(self, addr):
+    def touch(self, addr):
         """Update last-seen timestamp and clear strikes on successful contact."""
         with self._lock:
             if addr in self._peers:
