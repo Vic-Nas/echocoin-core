@@ -54,7 +54,13 @@ def main():
             "Only use in non-interactive environments where you accept that risk."
         ),
     )
+    parser.add_argument(
+        "--log-level", default="INFO",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help="Logging verbosity (default: INFO).",
+    )
     args = parser.parse_args()
+    logging.getLogger("pc").setLevel(getattr(logging, args.log_level))
 
     # Key setup
     if not os.path.exists(args.keyfile):

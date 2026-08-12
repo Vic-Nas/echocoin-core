@@ -304,7 +304,7 @@ class Discovery:
             log.info("[dht] BEP44 put  slot=%d  addr=%s",
                      slot_index, my_addr)
         except Exception:
-            log.debug("[dht] BEP44 put error", exc_info=True)
+            log.error("[dht] BEP44 put error", exc_info=True)
 
     def _bep44_get_all(self, ses):
         my_slot = getattr(self, "_my_slot", None)
