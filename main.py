@@ -47,10 +47,6 @@ def main():
         help="Hard cap on peer table size (default %(default)s).",
     )
     parser.add_argument(
-        "--min-peers", type=int, default=params.MIN_PEERS,
-        help="Target minimum peers; triggers more aggressive discovery below this (default %(default)s).",
-    )
-    parser.add_argument(
         "--passphrase", default=None,
         help=(
             "Key passphrase. WARNING: visible in shell history and process list. "
@@ -91,7 +87,7 @@ def main():
     gossip    = Gossip(pool, args.port)
     syncer    = Syncer(pool)
     net_in_q  = queue.Queue()
-    discovery = Discovery(pool, genesis["hash"], args.port, pk_hex, min_peers=args.min_peers)
+    discovery = Discovery(pool, genesis["hash"], args.port, pk_hex)
     node      = Node(args.keyfile, pk, gossip, syncer, pool, net_in_q, db_path=args.db)
 
     # Manual --peer flags: just add to pool (discovery will validate later,

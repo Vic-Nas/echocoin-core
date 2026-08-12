@@ -21,8 +21,7 @@ FEE_HEIGHT_MAX_AGE = 5
 BLOCK_SIZE_TARGET_BYTES = 500_000  # 500 KB
 BLOCK_SIZE_LIMIT = 10_000_000   # 10 MB, fixed
 
-MIN_PEERS           = 24
-MAX_PEERS           = 125  # hard cap on peer table size; matches Bitcoin default
+MAX_PEERS           = 125  # hard cap on peer table size
 PEER_CHECK_INTERVAL = 60
 
 ADDRESS_BITS       = 132

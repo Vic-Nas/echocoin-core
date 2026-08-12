@@ -15,7 +15,7 @@ from concurrent.futures import ThreadPoolExecutor
 import requests
 import nacl.signing
 
-from params import MIN_PEERS, BEP44_SLOT_COUNT
+from params import BEP44_SLOT_COUNT
 
 log = logging.getLogger("pc.discovery")
 
@@ -28,8 +28,8 @@ PUT_REFRESH_INTERVAL  = 3600  # re-announce our slot at least this often
 
 # Peer-of-peer crawl: fetch peer lists from current peers, rank candidates
 # by nomination count (how many peers listed them), try best-connected first.
-CRAWL_INTERVAL = 600   # crawl every 10 minutes when above MIN_PEERS
-                       # when below MIN_PEERS, crawl on every DHT get cycle
+CRAWL_INTERVAL = 600   # crawl every 10 minutes when at max peers
+GET_INTERVAL_FAST = GET_INTERVAL  # same rate when below max
 
 
 class Discovery:
@@ -38,12 +38,11 @@ class Discovery:
     # 256 DHT alerts doesn't spawn 256 simultaneous HTTP connections.
     _VALIDATE_WORKERS = 32
 
-    def __init__(self, pool, genesis_hash, port, node_pubkey_hex="", min_peers=None):
+    def __init__(self, pool, genesis_hash, port, node_pubkey_hex=""):
         self.pool               = pool
         self.genesis_hash       = genesis_hash
         self.port               = port
         self.node_pubkey_hex    = node_pubkey_hex
-        self._min_peers         = min_peers if min_peers is not None else MIN_PEERS
         self._validate_executor = ThreadPoolExecutor(max_workers=self._VALIDATE_WORKERS)
         self._external_ip = None  # set by UPnP in run()
         if not node_pubkey_hex:
@@ -92,15 +91,15 @@ class Discovery:
 
             now = time.monotonic()
 
-            # Periodic get
+            # Fast when below max peers, slow when full.
             peer_count = self.pool.count()
-            get_interval = GET_INTERVAL if peer_count < self._min_peers else 300
+            at_max = peer_count >= self.pool._max_peers
+            get_interval = 300 if at_max else GET_INTERVAL
             if now - last_get > get_interval:
                 self._bep44_get_all(ses)
                 last_get = now
 
-            # Peer-of-peer crawl: more aggressive when below MIN_PEERS.
-            crawl_interval = GET_INTERVAL if peer_count < self._min_peers else CRAWL_INTERVAL
+            crawl_interval = CRAWL_INTERVAL if at_max else GET_INTERVAL
             if now - last_crawl > crawl_interval:
                 self._validate_executor.submit(self._crawl_peer_lists)
                 last_crawl = now
