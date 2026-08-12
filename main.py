@@ -23,7 +23,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
 )
-logging.getLogger("pc").setLevel(logging.INFO)
+logging.getLogger("ec").setLevel(logging.INFO)
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 class _WerkzeugFilter(logging.Filter):
@@ -33,14 +33,14 @@ class _WerkzeugFilter(logging.Filter):
 
 logging.getLogger("werkzeug").addFilter(_WerkzeugFilter())
 logging.getLogger("urllib3").setLevel(logging.WARNING)
-log = logging.getLogger("pc.main")
+log = logging.getLogger("ec.main")
 
 
 def main():
-    parser = argparse.ArgumentParser(description="PoolCoin node")
+    parser = argparse.ArgumentParser(description="Echocoin node")
     parser.add_argument("--host",    default="0.0.0.0")
     parser.add_argument("--port",    type=int, default=8333)
-    parser.add_argument("--keyfile", default="poolcoin_key.json")
+    parser.add_argument("--keyfile", default="echocoin_key.json")
     parser.add_argument("--db",      default=DB_PATH)
     parser.add_argument("--peer",       action="append", default=[])
     parser.add_argument(
@@ -60,7 +60,7 @@ def main():
         help="Logging verbosity (default: INFO).",
     )
     args = parser.parse_args()
-    logging.getLogger("pc").setLevel(getattr(logging, args.log_level))
+    logging.getLogger("ec").setLevel(getattr(logging, args.log_level))
 
     # Key setup
     if not os.path.exists(args.keyfile):

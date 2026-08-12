@@ -57,8 +57,9 @@ def test_three_strikes_bans():
     pool.add("10.0.0.1:8333")
     for _ in range(3):
         pool.strike("10.0.0.1:8333")
+    # Peer is removed from active pool but retained in _fails with a cooldown.
     assert pool.count() == 0
-    assert "10.0.0.1:8333" not in pool._fails
+    assert "10.0.0.1:8333" in pool._fails   # still tracked for cooldown
 
 def test_cooldown_blocks_re_add():
     pool = make_pool()

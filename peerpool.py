@@ -12,7 +12,7 @@ import threading
 
 from params import MAX_PEERS
 
-log = logging.getLogger("pc.peerpool")
+log = logging.getLogger("ec.peerpool")
 
 COOLDOWN_SECONDS     = 60
 COOLDOWN_MAX_SECONDS = 300
@@ -62,7 +62,8 @@ class PeerPool:
             self._fails[addr] = {"strikes": strikes, "cooldown_until": time.monotonic() + cooldown}
             if strikes >= MAX_STRIKES:
                 self._peers.pop(addr, None)
-                self._fails.pop(addr, None)
+                # Keep the fail record so cooldown_until blocks re-adding.
+                self._fails[addr] = {"strikes": strikes, "cooldown_until": time.monotonic() + COOLDOWN_MAX_SECONDS}
                 log.warning("[peer] banned  addr=%s  strikes=%d", addr, strikes)
 
     def remove(self, addr):

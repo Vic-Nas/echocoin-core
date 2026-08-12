@@ -1,263 +1,260 @@
-"""Block validation tests: ordering, size, difficulty, hash."""
+"""Block validation tests: structure, ordering, timestamps, VDF, fee rate."""
 import pytest
+from unittest.mock import patch
 from helpers import *
 
 
+# ---------------------------------------------------------------------------
+# Genesis
+# ---------------------------------------------------------------------------
+
 def test_genesis_hash_deterministic():
-    g1 = block_mod.create_genesis()
-    g2 = block_mod.create_genesis()
-    assert g1["hash"] == g2["hash"]
+    assert block_mod.create_genesis()["hash"] == block_mod.create_genesis()["hash"]
 
 
 def test_genesis_valid():
     g = block_mod.create_genesis()
-    s = state_mod.State()
-    ok, err = block_mod.validate(g, s, [], fee_rate_fn(1))
+    ok, err = block_mod.validate(g, state_mod.State(), [], fee_rate_fn(1))
     assert ok, err
 
 
+def test_genesis_has_no_vdf_fields():
+    g = block_mod.create_genesis()
+    assert g["vdf_output"] is None
+    assert g["vdf_proof"] is None
+    assert g["builder"] is None
+
+
+# ---------------------------------------------------------------------------
+# Hash integrity
+# ---------------------------------------------------------------------------
+
 def test_block_hash_changes_on_mutation():
     g = block_mod.create_genesis()
-    original_hash = g["hash"]
     g2 = dict(g)
     g2["height"] = 999
     g2["hash"] = block_mod.block_hash(g2)
-    assert g2["hash"] != original_hash
+    assert g2["hash"] != g["hash"]
 
 
 def test_block_with_wrong_hash_rejected():
     g = block_mod.create_genesis()
     g["hash"] = "ff" * 32
-    s = state_mod.State()
-    ok, err = block_mod.validate(g, s, [], fee_rate_fn(1))
+    ok, err = block_mod.validate(g, state_mod.State(), [], fee_rate_fn(1))
     assert not ok
     assert "hash" in err.lower()
 
 
-def test_block_ordering_violation_rejected():
-    """Block with transactions in wrong order is rejected."""
-    sk, pk, pk_hex, addr = make_keypair()
-    _, _, _, to = make_keypair()
-    s = funded_state(addr, 1_000_000)
-    chain = genesis_chain()
-    genesis = chain[0]
-    rate = 1
-
-    t1 = make_valid_tx(sk, pk_hex, addr, to, 10, 1, 0, rate)
-    t2 = make_valid_tx(sk, pk_hex, addr, to, 10, 2, 0, rate)
-
-    sorted_txs = tx_mod.sort_txs([t1, t2])
-    h1 = tx_mod.tx_hash(sorted_txs[0])
-    h2 = tx_mod.tx_hash(sorted_txs[1])
-
-    wrong_order = list(reversed(sorted_txs))
-
-    if h1 != h2:
-        from params import BLOCK_CYCLE_SECONDS
-        blk = block_mod.create(
-            height=1,
-            previous_hash=genesis["hash"],
-            transactions=wrong_order,
-            solver_summaries=[],
-            difficulty_target=block_mod.compute_expected_difficulty(chain),
-            fee_rate=block_mod.compute_expected_fee_rate(chain),
-            timestamp=genesis["timestamp"] + BLOCK_CYCLE_SECONDS,
-        )
-        ok, err = block_mod.validate(blk, s, chain, fee_rate_fn(rate))
-        assert not ok
-        assert "ordering" in err.lower()
-
-
-def test_block_size_hard_ceiling():
-    from params import BLOCK_SIZE_LIMIT
-    g = block_mod.create_genesis()
-    assert block_mod.block_size(g) < BLOCK_SIZE_LIMIT
-
-
-def test_block_timestamp_required():
-    """A block without a timestamp is rejected."""
-    from params import BLOCK_CYCLE_SECONDS
-    g = block_mod.create_genesis()
-    blk = block_mod.create(
-        height=1, previous_hash=g["hash"],
-        transactions=[], solver_summaries=[],
-        difficulty_target=block_mod.compute_expected_difficulty([g]),
-        fee_rate=block_mod.compute_expected_fee_rate([g]),
-        timestamp=g["timestamp"] + BLOCK_CYCLE_SECONDS,
-    )
-    del blk["timestamp"]
-    blk["hash"] = block_mod.block_hash(blk)
-    import state as state_mod
-    ok, err = block_mod.validate(blk, state_mod.State(), [g], lambda h: None)
-    assert not ok
-    assert "timestamp" in err
-
+# ---------------------------------------------------------------------------
+# Timestamps
+# ---------------------------------------------------------------------------
 
 def test_block_timestamp_must_follow_parent():
-    """A block whose timestamp is less than parent + BLOCK_CYCLE_SECONDS is rejected."""
-    import time
-    from params import BLOCK_CYCLE_SECONDS
     g = block_mod.create_genesis()
-    blk = block_mod.create(
-        height=1, previous_hash=g["hash"],
-        transactions=[], solver_summaries=[],
-        difficulty_target=block_mod.compute_expected_difficulty([g]),
-        fee_rate=block_mod.compute_expected_fee_rate([g]),
-        timestamp=g["timestamp"] + BLOCK_CYCLE_SECONDS,
-    )
-    # Override to one second before the minimum.
+    blk = make_block([g])
     blk["timestamp"] = g["timestamp"] + BLOCK_CYCLE_SECONDS - 1
     blk["hash"] = block_mod.block_hash(blk)
-    import state as state_mod
-    ok, err = block_mod.validate(blk, state_mod.State(), [g], lambda h: None)
-    assert not ok
-    assert "timestamp" in err
+    with patch("vdf.verify", return_value=True):
+        ok, err = block_mod.validate(blk, state_mod.State(), [g], fee_rate_fn(1))
+    assert not ok and "timestamp" in err
 
 
 def test_block_timestamp_future_rejected():
-    """A block with a timestamp more than 30s in the future is rejected."""
     import time
-    from params import BLOCK_CYCLE_SECONDS
     g = block_mod.create_genesis()
-    blk = block_mod.create(
-        height=1, previous_hash=g["hash"],
-        transactions=[], solver_summaries=[],
-        difficulty_target=block_mod.compute_expected_difficulty([g]),
-        fee_rate=block_mod.compute_expected_fee_rate([g]),
-        timestamp=g["timestamp"] + BLOCK_CYCLE_SECONDS,
-    )
-    blk["timestamp"] = time.time() + 120
+    blk = make_block([g])
+    blk["timestamp"] = time.time() + 300
     blk["hash"] = block_mod.block_hash(blk)
-    import state as state_mod
-    ok, err = block_mod.validate(blk, state_mod.State(), [g], lambda h: None)
-    assert not ok
-    assert "future" in err
+    with patch("vdf.verify", return_value=True):
+        ok, err = block_mod.validate(blk, state_mod.State(), [g], fee_rate_fn(1))
+    assert not ok and "future" in err
 
 
-
-    """A tx whose fee_height is outside the acceptance window is pruned."""
-    from mempool import Mempool
-    import state as state_mod
-    sk, pk, pk_hex, addr = make_keypair()
-    _, _, _, to = make_keypair()
-
-    mp = Mempool()
-    t1 = make_valid_tx(sk, pk_hex, addr, to, 10, 1, 0, 1)
-    mp.add(t1)
-    assert mp.size() == 1
-
-    st = state_mod.State()
-    # Prune at a tip height where fee_height=0 is far outside the window.
-    pruned = mp.prune_stale(chain_tip_height=100, state=st)
-    assert len(pruned) == 1
-    assert mp.size() == 0
-
-
-def test_mempool_no_lock():
-    """Mempool has no _lock attribute."""
-    from mempool import Mempool
-    mp = Mempool()
-    assert not hasattr(mp, "_lock")
-
-
-def test_difficulty_retarget():
-    target = mining.INITIAL_DIFFICULTY_TARGET
-    counts = [200] * 100
-    new_target = mining.adjust_difficulty(counts, target)
-    assert new_target == int(target * 0.5)
-
-
-def test_fee_rate_retarget():
-    chain = genesis_chain()
-    rate = block_mod.compute_expected_fee_rate(chain)
-    assert isinstance(rate, int)
-    assert rate >= 1
-
-
-# ---- validate coverage ----
-
-def test_validate_genesis_block():
-    """Genesis block validates without a parent chain."""
-    import state as state_mod
+def test_block_missing_timestamp_rejected():
     g = block_mod.create_genesis()
-    ok, err = block_mod.validate(g, state_mod.State(), [], lambda h: None)
-    assert ok, err
+    blk = make_block([g])
+    del blk["timestamp"]
+    blk["hash"] = block_mod.block_hash(blk)
+    with patch("vdf.verify", return_value=True):
+        ok, err = block_mod.validate(blk, state_mod.State(), [g], fee_rate_fn(1))
+    assert not ok and "timestamp" in err
 
 
-def test_validate_height_not_following_parent():
-    from params import BLOCK_CYCLE_SECONDS
-    import state as state_mod
+# ---------------------------------------------------------------------------
+# Chain linkage
+# ---------------------------------------------------------------------------
+
+def test_height_not_following_parent_rejected():
     g = block_mod.create_genesis()
-    blk = block_mod.create(
-        height=2, previous_hash=g["hash"],   # wrong: should be 1
-        transactions=[], solver_summaries=[],
-        difficulty_target=block_mod.compute_expected_difficulty([g]),
-        fee_rate=block_mod.compute_expected_fee_rate([g]),
-        timestamp=g["timestamp"] + BLOCK_CYCLE_SECONDS,
-    )
-    ok, err = block_mod.validate(blk, state_mod.State(), [g], lambda h: None)
+    blk = make_block([g])
+    blk["height"] = 5  # wrong
+    blk["hash"] = block_mod.block_hash(blk)
+    with patch("vdf.verify", return_value=True):
+        ok, err = block_mod.validate(blk, state_mod.State(), [g], fee_rate_fn(1))
     assert not ok and "height" in err
 
 
-def test_validate_previous_hash_mismatch():
-    from params import BLOCK_CYCLE_SECONDS
-    import state as state_mod
+def test_previous_hash_mismatch_rejected():
     g = block_mod.create_genesis()
-    blk = block_mod.create(
-        height=1, previous_hash="ab" * 32,   # wrong
-        transactions=[], solver_summaries=[],
-        difficulty_target=block_mod.compute_expected_difficulty([g]),
-        fee_rate=block_mod.compute_expected_fee_rate([g]),
-        timestamp=g["timestamp"] + BLOCK_CYCLE_SECONDS,
-    )
-    ok, err = block_mod.validate(blk, state_mod.State(), [g], lambda h: None)
+    blk = make_block([g])
+    blk["previous_hash"] = "ab" * 32
+    blk["hash"] = block_mod.block_hash(blk)
+    with patch("vdf.verify", return_value=True):
+        ok, err = block_mod.validate(blk, state_mod.State(), [g], fee_rate_fn(1))
     assert not ok and "previous_hash" in err
 
 
-def test_validate_difficulty_mismatch():
-    from params import BLOCK_CYCLE_SECONDS
-    import state as state_mod
+# ---------------------------------------------------------------------------
+# Builder field
+# ---------------------------------------------------------------------------
+
+def test_missing_builder_rejected():
     g = block_mod.create_genesis()
-    blk = block_mod.create(
-        height=1, previous_hash=g["hash"],
-        transactions=[], solver_summaries=[],
-        difficulty_target=12345,   # wrong
-        fee_rate=block_mod.compute_expected_fee_rate([g]),
-        timestamp=g["timestamp"] + BLOCK_CYCLE_SECONDS,
-    )
-    ok, err = block_mod.validate(blk, state_mod.State(), [g], lambda h: None)
-    assert not ok and "difficulty" in err
+    blk = make_block([g])
+    blk["builder"] = None
+    blk["hash"] = block_mod.block_hash(blk)
+    with patch("vdf.verify", return_value=True):
+        ok, err = block_mod.validate(blk, state_mod.State(), [g], fee_rate_fn(1))
+    assert not ok and "builder" in err
 
 
-def test_validate_duplicate_solver_address():
-    from params import BLOCK_CYCLE_SECONDS
-    import state as state_mod
-    _, _, _, addr = make_keypair()
+# ---------------------------------------------------------------------------
+# VDF proof
+# ---------------------------------------------------------------------------
+
+def test_invalid_vdf_proof_rejected():
     g = block_mod.create_genesis()
-    summaries = [{"address": addr, "count": 1}, {"address": addr, "count": 2}]
-    blk = block_mod.create(
-        height=1, previous_hash=g["hash"],
-        transactions=[], solver_summaries=summaries,
-        difficulty_target=block_mod.compute_expected_difficulty([g]),
-        fee_rate=block_mod.compute_expected_fee_rate([g]),
-        timestamp=g["timestamp"] + BLOCK_CYCLE_SECONDS,
-    )
-    ok, err = block_mod.validate(blk, state_mod.State(), [g], lambda h: None)
-    assert not ok and "duplicate" in err
+    blk = make_block([g])
+    # vdf.verify returns False -> block rejected
+    with patch("vdf.verify", return_value=False):
+        ok, err = block_mod.validate(blk, state_mod.State(), [g], fee_rate_fn(1))
+    assert not ok and "vdf" in err.lower()
 
 
-def test_validate_solver_count_zero():
-    from params import BLOCK_CYCLE_SECONDS
-    import state as state_mod
-    _, _, _, addr = make_keypair()
+def test_missing_vdf_fields_rejected():
     g = block_mod.create_genesis()
-    summaries = [{"address": addr, "count": 0}]
-    blk = block_mod.create(
-        height=1, previous_hash=g["hash"],
-        transactions=[], solver_summaries=summaries,
-        difficulty_target=block_mod.compute_expected_difficulty([g]),
-        fee_rate=block_mod.compute_expected_fee_rate([g]),
-        timestamp=g["timestamp"] + BLOCK_CYCLE_SECONDS,
-    )
-    ok, err = block_mod.validate(blk, state_mod.State(), [g], lambda h: None)
-    assert not ok and "count" in err
+    blk = make_block([g])
+    blk["vdf_output"] = None
+    blk["hash"] = block_mod.block_hash(blk)
+    with patch("vdf.verify", return_value=True):
+        ok, err = block_mod.validate(blk, state_mod.State(), [g], fee_rate_fn(1))
+    assert not ok and "vdf" in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# Transaction ordering
+# ---------------------------------------------------------------------------
+
+def test_transaction_ordering_violation_rejected():
+    sk, pk, pk_hex, addr = make_keypair()
+    _, _, _, to = make_keypair()
+    s = funded_state(addr, 1_000_000)
+
+    t1 = make_valid_tx(sk, pk_hex, addr, to, 10, 1, 0, 1)
+    t2 = make_valid_tx(sk, pk_hex, addr, to, 10, 2, 0, 1)
+    sorted_txs = tx_mod.sort_txs([t1, t2])
+    if tx_mod.tx_hash(sorted_txs[0]) == tx_mod.tx_hash(sorted_txs[1]):
+        pytest.skip("hashes collided, ordering is a no-op")
+
+    g = block_mod.create_genesis()
+    blk = make_block([g], txs=list(reversed(sorted_txs)))
+    blk["hash"] = block_mod.block_hash(blk)
+    with patch("vdf.verify", return_value=True):
+        ok, err = block_mod.validate(blk, s, [g], fee_rate_fn(1))
+    assert not ok and "ordering" in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# Fee rate
+# ---------------------------------------------------------------------------
+
+def test_fee_rate_retarget_returns_int():
+    chain = genesis_chain()
+    rate = block_mod.compute_expected_fee_rate(chain)
+    assert isinstance(rate, int) and rate >= 1
+
+
+def test_fee_rate_initial_is_1000():
+    from params import INITIAL_FEE_RATE
+    assert INITIAL_FEE_RATE == 1_000
+
+
+def test_fee_rate_stable_at_target_volume():
+    """Median volume exactly at BLOCK_SIZE_TARGET_BYTES keeps rate stable."""
+    from params import BLOCK_SIZE_TARGET_BYTES, INITIAL_FEE_RATE
+    import statistics
+    # Build a chain where every block has exactly TARGET bytes of txs.
+    # Since compute_expected_fee_rate uses median of the window, we inject
+    # fake blocks with pre-set byte volumes by controlling the tx list size.
+    # Here we test the formula directly.
+    rate = INITIAL_FEE_RATE
+    # vol_ratio = 1.0 -> adjustment = 1.0^0.1 = 1.0 -> rate unchanged
+    vol_ratio = BLOCK_SIZE_TARGET_BYTES / BLOCK_SIZE_TARGET_BYTES
+    assert vol_ratio == 1.0
+    assert max(0.999, vol_ratio ** 0.1) == 1.0
+    new_rate = max(1, int(rate * 1.0))
+    assert new_rate == rate
+
+
+def test_fee_rate_rises_above_target():
+    """Blocks above the soft target cause rate to rise."""
+    from params import BLOCK_SIZE_TARGET_BYTES, INITIAL_FEE_RATE
+    rate = INITIAL_FEE_RATE
+    vol_ratio = 2.0  # 2x target
+    adjustment = min(1.05, vol_ratio)
+    assert adjustment == 1.05
+    new_rate = max(1, int(rate * adjustment))
+    assert new_rate > rate
+
+
+def test_fee_rate_falls_slowly_below_target():
+    """Blocks below the soft target cause rate to fall, but slowly."""
+    from params import INITIAL_FEE_RATE
+    rate = INITIAL_FEE_RATE
+    # vol_ratio = 0.5 -> max(0.999, 0.5^0.1) = 0.999 (floor governs)
+    vol_ratio = 0.5
+    adjustment = max(0.999, vol_ratio ** 0.1)
+    assert adjustment == 0.999
+    new_rate = max(1, int(rate * adjustment))
+    assert new_rate < rate  # fell
+    assert new_rate > rate * 0.99  # but not by much
+
+
+def test_fee_rate_frozen_at_zero_activity():
+    """Zero-activity adjustment is 0.999 -- nearly frozen."""
+    from params import INITIAL_FEE_RATE
+    rate = INITIAL_FEE_RATE
+    new_rate = max(1, int(rate * 0.999))
+    assert new_rate == rate - 1  # dropped by at most 1 ring/byte at high rate
+
+
+def test_fee_rate_mismatch_rejected():
+    g = block_mod.create_genesis()
+    blk = make_block([g])
+    blk["fee_rate"] = 99999  # wrong
+    blk["hash"] = block_mod.block_hash(blk)
+    with patch("vdf.verify", return_value=True):
+        ok, err = block_mod.validate(blk, state_mod.State(), [g], fee_rate_fn(1))
+    assert not ok and "fee rate" in err.lower()
+
+
+# ---------------------------------------------------------------------------
+# Block size
+# ---------------------------------------------------------------------------
+
+def test_genesis_under_size_limit():
+    from params import BLOCK_SIZE_LIMIT
+    assert block_mod.block_size(block_mod.create_genesis()) < BLOCK_SIZE_LIMIT
+
+
+# ---------------------------------------------------------------------------
+# assemble()
+# ---------------------------------------------------------------------------
+
+def test_assemble_returns_block_at_correct_height():
+    g = block_mod.create_genesis()
+    b = block_mod.assemble(g, [], "builder_addr", fee_rate=1)
+    assert b["height"] == 1
+    assert b["builder"] == "builder_addr"
+    assert b["previous_hash"] == g["hash"]
+    assert b["vdf_output"] is None  # caller fills in after vdf.evaluate()

@@ -13,17 +13,17 @@ from flask import Flask, request, jsonify, render_template_string
 
 import tx as tx_mod
 import crypto as crypto_mod
-import mining as mining_mod
-from params import SEEDS_PER_PC
+
+from params import RINGS_PER_ECH, SUPPLY_CAP
 
 
-def fmt_balance(seeds):
-    """Format a raw seed integer as 'X PC Y seeds' for display."""
-    pc   = seeds // SEEDS_PER_PC
-    rem  = seeds % SEEDS_PER_PC
-    return f"{pc} PC {rem:,} seeds"
+def fmt_balance(rings):
+    """Format a raw ring integer as 'X ECH Y rings' for display."""
+    ech  = rings // RINGS_PER_ECH
+    rem  = rings % RINGS_PER_ECH
+    return f"{ech} ECH {rem:,} rings"
 
-log = logging.getLogger("pc.api")
+log = logging.getLogger("ec.api")
 
 # ---------------------------------------------------------------------------
 # Rate limiting
@@ -33,8 +33,8 @@ log = logging.getLogger("pc.api")
 # load balancer). Protects endpoints that trigger expensive crypto work
 # (FALCON-512 verification, fee recomputation) from being flooded by an
 # unauthenticated caller: without this, POST /api/receive_tx and
-# /api/receive_solution have no cost to the caller but real CPU cost to
-# us, and that CPU contends with the same process's mining/validation loop.
+# /api/receive_block have no cost to the caller but real CPU cost to
+# us, and that CPU contends with the same process's VDF/validation loop.
 
 class _TokenBucket:
     def __init__(self, capacity, refill_per_second):
@@ -140,7 +140,7 @@ _TX_REQUIRED_FIELDS = {"from", "pubkey", "outputs", "nonce", "fee_height", "fee"
 def create_app(node, pool, net_in_q):
     app = Flask(__name__)
     tx_limiter       = RateLimiter(capacity=20, refill_per_second=5)   # ~5/sec sustained, bursts to 20
-    solution_limiter = RateLimiter(capacity=200, refill_per_second=50) # solutions arrive much more often legitimately
+
     app.logger.setLevel(logging.WARNING)
 
     # ---- Dashboard -------------------------------------------------------
@@ -155,13 +155,13 @@ def create_app(node, pool, net_in_q):
         blocks_html = ""
         for b in recent_blocks:
             tx_count  = len(b["transactions"])
-            sol_count = sum(s["count"] for s in b.get("solver_summaries", []))
+            builder   = b.get("builder") or ""
             blocks_html += f"""
             <tr>
               <td><a href="/explorer/block/{b['height']}">{b['height']}</a></td>
               <td class="hash-short">{b['hash'][:20]}…</td>
               <td>{tx_count}</td>
-              <td>{sol_count}</td>
+              <td class="hash-short">{builder[:20] + "…" if builder else ""}</td>
               <td>{b['fee_rate']}</td>
             </tr>"""
 
@@ -183,7 +183,7 @@ def create_app(node, pool, net_in_q):
         <div class="card">
           <div class="card-title">Recent blocks</div>
           <table>
-            <thead><tr><th>Height</th><th>Hash</th><th>Txs</th><th>Solutions</th><th>Fee rate</th></tr></thead>
+            <thead><tr><th>Height</th><th>Hash</th><th>Txs</th><th>Builder</th><th>Fee rate</th></tr></thead>
             <tbody>{blocks_html}</tbody>
           </table>
         </div>"""
@@ -286,7 +286,7 @@ def create_app(node, pool, net_in_q):
               <td><a href="/explorer/block/{b['height']}">{b['height']}</a></td>
               <td class="hash"><a href="/explorer/block/{b['height']}">{b['hash'][:32]}…</a></td>
               <td>{len(b['transactions'])}</td>
-              <td>{sum(s["count"] for s in b.get("solver_summaries", []))}</td>
+              <td class="hash-short">{(b.get("builder") or "")[:20] + "…" if b.get("builder") else ""}</td>
               <td>{b['fee_rate']}</td>
             </tr>"""
 
@@ -294,7 +294,7 @@ def create_app(node, pool, net_in_q):
         <h2>Block Explorer</h2>
         <div class="card">
           <table>
-            <thead><tr><th>Height</th><th>Hash</th><th>Txs</th><th>Solutions</th><th>Fee rate</th></tr></thead>
+            <thead><tr><th>Height</th><th>Hash</th><th>Txs</th><th>Builder</th><th>Fee rate</th></tr></thead>
             <tbody>{rows or '<tr><td colspan="5" style="color:var(--muted);text-align:center">No blocks yet</td></tr>'}</tbody>
           </table>
         </div>"""
@@ -321,16 +321,7 @@ def create_app(node, pool, net_in_q):
               <td>{t['fee']}</td>
             </tr>"""
 
-        summaries = b.get("solver_summaries", [])
-        total_count = sum(s["count"] for s in summaries)
-        sol_rows = ""
-        for s in summaries:
-            reward = (mining_mod.BLOCK_REWARD * s["count"]) // total_count if total_count else 0
-            sol_rows += (
-                f"<tr><td class='hash-short'>{s['address']}</td>"
-                f"<td>{s['count']} solution{'s' if s['count'] != 1 else ''}</td>"
-                f"<td>{reward} seeds</td></tr>"
-            )
+        builder = b.get("builder") or ""
 
         body = f"""
         <h2>Block {height}</h2>
@@ -342,9 +333,8 @@ def create_app(node, pool, net_in_q):
             <tr><td style="color:var(--muted)">Previous</td><td class="hash">{b['previous_hash']}</td></tr>
             <tr><td style="color:var(--muted)">Height</td><td>{b['height']}</td></tr>
             <tr><td style="color:var(--muted)">Transactions</td><td>{len(b['transactions'])}</td></tr>
-            <tr><td style="color:var(--muted)">Solvers</td><td>{len(b.get("solver_summaries", []))}</td></tr><tr><td style="color:var(--muted)">Solutions</td><td>{sum(s["count"] for s in b.get("solver_summaries", []))}</td></tr>
+            <tr><td style="color:var(--muted)">Builder</td><td class="hash-short">{builder or "(none)"}</td></tr>
             <tr><td style="color:var(--muted)">Fee rate</td><td>{b['fee_rate']}</td></tr>
-            <tr><td style="color:var(--muted)">Difficulty</td><td>{b['difficulty_target']}</td></tr>
           </table>
         </div>
         <div class="card">
@@ -352,13 +342,6 @@ def create_app(node, pool, net_in_q):
           <table>
             <thead><tr><th>Hash</th><th>From</th><th>Total sent</th><th>Fee</th></tr></thead>
             <tbody>{tx_rows or '<tr><td colspan="4" style="color:var(--muted);text-align:center">No transactions</td></tr>'}</tbody>
-          </table>
-        </div>
-        <div class="card">
-          <div class="card-title">Solvers rewarded</div>
-          <table>
-            <thead><tr><th>Address</th><th>Solutions</th><th>Reward</th></tr></thead>
-            <tbody>{sol_rows or '<tr><td colspan="3" style="color:var(--muted);text-align:center">No solvers</td></tr>'}</tbody>
           </table>
         </div>
         <a href="/explorer/block/{height-1}" style="margin-right:1rem">&larr; prev</a>
@@ -514,40 +497,28 @@ def create_app(node, pool, net_in_q):
                 "circulating": 0,
             }})
 
-        from params import BLOCK_REWARD
+        # Emission totals come from the live state (computed incrementally as
+        # blocks are applied), not re-derived from block fields.
+        sv = node.view.state
 
-        # Build per-block series, then sample
+        # Build per-block series by replaying fee burns per block (cheap: just
+        # sum tx fees). Minted is read from state totals at chain tip; we
+        # distribute it proportionally for the chart series (approximation only).
         points = []
-        cum_minted = 0
         cum_burned_fees = 0
-        cum_burned_remainder = 0
 
-        for blk in chain[1:]:   # skip genesis (no PoW, no rewards)
-            summaries = blk.get("solver_summaries", [])
-            total_count = sum(s["count"] for s in summaries)
-
-            # Actual minted = sum of floor-division shares (remainder burned)
-            block_minted = 0
-            if total_count > 0:
-                for s in summaries:
-                    block_minted += (BLOCK_REWARD * s["count"]) // total_count
-            burned_remainder = BLOCK_REWARD - block_minted if summaries else 0
-
+        for blk in chain[1:]:
             burned_fees = sum(t["fee"] for t in blk.get("transactions", []))
-
-            cum_minted += block_minted
             cum_burned_fees += burned_fees
-            cum_burned_remainder += burned_remainder
-
+            # Approximate minted at this height proportionally to chain progress.
+            frac = blk["height"] / max(len(chain) - 1, 1)
+            approx_minted = int(sv.total_minted * frac)
             points.append({
-                "height": blk["height"],
-                "minted": cum_minted,
+                "height":      blk["height"],
+                "minted":      approx_minted,
                 "burned_fees": cum_burned_fees,
-                "burned_remainder": cum_burned_remainder,
-                "circulating": cum_minted - cum_burned_fees - cum_burned_remainder,
-                # net_emission: coins actually entering circulation this block
-                # (positive = supply expanding, negative = supply contracting)
-                "net_emission": block_minted - burned_fees - burned_remainder,
+                "circulating": approx_minted - cum_burned_fees,
+                "net_emission": burned_fees,
             })
 
         # Sample to max 500 points evenly, always include last
@@ -558,22 +529,14 @@ def create_app(node, pool, net_in_q):
                 sampled[-1] = points[-1]
             points = sampled
 
-        totals = points[-1] if points else {
-            "minted": 0, "burned_fees": 0, "burned_remainder": 0, "circulating": 0,
-        }
-
-        last = points[-1] if points else None
-        net_emission_last = last["net_emission"] if last else 0
-
         return jsonify({
             "points": points,
             "totals": {
-                "minted":              totals["minted"],
-                "burned_fees":         totals["burned_fees"],
-                "burned_remainder":    totals["burned_remainder"],
-                "circulating":         totals["circulating"],
-                "net_emission_last":   net_emission_last,
-                "seeds_per_pc":        SEEDS_PER_PC,
+                "minted":      sv.total_minted,
+                "burned_fees": sv.total_burnt,
+                "circulating": sv.total_minted - sv.total_burnt,
+                "can_mint":    max(0, SUPPLY_CAP - sv.total_minted + sv.total_burnt),
+                "rings_per_ech": RINGS_PER_ECH,
             },
         })
 
@@ -655,8 +618,8 @@ def create_app(node, pool, net_in_q):
         balance = node.view.state.get_balance(addr)
         return jsonify({
             "address":      addr,
-            "balance_seeds": balance,
-            "balance_pc":    balance / SEEDS_PER_PC,
+            "balance_rings": balance,
+            "balance_ech":   balance / RINGS_PER_ECH,
         })
 
     @app.route("/api/address/<addr>/history")
@@ -687,29 +650,6 @@ def create_app(node, pool, net_in_q):
                                "outputs": t["outputs"], "fee": t["fee"]} for t in txs],
         })
 
-    @app.route("/api/receive_solution", methods=["POST"])
-    @_rate_limited(solution_limiter)
-    def api_recv_solution():
-        data = request.get_json()
-        if not data:
-            return jsonify({"ok": False, "error": "no JSON body"}), 400
-        sol = data.get("solution", {})
-        # Cheap structural pre-check before any crypto work: FALCON-512 public
-        # keys are 897 bytes (1794 hex chars); nonce must be a non-negative int.
-        pk = sol.get("pubkey", "")
-        nonce = sol.get("nonce")
-        if (not isinstance(pk, str) or len(pk) != 1794
-                or not all(c in "0123456789abcdefABCDEF" for c in pk)
-                or not isinstance(nonce, int) or nonce < 0):
-            _strike_sender(pool, data)
-            return jsonify({"ok": False, "error": "malformed solution"}), 400
-        net_in_q.put({
-            "type":     "solution",
-            "solution": sol,
-        })
-        _register_sender(pool, data)
-        return jsonify({"ok": True})
-
     @app.route("/api/receive_block", methods=["POST"])
     @_rate_limited(tx_limiter)
     def api_recv_block():
@@ -719,7 +659,8 @@ def create_app(node, pool, net_in_q):
         blk = data["block"]
         # Cheap structural pre-check before any validation work.
         required_fields = {"height", "previous_hash", "hash", "timestamp",
-                           "transactions", "solver_summaries", "difficulty_target", "fee_rate"}
+                           "transactions", "builder", "fee_rate",
+                           "vdf_output", "vdf_proof"}
         if not isinstance(blk, dict) or not required_fields.issubset(blk):
             return jsonify({"ok": False, "error": "malformed block"}), 400
         if not isinstance(blk["height"], int) or blk["height"] < 0:

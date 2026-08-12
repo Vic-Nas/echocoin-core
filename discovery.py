@@ -17,10 +17,10 @@ import nacl.signing
 
 from params import BEP44_SLOT_COUNT
 
-log = logging.getLogger("pc.discovery")
+log = logging.getLogger("ec.discovery")
 
-PEER_CACHE_FILE  = "poolcoin_peers.json"
-DHT_STATE_FILE   = "poolcoin_lt_dht.dat"
+PEER_CACHE_FILE  = "echocoin_peers.json"
+DHT_STATE_FILE   = "echocoin_lt_dht.dat"
 SAVE_INTERVAL    = 300
 GET_INTERVAL          = 60
 PUT_DELAY             = 30
@@ -283,7 +283,7 @@ class Discovery:
 
     def _bep44_slot_keypair(self, slot_index):
         seed = hashlib.sha256(
-            b"poolcoin-peers-v1:"
+            b"echocoin-peers-v1:"
             + self.genesis_hash.encode()
             + b":"
             + str(slot_index).encode()
@@ -311,7 +311,7 @@ class Discovery:
         sk_64, pk = self._bep44_slot_keypair(slot_index)
         value = json.dumps({"addr": my_addr, "ts": int(time.time())}).encode()
         try:
-            ses.dht_put_mutable_item(sk_64, pk, value, b"poolcoin-v1")
+            ses.dht_put_mutable_item(sk_64, pk, value, b"echocoin-v1")
             log.info("[dht] BEP44 put  slot=%d  addr=%s",
                      slot_index, my_addr)
         except Exception:
@@ -324,7 +324,7 @@ class Discovery:
                 continue   # never read our own slot -- we already know our address
             _, pk = self._bep44_slot_keypair(i)
             try:
-                ses.dht_get_mutable_item(pk, b"poolcoin-v1")
+                ses.dht_get_mutable_item(pk, b"echocoin-v1")
             except Exception:
                 pass
         log.debug("[dht] BEP44 get  slots=%d", BEP44_SLOT_COUNT - (1 if my_slot is not None else 0))
@@ -413,7 +413,7 @@ class Discovery:
                 u.deleteportmapping(self.port, "TCP")
             except Exception:
                 pass
-            if u.addportmapping(self.port, "TCP", u.lanaddr, self.port, "PoolCoin node", ""):
+            if u.addportmapping(self.port, "TCP", u.lanaddr, self.port, "Echocoin node", ""):
                 log.debug("[upnp] mapped %s:%d -> %s:%d", ext, self.port, u.lanaddr, self.port)
                 return ext
         except Exception:

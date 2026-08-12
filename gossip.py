@@ -13,7 +13,7 @@ import requests
 
 import tx as tx_mod
 
-log = logging.getLogger("pc.gossip")
+log = logging.getLogger("ec.gossip")
 
 STEM_HOPS          = 4
 SEEN_TX_CACHE_SIZE = 50_000
@@ -29,15 +29,6 @@ class Gossip:
         self._lock    = threading.Lock()
 
     # ---- Public API (called by Node) ----
-
-    def broadcast_solution(self, solution):
-        """Broadcast a solution. No candidate list -- each node assembles
-        from its own mempool."""
-        self._broadcast("/api/receive_solution", {
-            "type":        "solution",
-            "solution":    solution,
-            "sender_port": self.port,
-        })
 
     def broadcast_block(self, block):
         self._broadcast("/api/receive_block", {
@@ -57,7 +48,7 @@ class Gossip:
         self.dandelion_send(tx_dict, STEM_HOPS)
 
     def mark_seen(self, h):
-        """Mark h as seen. Returns True if already seen (duplicate), False if new."""
+        """Mark h as seen. Returns True if already seen, False if new."""
         with self._lock:
             if h in self._seen_tx:
                 return True
@@ -95,5 +86,7 @@ class Gossip:
                 f"http://{peer_addr}{endpoint}", json=data, timeout=BROADCAST_TIMEOUT
             )
             self.pool.touch(peer_addr)
+        except requests.exceptions.Timeout:
+            log.debug("[gossip] send timed out  peer=%s", peer_addr)
         except Exception:
             self.pool.strike(peer_addr)
