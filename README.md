@@ -25,9 +25,9 @@ python main.py [options]
 | `--port` | `8333` | Port for HTTP API and peer connections |
 | `--keyfile` | `poolcoin_key.json` | Path to encrypted keypair |
 | `--db` | `poolcoin_chain.db` | Path to SQLite chain database |
-| `--peer host:port` | — | Bootstrap peer (repeatable) |
+| `--peer host:port` | - | Bootstrap peer (repeatable) |
 | `--max-peers` | `125` | Hard cap on peer table size |
-| `--passphrase` | — | Key passphrase. **Visible in shell history and process list. Only use in non-interactive environments.** |
+| `--passphrase` | - | Key passphrase. **Visible in shell history and process list. Only use in non-interactive environments.** |
 
 ## Building a standalone binary
 
@@ -57,4 +57,4 @@ Defined in `params.py`. Notable values:
 
 ## Module layout
 
-`params.py` — Protocol constants. `crypto.py` — Keys, signing, address derivation. `tx.py` — Transaction creation and validation. `block.py` — Block creation and validation. `state.py` — Balance ledger. `mining.py` — Puzzle, difficulty, rewards. `mempool.py` — Pending transaction pool. `storage.py` — SQLite persistence. `node.py` — Block cycle orchestrator. `gossip.py` — Solution and transaction broadcast. `syncer.py` — Chain sync. `peerpool.py` — Peer table. `discovery.py` — DHT peer discovery. `api.py` — HTTP API and web UI. `templates.py` — HTML templates.
+`params.py` - Protocol constants. `crypto.py` - Keys, signing, address derivation. `tx.py` - Transaction creation and validation. `block.py` - Block creation and validation. `state.py` - Balance ledger. `mining.py` - Puzzle, difficulty, rewards. `mempool.py` - Pending transaction pool. `storage.py` - SQLite persistence. `node.py` - Block cycle orchestrator. `gossip.py` - Solution and transaction broadcast. `syncer.py` - Chain sync. `peerpool.py` - Peer table. `discovery.py` - DHT peer discovery. `api.py` - HTTP API and web UI. `templates.py` - HTML templates.
