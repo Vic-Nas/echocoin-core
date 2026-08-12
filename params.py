@@ -40,7 +40,7 @@ DB_PATH = "poolcoin_chain.db"
 # Genesis timestamp: unix time when the chain was launched. Set once manually
 # before the first release and never changed. Stored in the genesis block and
 # used as the parent timestamp for validating block 1's minimum interval.
-GENESIS_TIMESTAMP = 1786288650
+GENESIS_TIMESTAMP = 1786525636
 
 # Number of BEP44 DHT slots used for peer discovery.
 BEP44_SLOT_COUNT = 256
