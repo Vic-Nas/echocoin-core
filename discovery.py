@@ -198,40 +198,55 @@ class Discovery:
             log.debug("[peer] peer list fetch failed  addr=%s", peer_addr, exc_info=True)
 
     def _crawl_peer_lists(self):
-        """Periodic one-depth crawl: fetch peer lists from all current peers,
-        count how many peers nominated each candidate (nomination count), then
-        try candidates in descending nomination order.
+        """One-depth crawl: fetch peer lists from all current peers in parallel,
+        then try candidates sorted by *ascending* nomination count.
 
-        High nomination count means multiple peers know this address -- it is
-        likely well-connected and will give us shorter paths to the rest of the
-        network. Trying these first biases connection attempts toward hubs and
-        away from isolated peninsulas.
+        Low nomination count = few of your peers already know this node.
+        That means it's likely a gateway to a part of the network you're not
+        well-connected to, which improves path diversity. High-nomination
+        candidates are already well-known to your peers and add little new
+        reach -- prioritizing them would push all nodes toward the same hubs
+        and recreate centralization.
+
+        The entire fetch runs in the background. Results are only acted on
+        once all peers have been queried (or timed out), so the crawl has no
+        impact on the main loop or the validate thread pool while in progress.
         """
         current_peers = self.pool.get_all()
         if not current_peers:
             return
 
         known = set(self.pool.all_addrs())
-        nominations: dict[str, int] = {}  # addr -> number of peers that listed it
+        nominations: dict[str, int] = {}
 
-        for peer_addr in current_peers:
+        # Fetch all peer lists in parallel with a short per-peer timeout.
+        def fetch_one(peer_addr):
             try:
                 r = requests.get(f"http://{peer_addr}/api/peers", timeout=5)
-                if r.status_code != 200:
-                    continue
-                for addr in r.json().get("peers", []):
-                    if isinstance(addr, str) and addr not in known:
-                        nominations[addr] = nominations.get(addr, 0) + 1
+                if r.status_code == 200:
+                    return r.json().get("peers", [])
             except Exception:
-                continue
+                pass
+            return []
+
+        with ThreadPoolExecutor(max_workers=min(len(current_peers), 32)) as ex:
+            results = ex.map(fetch_one, current_peers)
+
+        for peer_list in results:
+            for addr in peer_list:
+                if isinstance(addr, str) and addr not in known:
+                    nominations[addr] = nominations.get(addr, 0) + 1
 
         if not nominations:
             return
 
-        # Sort by nomination count descending: most-nominated first.
-        ranked = sorted(nominations, key=lambda a: nominations[a], reverse=True)
-        log.info("[peer] crawl found %d candidates  top_nominations=%d",
-                 len(ranked), nominations[ranked[0]])
+        # Sort ascending: low-nomination candidates first.
+        # These are least known to our current peers = highest path diversity value.
+        ranked = sorted(nominations, key=lambda a: nominations[a])
+        log.info("[peer] crawl found %d candidates  unique=%d  multi_nominated=%d",
+                 len(ranked),
+                 sum(1 for c in nominations if nominations[c] == 1),
+                 sum(1 for c in nominations if nominations[c] > 1))
 
         for addr in ranked:
             self._validate_executor.submit(self._validate_and_add, addr)
