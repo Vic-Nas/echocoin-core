@@ -6,7 +6,6 @@ never call each other.
 """
 
 import time
-import socket
 import secrets
 import logging
 import threading
@@ -29,51 +28,6 @@ class PeerPool:
         self._peers = {}          # addr -> last_seen (wall clock)
         self._fails = {}          # addr -> {"strikes": int, "cooldown_until": monotonic}
         self._lock  = threading.Lock()
-        self._upnp_ip = None      # set by Discovery after UPnP mapping
-
-        # Precompute self-addresses once; updated when UPnP resolves.
-        self._own = self._build_own_set()
-
-    # ---- Self-detection (prevents self-registration) ----
-
-    def _build_own_set(self):
-        own = {
-            f"{self._host}:{self._port}",
-            f"127.0.0.1:{self._port}",
-            f"0.0.0.0:{self._port}",
-            f"{self._detect_lan_ip()}:{self._port}",
-        }
-        if self._upnp_ip:
-            own.add(f"{self._upnp_ip}:{self._port}")
-        return own
-
-    def set_upnp_ip(self, ip):
-        with self._lock:
-            self._upnp_ip = ip
-            self._own = self._build_own_set()
-
-    @property
-    def upnp_ip(self):
-        return self._upnp_ip
-
-    def my_ip(self):
-        if self._upnp_ip:
-            return self._upnp_ip
-        return self._detect_lan_ip()
-
-    def _detect_lan_ip(self):
-        try:
-            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            s.connect(("8.8.8.8", 80))
-            ip = s.getsockname()[0]
-            s.close()
-            return ip
-        except Exception:
-            return self._host if self._host != "0.0.0.0" else "127.0.0.1"
-
-    def is_self(self, addr):
-        with self._lock:
-            return addr in self._own
 
     # ---- Core operations ----
 
@@ -81,8 +35,6 @@ class PeerPool:
         """Add a peer. Returns True if it was new."""
         now_mono = time.monotonic()
         with self._lock:
-            if addr in self._own:          # self-check inside the lock
-                return False
             if len(self._peers) >= MAX_PEERS:
                 return False
             if now_mono < self._fails.get(addr, {}).get("cooldown_until", 0.0):
@@ -93,7 +45,7 @@ class PeerPool:
             log.debug("[peer] added  addr=%s", addr)
         return was_new
 
-    def touch(self, addr):
+    def touch(self, addr):    def touch(self, addr):
         """Update last-seen timestamp and clear strikes on successful contact."""
         with self._lock:
             if addr in self._peers:

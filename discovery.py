@@ -39,6 +39,7 @@ class Discovery:
         self.port               = port
         self.node_pubkey_hex    = node_pubkey_hex
         self._validate_executor = ThreadPoolExecutor(max_workers=self._VALIDATE_WORKERS)
+        self._external_ip = None  # set by UPnP in run()
         if not node_pubkey_hex:
             log.warning("[dht] no node_pubkey_hex provided -- using slot 0 and offset 0; "
                         "all nodes without a pubkey will collide on the same slot")
@@ -50,9 +51,9 @@ class Discovery:
     def run(self):
         import libtorrent as lt
 
-        upnp_ip = self._upnp_map_port()
-        if upnp_ip:
-            self.pool.set_upnp_ip(upnp_ip)
+        self._external_ip = self._upnp_map_port()
+        if self._external_ip:
+            log.info("[upnp] external IP mapped: %s", self._external_ip)
 
         self._load_peer_cache()
 
@@ -65,6 +66,7 @@ class Discovery:
 
         my_slot   = self._my_slot_index() if self.node_pubkey_hex else 0
         my_offset = self._my_write_offset() if self.node_pubkey_hex else 0
+        self._my_slot = my_slot  # stored so _bep44_get_all can skip it
 
         last_get   = 0
         last_put   = 0
@@ -95,7 +97,7 @@ class Discovery:
             first_put_ready = (last_put == 0 and now - start_time >= PUT_DELAY + my_offset % 300)
             refresh_ready = (last_put != 0 and now - last_put >= PUT_REFRESH_INTERVAL)
             if first_put_ready or refresh_ready:
-                my_addr = f"{self.pool.my_ip()}:{self.port}"
+                my_addr = f"{self._my_ip()}:{self.port}"
                 self._bep44_put(ses, my_slot, my_addr)
                 last_put = now
 
@@ -104,9 +106,10 @@ class Discovery:
             if now - last_save > SAVE_INTERVAL:
                 self._save_peer_cache()
                 self._save_lt_state(ses)
-                upnp_ip = self._upnp_map_port()
-                if upnp_ip:
-                    self.pool.set_upnp_ip(upnp_ip)
+                new_ip = self._upnp_map_port()
+                if new_ip and new_ip != self._external_ip:
+                    log.info("[upnp] external IP changed: %s -> %s", self._external_ip, new_ip)
+                    self._external_ip = new_ip
                 last_save = now
 
     # ------------------------------------------------------------------
@@ -144,34 +147,40 @@ class Discovery:
 
     def _validate_and_add(self, peer_addr):
         """Check a candidate peer's /api/info, add to pool if valid."""
-        if self.pool.is_self(peer_addr):
-            return
-
-        connect_addr = peer_addr
-        if self.pool.upnp_ip:
-            host, port_str = peer_addr.rsplit(":", 1)
-            if host == self.pool.upnp_ip:
-                connect_addr = f"127.0.0.1:{port_str}"
-
         try:
-            r = requests.get(f"http://{connect_addr}/api/info", timeout=3)
+            r = requests.get(f"http://{peer_addr}/api/info", timeout=3)
             if r.status_code != 200:
-                self.pool.strike(connect_addr)
+                self.pool.strike(peer_addr)
                 return
             info = r.json()
             if info.get("genesis_hash") != self.genesis_hash:
-                log.debug("[peer] rejected %s, genesis mismatch", connect_addr)
-                self.pool.remove(connect_addr)
+                log.debug("[peer] rejected %s, genesis mismatch", peer_addr)
+                self.pool.remove(peer_addr)
                 return
-            if self.pool.add(connect_addr):
-                log.info("[peer] connected  addr=%s  pool=%d", connect_addr, self.pool.count())
+            if self.pool.add(peer_addr):
+                log.info("[peer] connected  addr=%s  pool=%d", peer_addr, self.pool.count())
         except Exception:
-            log.debug("[peer] validation failed  addr=%s", connect_addr, exc_info=True)
-            self.pool.strike(connect_addr)
+            log.debug("[peer] validation failed  addr=%s", peer_addr, exc_info=True)
+            self.pool.strike(peer_addr)
 
     # ------------------------------------------------------------------
     # BEP44 helpers (moved verbatim from old network.py)
     # ------------------------------------------------------------------
+
+    def _my_ip(self):
+        """Return the best IP to advertise in the DHT: external (UPnP) if available,
+        otherwise LAN IP detected via routing table."""
+        if self._external_ip:
+            return self._external_ip
+        try:
+            import socket
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            s.close()
+            return ip
+        except Exception:
+            return "127.0.0.1"
 
     def _bep44_slot_keypair(self, slot_index):
         seed = hashlib.sha256(
@@ -210,13 +219,16 @@ class Discovery:
             log.debug("[dht] BEP44 put error", exc_info=True)
 
     def _bep44_get_all(self, ses):
+        my_slot = getattr(self, "_my_slot", None)
         for i in range(BEP44_SLOT_COUNT):
+            if i == my_slot:
+                continue   # never read our own slot -- we already know our address
             _, pk = self._bep44_slot_keypair(i)
             try:
                 ses.dht_get_mutable_item(pk, "poolcoin-v1")
             except Exception:
                 pass
-        log.debug("[dht] BEP44 get  slots=%d", BEP44_SLOT_COUNT)
+        log.debug("[dht] BEP44 get  slots=%d", BEP44_SLOT_COUNT - (1 if my_slot is not None else 0))
 
     def _make_lt_session(self):
         import libtorrent as lt

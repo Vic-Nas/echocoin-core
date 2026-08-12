@@ -17,23 +17,9 @@ def test_self_0000_rejected():
     pool = make_pool()
     assert not pool.add("0.0.0.0:8333")
 
-def test_self_loopback_rejected():
-    pool = make_pool()
-    assert not pool.add("127.0.0.1:8333")
 
-def test_self_lan_ip_rejected():
-    pool = make_pool()
-    own_ip = pool._detect_lan_ip()
-    assert not pool.add(f"{own_ip}:8333")
 
-def test_upnp_ip_rejected_after_set():
-    pool = make_pool()
-    pool.set_upnp_ip("1.2.3.4")
-    assert not pool.add("1.2.3.4:8333")
 
-def test_different_port_same_ip_not_self():
-    pool = make_pool()
-    assert pool.add("127.0.0.1:9999")
 
 # ---- add / count ----
 
@@ -145,47 +131,3 @@ def test_concurrent_adds_no_crash():
     assert not errors
 
 
-# ---- thread safety on set_upnp_ip ----
-
-def test_set_upnp_ip_is_self():
-    """After set_upnp_ip, the UPnP address must be rejected as self."""
-    pool = make_pool()
-    pool.set_upnp_ip("5.6.7.8")
-    assert not pool.add("5.6.7.8:8333")
-
-def test_set_upnp_ip_concurrent_no_crash():
-    """Concurrent set_upnp_ip and is_self calls must not crash."""
-    import time
-    pool = make_pool()
-    errors = []
-    def set_ip():
-        for i in range(50):
-            try:
-                pool.set_upnp_ip(f"10.0.0.{i % 256}")
-            except Exception as e:
-                errors.append(e)
-    def check_self():
-        for _ in range(100):
-            try:
-                pool.is_self("10.0.0.1:8333")
-            except Exception as e:
-                errors.append(e)
-    t1 = threading.Thread(target=set_ip)
-    t2 = threading.Thread(target=check_self)
-    t1.start(); t2.start()
-    t1.join(); t2.join()
-    assert not errors
-
-
-# ---- add() self-check is atomic with the lock ----
-
-def test_add_checks_own_inside_lock():
-    """add() must refuse the node's own address even without a prior is_self() call."""
-    pool = make_pool()
-    # Directly call add with the loopback address (always in _own)
-    assert pool.add(f"127.0.0.1:{pool._port}") is False
-
-def test_add_refuses_upnp_ip_set_before_add():
-    pool = make_pool()
-    pool.set_upnp_ip("9.9.9.9")
-    assert pool.add(f"9.9.9.9:{pool._port}") is False
