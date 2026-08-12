@@ -41,7 +41,15 @@ def main():
     parser.add_argument("--port",    type=int, default=8333)
     parser.add_argument("--keyfile", default="poolcoin_key.json")
     parser.add_argument("--db",      default=DB_PATH)
-    parser.add_argument("--peer",    action="append", default=[])
+    parser.add_argument("--peer",       action="append", default=[])
+    parser.add_argument(
+        "--max-peers", type=int, default=params.MAX_PEERS,
+        help="Hard cap on peer table size (default %(default)s).",
+    )
+    parser.add_argument(
+        "--min-peers", type=int, default=params.MIN_PEERS,
+        help="Target minimum peers; triggers more aggressive discovery below this (default %(default)s).",
+    )
     parser.add_argument(
         "--passphrase", default=None,
         help=(
@@ -79,11 +87,11 @@ def main():
     pk_hex   = pk.hex()
 
     # Compose the four modules
-    pool      = PeerPool(args.host, args.port)
+    pool      = PeerPool(args.host, args.port, max_peers=args.max_peers)
     gossip    = Gossip(pool, args.port)
     syncer    = Syncer(pool)
     net_in_q  = queue.Queue()
-    discovery = Discovery(pool, genesis["hash"], args.port, pk_hex)
+    discovery = Discovery(pool, genesis["hash"], args.port, pk_hex, min_peers=args.min_peers)
     node      = Node(args.keyfile, pk, gossip, syncer, pool, net_in_q, db_path=args.db)
 
     # Manual --peer flags: just add to pool (discovery will validate later,

@@ -22,12 +22,13 @@ STALE_SECONDS        = 300
 
 class PeerPool:
 
-    def __init__(self, host, port):
-        self._host  = host
-        self._port  = port
-        self._peers = {}          # addr -> last_seen (wall clock)
-        self._fails = {}          # addr -> {"strikes": int, "cooldown_until": monotonic}
-        self._lock  = threading.Lock()
+    def __init__(self, host, port, max_peers=None):
+        self._host      = host
+        self._port      = port
+        self._max_peers = max_peers if max_peers is not None else MAX_PEERS
+        self._peers     = {}          # addr -> last_seen (wall clock)
+        self._fails     = {}          # addr -> {"strikes": int, "cooldown_until": monotonic}
+        self._lock      = threading.Lock()
 
     # ---- Core operations ----
 
@@ -35,7 +36,7 @@ class PeerPool:
         """Add a peer. Returns True if it was new."""
         now_mono = time.monotonic()
         with self._lock:
-            if len(self._peers) >= MAX_PEERS:
+            if len(self._peers) >= self._max_peers:
                 return False
             if now_mono < self._fails.get(addr, {}).get("cooldown_until", 0.0):
                 return False

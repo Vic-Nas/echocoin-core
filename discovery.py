@@ -38,11 +38,12 @@ class Discovery:
     # 256 DHT alerts doesn't spawn 256 simultaneous HTTP connections.
     _VALIDATE_WORKERS = 32
 
-    def __init__(self, pool, genesis_hash, port, node_pubkey_hex=""):
+    def __init__(self, pool, genesis_hash, port, node_pubkey_hex="", min_peers=None):
         self.pool               = pool
         self.genesis_hash       = genesis_hash
         self.port               = port
         self.node_pubkey_hex    = node_pubkey_hex
+        self._min_peers         = min_peers if min_peers is not None else MIN_PEERS
         self._validate_executor = ThreadPoolExecutor(max_workers=self._VALIDATE_WORKERS)
         self._external_ip = None  # set by UPnP in run()
         if not node_pubkey_hex:
@@ -93,13 +94,13 @@ class Discovery:
 
             # Periodic get
             peer_count = self.pool.count()
-            get_interval = GET_INTERVAL if peer_count < MIN_PEERS else 300
+            get_interval = GET_INTERVAL if peer_count < self._min_peers else 300
             if now - last_get > get_interval:
                 self._bep44_get_all(ses)
                 last_get = now
 
             # Peer-of-peer crawl: more aggressive when below MIN_PEERS.
-            crawl_interval = GET_INTERVAL if peer_count < MIN_PEERS else CRAWL_INTERVAL
+            crawl_interval = GET_INTERVAL if peer_count < self._min_peers else CRAWL_INTERVAL
             if now - last_crawl > crawl_interval:
                 self._validate_executor.submit(self._crawl_peer_lists)
                 last_crawl = now
@@ -240,9 +241,9 @@ class Discovery:
         if not nominations:
             return
 
-        # Sort ascending: low-nomination candidates first.
-        # These are least known to our current peers = highest path diversity value.
-        ranked = sorted(nominations, key=lambda a: nominations[a])
+        # Sort ascending: low-nomination candidates first (highest path diversity value).
+        # Cap at max_peers -- no point queuing more than the pool can hold.
+        ranked = sorted(nominations, key=lambda a: nominations[a])[:self.pool._max_peers]
         log.info("[peer] crawl found %d candidates  unique=%d  multi_nominated=%d",
                  len(ranked),
                  sum(1 for c in nominations if nominations[c] == 1),
