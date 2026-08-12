@@ -409,6 +409,7 @@ def test_rebuild_state_matches_replay(node_setup):
 
 def test_apply_best_peer_block_lowest_hash_wins(node_setup):
     """When multiple peer blocks arrive, the lowest-hash valid one is applied."""
+    from unittest.mock import patch
     from params import BLOCK_CYCLE_SECONDS
     n, sk, pk, pk_hex, addr, _ = node_setup
     parent = n.chain[-1]
@@ -429,8 +430,9 @@ def test_apply_best_peer_block_lowest_hash_wins(node_setup):
         timestamp=ts,
     )
     winner = blk_a if blk_a["hash"] < blk_b["hash"] else blk_b
-    # Pass both; only the lower-hash one should be applied.
-    n._apply_best_peer_block([blk_a, blk_b])
+    import node as node_mod
+    with patch.object(node_mod._rng, "random", return_value=0.0):
+        n._apply_best_peer_block([blk_a, blk_b])
     assert n.chain[-1]["hash"] == winner["hash"]
     assert len(n.chain) == 2
 
