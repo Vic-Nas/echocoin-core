@@ -13,6 +13,29 @@ python main.py
 
 Open `http://localhost:8333` for the node UI. On first run a FALCON-512 keypair is generated and you are prompted for a passphrase to encrypt it.
 
+## Passphrase
+
+The signing passphrase is required to start the node. Two ways to supply it:
+
+**Interactive** (default): you are prompted via `getpass` on startup. Nothing is stored in shell history or visible to `ps`.
+
+**Non-interactive** (Docker, systemd, CI): set the `ECHOCOIN_PASSPHRASE` environment variable before starting the process.
+
+```bash
+export ECHOCOIN_PASSPHRASE="your passphrase"
+python main.py
+```
+
+Or inline with systemd:
+
+```ini
+[Service]
+Environment=ECHOCOIN_PASSPHRASE=your passphrase
+ExecStart=/usr/local/bin/echocoin
+```
+
+The `--passphrase` CLI flag has been removed. It was visible in process listings (`ps aux`) and shell history, making it unsafe for any deployment.
+
 ## CLI options
 
 | Option | Default | Description |
@@ -23,7 +46,7 @@ Open `http://localhost:8333` for the node UI. On first run a FALCON-512 keypair 
 | `--db` | `echocoin_chain.db` | Path to SQLite chain database |
 | `--peer host:port` | - | Bootstrap peer (repeatable) |
 | `--max-peers` | `125` | Hard cap on peer table size |
-| `--passphrase` | - | Key passphrase. **Visible in shell history and process list. Only use in non-interactive environments.** |
+| `--log-level` | `INFO` | Verbosity: DEBUG, INFO, WARNING, ERROR |
 
 ## Building a standalone binary
 
