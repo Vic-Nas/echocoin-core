@@ -1,34 +1,27 @@
-# PoolCoin Architecture
+# Echocoin Architecture
 
 ## Attack Surface Analysis
 
-Each attack is listed with whether it applies to Kern and why.
-
-### 1. Double Spend (51% reorg)
-APPLIES. Standard PoW concern. An attacker with >50% hashpower can build a
-longer private chain and replace the public one, reversing transactions.
-PoolCoin's mitigation: same as Bitcoin (majority-honest assumption). The
-proportional reward model removes the economic incentive to centralize
-hashpower into pools, making 51% harder to reach in practice.
+### 1. Double Spend (competing chain)
+APPLIES. An attacker wishing to rewrite history must recompute the VDF
+sequentially for every block from the fork point to the present. Since VDF
+evaluation cannot be parallelized, this takes exactly as long as the honest
+network took in real time. An active honest network is always ahead.
 TEST: reorg replays all blocks from common ancestor, balances rebuild correctly.
 
-### 2. Selfish Mining (solution withholding)
-DOES NOT APPLY in the classical sense. In Bitcoin, withholding a block lets
-you extend a private fork. In Kern, solutions must be broadcast during the
-50-second puzzle phase to count. Withholding a solution means losing reward
-share. The assembler is chosen by lowest solution hash (deterministic per node's
-local solution set, unique per pubkey). Block content is the union of ALL
-solvers' candidate lists. Counts in solver_summaries are tolerance-checked
-(+/- SOLUTION_COUNT_TOLERANCE) to handle propagation timing at phase boundary.
-TEST: assembler selection is deterministic given solutions. Block missing any
-candidate-list tx is rejected.
+### 2. Selfish Mining / Block Withholding
+DOES NOT APPLY. There is no puzzle to solve privately. The VDF runs
+continuously on the chain tip. Withholding a completed block means losing
+the slot to any peer who finishes at the same time; there is no benefit.
+Fork resolution is by lower block hash, which neither party controls.
 
 ### 3. Eclipse Attack
-APPLIES. Isolating a node lets you feed it a false chain. PoolCoin uses DHT
-discovery with 24 minimum peers, but eclipse is a network-layer concern
-outside consensus logic.
-TEST: (network-layer, not consensus-testable in unit tests). Chain sync
-picks longest valid chain; invalid chains are rejected.
+APPLIES. Isolating a node lets you feed it a false chain. Echocoin uses
+BEP44 DHT discovery with 256 deterministic slots derived from the genesis
+hash. An attacker must overwrite all 256 slots continuously (at least once
+per hour) to prevent honest nodes from reclaiming them on re-announcement.
+TEST: chain sync picks longest valid chain; invalid chains are rejected.
+Genesis hash mismatch causes immediate peer rejection.
 
 ### 4. Transaction Replay
 DOES NOT APPLY. Nonce increments per-address. A replayed tx has a stale
@@ -36,178 +29,169 @@ nonce and is rejected.
 TEST: tx with nonce <= current address nonce is rejected.
 
 ### 5. Transaction Malleability
-DOES NOT APPLY. The tx_hash covers the full signed payload including the
-FALCON-512 signature. Altering any field breaks the signature. There is no
-signature scheme malleability in FALCON-512 (lattice-based, deterministic
-for a given message+key).
-TEST: any field change invalidates signature. tx_hash changes if any byte
-changes.
+DOES NOT APPLY. tx_hash covers the full signed payload including the
+FALCON-512 signature. Altering any field breaks the signature. FALCON-512
+is deterministic for a given message + key.
+TEST: any field change invalidates signature.
 
 ### 6. Fee Manipulation / MEV
-DOES NOT APPLY. Fees are deterministic (size * protocol_rate). Fees are
-burned, not paid to miners. No fee bidding exists. Transaction ordering is
-deterministic (fee_height, nonce, tx_hash). The assembler cannot reorder.
-TEST: fee != size * rate_at_fee_height is rejected. Block with wrong tx
-order is rejected.
+DOES NOT APPLY. Fees are protocol-determined (size * fee_rate). Fees are
+burned entirely -- no fee income for builders. Transaction ordering is
+deterministic (fee_height, nonce, tx_hash). No participant controls ordering.
+TEST: fee != size * rate_at_fee_height is rejected. Wrong tx order is rejected.
 
 ### 7. Frontrunning / Sandwich Attack
-DOES NOT APPLY. Ordering is deterministic and not under any participant's
-control. No participant can insert a tx "before" another; position is
-determined by (fee_height, nonce, tx_hash).
-TEST: tx ordering is a pure function of the three sort keys.
+DOES NOT APPLY. Ordering is a pure function of (fee_height, nonce, tx_hash).
+No participant can insert a tx before another.
 
-### 8. Time Warp / Difficulty Manipulation
-PARTIALLY APPLIES. PoolCoin does not use timestamps for difficulty. It uses
-median solution count over last 100 blocks, clamped 0.5x-2.0x. No timestamp
-field means no time warp. But an attacker controlling many identities could
-try to inflate solution counts to push difficulty down. The linear reward
-model means this gains nothing (same total reward for same total hashpower).
-TEST: difficulty adjustment uses correct median. Clamp bounds are enforced.
+### 8. Time Manipulation
+DOES NOT APPLY. Block timing is enforced by the VDF, not wall clocks.
+A block timestamp must exceed its parent's by at least BLOCK_CYCLE_SECONDS.
+No difficulty parameter is influenced by timestamps.
+TEST: block timestamp < parent + BLOCK_CYCLE_SECONDS is rejected.
 
-### 9. Sybil Attack (identity splitting)
-DOES NOT APPLY for reward gaming. Reward is proportional to valid solutions
-found, which is linear in hashpower. Splitting hashpower across N identities
-yields the same expected total reward.
-TEST: N identities with H/N hashpower each produce same expected total
-solutions as 1 identity with H hashpower (statistical, property-based).
+### 9. Transaction Censorship
+MITIGATED. Builder gains nothing from excluding transactions (fees are
+burned). Sustained exclusion requires winning every relevant slot
+indefinitely. The censorship scoring formula probabilistically rejects
+blocks that repeatedly exclude pending transactions from non-full blocks,
+with acceptance probability = 1/effective_age. A node that rejects a block
+syncs unconditionally when a longer chain arrives (at most one block lag).
+TEST: block excluding a tx for the Nth consecutive non-full block is
+rejected with probability 1 - 1/N.
 
 ### 10. Nonce Manipulation
-DOES NOT APPLY. Nonce must equal current_nonce + 1 for the sender address.
-Gaps and repeats are both rejected.
-TEST: nonce gap rejected. nonce repeat rejected. nonce = expected accepted.
+DOES NOT APPLY. Nonce must equal current_nonce + 1. Gaps and repeats rejected.
+TEST: nonce gap rejected. nonce repeat rejected. correct nonce accepted.
 
 ### 11. Balance Overflow / Underflow
 APPLIES if not checked. All amounts must be positive integers. Total outputs
-+ fee must not exceed sender balance.
-TEST: output amount 0 rejected. output amount negative rejected. total
-outputs + fee > balance rejected. balance never goes negative after apply.
++ fee must not exceed sender balance. State.debit() raises on underflow.
+TEST: outputs + fee > balance rejected. balance never negative after apply.
 
-### 12. Candidate List Censorship
-MITIGATED, live nodes only. Suppressing a tx requires every solver in the
-round to omit it. Live nodes enforce that the block contains the union of
-all solvers' candidate lists during the assembly phase, when those
-candidate lists are still available over the network. A node syncing the
-chain after the fact has no access to the round's candidate lists and
-cannot re-check this; it can only trust that live enforcement happened.
-TEST (live only): block missing a tx from any solver's candidate list is
-rejected during assembly. Not a sync-time check.
+### 12. Fee Height Staleness
+APPLIES if not checked. fee_height must reference an existing block within
+the last FEE_HEIGHT_MAX_AGE blocks. Fee must match exactly the rate at that
+height.
+TEST: fee_height > current height rejected. fee_height too old rejected.
+fee != size * rate_at(fee_height) rejected.
 
-### 13. Fee Height Staleness
-APPLIES if not checked. fee_height must refer to an existing block within
-the last 5 blocks. Future fee_height is rejected. Fee must match exactly
-the rate at that height.
-TEST: fee_height > current height rejected. fee_height < current_height - 5
-rejected. fee != size * rate_at(fee_height) rejected.
-
-### 14. Block Size
-APPLIES if not checked. Fixed hard ceiling of 10 MB, no retargeting.
+### 13. Block Size
+APPLIES if not checked. Hard ceiling of 10 MB (BLOCK_SIZE_LIMIT). No
+retargeting of the cap; cap is raised only by network upgrade.
 TEST: block > 10 MB rejected.
 
-### 15. Assembler Fallback
-APPLIES. If the first assembler (lowest solution hash) fails, the next in
-order takes over. Invalid block from an assembler is rejected, and the next
-assembler is tried.
-TEST: assembler order is deterministic. Skip to next on invalid/missing
-block.
+### 14. Spam via Fee Pressure
+MITIGATED by asymmetric fee formula. Spam fills blocks, pushing median
+volume above the 200 KB soft target. Fee rate rises up to 5% per block.
+Sustained full blocks for 14 blocks (~28 minutes) doubles fees. Rate decays
+at 0.999/block at zero activity -- takes hours to return to baseline.
+No hardcoded floor above 1 ring/byte.
+
+### 15. VDF Proof Forgery
+DOES NOT APPLY if chiavdf is correct. verify_n_wesolowski() checks the
+Wesolowski proof in milliseconds. A forged proof would require solving the
+VDF faster than sequential evaluation, which is the hardness assumption.
+TEST: block with verify=False rejected. Block with missing VDF fields rejected.
+
+### 16. History Rewriting (offline honest network)
+PARTIALLY APPLIES. Unlike Bitcoin, accumulated VDF work is not
+progressively harder -- each block costs exactly one sequential VDF
+computation regardless of age. An attacker who has been running nodes since
+genesis and controls the BEP44 discovery slots can present a longer
+alternative chain to new nodes syncing for the first time. Mitigation:
+BEP44 slot control requires continuous infrastructure cost (re-announcing
+256 slots hourly), and the genesis hash is hardcoded in every binary.
 
 
 ## Module Design
 
-Principle: each module is a pure-logic black box with no I/O. Controllers
-(main.py, node.py, network.py, api.py) wire them together in linear flows.
-No module imports another module's internals. All inter-module communication
-is via explicit function arguments and return values.
+Principle: pure-logic modules have no I/O. Controller modules wire I/O
+to pure logic. No module imports another module's internals.
 
-### Pure Logic Modules (auditable in isolation)
+### Pure Logic Modules
 
 ```
 crypto.py      Keys, signing, verification, address derivation,
-               encrypted key file storage. No I/O beyond the key file
-               itself. Takes/returns bytes, bools.
+               encrypted key file storage. No network I/O.
 
-tx.py          Transaction creation, serialization, fee computation,
-               validation, sort ordering. No I/O. Pure functions on dicts.
+tx.py          Transaction creation, fee computation, validation,
+               sort ordering. Pure functions on dicts.
 
-block.py       Block creation, validation, serialization, expected
-               difficulty/fee-rate computation. No I/O. Pure functions
-               on dicts.
+block.py       Block creation, validation, fee rate computation,
+               block assembly. Pure functions on dicts. Calls
+               vdf.verify() for proof validation.
 
-state.py       Balance ledger + nonce tracking: get_balance, get_nonce,
-               credit, debit, apply_tx, apply_rewards, snapshot, restore.
-               In-memory dict operations. No disk I/O.
+state.py       Balance ledger and nonce tracking. Emission accounting
+               (total_minted, total_burnt). compute_block_reward()
+               implements the exponential decay formula. In-memory only.
 
-mempool.py     Pending tx storage, candidate-list generation,
-               deterministic assembly (union + sort), inclusion
-               validation. No I/O.
+mempool.py     Pending tx storage, candidate list, pruning. No I/O.
 
-mining.py      Puzzle derivation, solution checking, assembler
-               selection/ordering, reward computation, difficulty
-               adjustment. No I/O. Pure math.
+vdf.py         Thin wrapper around chiavdf. evaluate() blocks ~120s.
+               verify() returns in milliseconds. Knows nothing about
+               blocks or the chain.
 
 params.py      Protocol constants. No logic, no I/O.
 ```
 
-### Controller Modules (wire I/O to pure logic)
+### Controller Modules
 
 ```
-node.py        Orchestrates a block cycle: run the puzzle phase,
-               collect network solutions, pick/act as assembler,
-               validate and apply the resulting block. Calls pure
-               modules in a linear sequence. Also handles chain
-               sync and reorg.
+node.py        Orchestrates the block cycle: evaluate VDF, assemble
+               block, collect competing peer blocks, commit winner.
+               Handles chain sync and reorg. Publishes NodeView for
+               Flask threads (single atomic reference swap, no locks).
 
 storage.py     SQLite persistence for blocks, state snapshots, and
-               metadata. All disk I/O for the chain lives here.
+               emission counters. All disk I/O lives here.
 
-network.py     DHT discovery, peer connections, message relay,
-               Dandelion routing, chain fetch. All socket/HTTP I/O
-               lives here.
+gossip.py      Outbound block and tx broadcasts. Dandelion stem/fluff
+               routing for tx privacy. All HTTP POST I/O lives here.
 
-templates.py   Base HTML template and large static HTML blocks.
-               No logic, no I/O. Imported by api.py.
+discovery.py   BEP44 DHT peer discovery. 256 deterministic slots
+               derived from genesis hash. Hourly re-announcement.
 
-api.py         HTTP endpoints and the local web UI (dashboard, send,
-               explorer, address lookup, whitepaper viewer). Thin
-               wrapper that calls node/network and renders JSON or HTML.
+peerpool.py    Active peer set. Strike/cooldown on invalid data.
 
-main.py        Entry point. Loads/creates the key, starts networking,
-               the API server, and the node's block-cycle loop.
+syncer.py      Periodic chain sync against a random peer.
+
+templates.py   Base HTML template. No logic, no I/O.
+
+api.py         HTTP endpoints and web UI. Thin wrapper over node.
+               Rate-limited inbound endpoints for blocks and txs.
+
+main.py        Entry point. Loads key, starts threads, runs node loop.
 ```
 
-### Data Flow (one block cycle, in `node.py`)
-
-`_run_cycle` is the top-level sequencer; each step is a named method:
+### Data Flow (one block cycle, in `node.py._run_cycle`)
 
 ```
-_wait_for_cycle_boundary()   -- sleep to wall-clock boundary, drain queue
-_flush_stale_queue()         -- discard leftover prior-round messages
-_setup_round()               -- read tip, compute difficulty/fee_rate/puzzle
-_puzzle_phase()              -- mine + collect peer solutions for 50s
-  mining.check_solution()      per nonce
-  network.broadcast_solution() on each find
-  on new_peer: sync_chain() + _reset_round_state() (clears all accumulators)
-_assembly_phase()            -- produce or receive a valid block
-  mining.assembler_order()     deterministic order from local solution set
-  _get_candidate()             build or wait for assembler's block per slot
-  _validate_candidate()        block.validate + verify_summary_addresses
-                               + compute_achievable_required_set
-_commit()                    -- apply rewards, persist, broadcast
-  state.apply_rewards()
-  storage.save_block() + save_state()
-  network.broadcast_block()
+_drain_queue()              drain pending network messages
+syncer.check_and_sync()     periodic peer sync (every N cycles)
+mempool.prune_stale()       drop txs with stale fee_height
+vdf.evaluate(tip_hash)      ~120s sequential computation [BLOCKING]
+block.assemble()            pack txs into candidate block
+gossip.broadcast_block()    send to peers immediately
+_drain_queue(5s window)     collect any competing peer blocks
+  for each peer block:
+    block.validate()        structural + VDF proof check
+    _censorship_score()     probabilistic acceptance
+    pick lower block hash   fork resolution
+_commit(winner)             apply txs, apply reward, persist, broadcast
 ```
 
-### Module logger names
+### Module Logger Names
 
-All modules use the `pc.*` hierarchy so log level can be controlled in one place:
+All modules use the `ec.*` hierarchy:
 
 ```
-pc.main      startup, shutdown
-pc.node      cycle phases, block commits, sync/reorg
-pc.network   peer connections, DHT, broadcasts
-pc.storage   (silent by default; errors surface as exceptions)
-pc.api       (silent by default)
+ec.main        startup, shutdown
+ec.node        cycle phases, block commits, sync/reorg
+ec.gossip      peer broadcasts, Dandelion routing
+ec.discovery   DHT, peer announcements
+ec.storage     (silent by default)
+ec.api         (silent by default)
 ```
 
-Set `logging.getLogger("pc").setLevel(logging.DEBUG)` in main.py for
-full per-solution and per-peer detail during development.
+Set `logging.getLogger("ec").setLevel(logging.DEBUG)` for full detail.

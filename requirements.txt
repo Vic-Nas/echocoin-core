@@ -6,3 +6,6 @@ markdown>=3.5
 miniupnpc>=2.1
 pytest>=8.0
 libtorrent>=2.0.0
+chiavdf>=1.1.14
+cairosvg>=2.7
+Pillow>=10.0
