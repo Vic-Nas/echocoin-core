@@ -37,6 +37,21 @@ except ImportError:
 
 log = logging.getLogger("ec.discovery")
 
+
+class _Ticker:
+    """Minimal interval timer. Avoids five scattered last_X variables in run()."""
+    __slots__ = ("_interval", "_last")
+
+    def __init__(self, interval: float, *, fire_immediately: bool = False) -> None:
+        self._interval = interval
+        self._last = 0.0 if fire_immediately else float("inf")
+
+    def ready(self, now: float) -> bool:
+        return now - self._last >= self._interval
+
+    def reset(self, now: float) -> None:
+        self._last = now
+
 PEER_CACHE_FILE      = "echocoin_peers.json"
 DHT_STATE_FILE       = "echocoin_lt_dht.dat"
 SAVE_INTERVAL        = 300
@@ -100,17 +115,19 @@ class Discovery:
         my_offset = self._my_write_offset() if self.node_pubkey_hex else 0
         self._my_slot = my_slot  # stored so _bep44_get_all can skip it
 
-        last_get   = 0
-        last_put   = 0
-        last_save  = 0
-        last_crawl = 0
-        last_flush = 0
-        start_time = time.monotonic()
+        # Stagger the first put by my_offset so all nodes don't announce at once.
+        put_delay   = PUT_DELAY + my_offset % 300
+        tick_flush  = _Ticker(STAGE_FLUSH_INTERVAL,  fire_immediately=True)
+        tick_get    = _Ticker(GET_INTERVAL,           fire_immediately=True)
+        tick_crawl  = _Ticker(GET_INTERVAL,           fire_immediately=False)
+        tick_put    = _Ticker(PUT_REFRESH_INTERVAL,   fire_immediately=False)
+        tick_save   = _Ticker(SAVE_INTERVAL,          fire_immediately=False)
+        start_time  = time.monotonic()
 
-        # Initial BEP44 + genesis-hash torrent lookup immediately after bootstrap
+        # Initial BEP44 + genesis-hash torrent lookup immediately after bootstrap.
         self._bep44_get_all(ses)
         self._torrent_get_peers(ses)
-        last_get = time.monotonic()
+        tick_get.reset(time.monotonic())
 
         while True:
             alert_event.wait(timeout=1)
@@ -118,50 +135,40 @@ class Discovery:
 
             self._process_alerts(ses)
 
-            now = time.monotonic()
+            now    = time.monotonic()
+            at_max = self.pool.count() >= self.pool._max_peers
 
-            # Drain and rank candidates on a short cadence so addresses from
-            # BEP44 alerts and receive_block events are batched together before
-            # any validation work is done.
-            if now - last_flush > STAGE_FLUSH_INTERVAL:
+            if tick_flush.ready(now):
                 self._validate_executor.submit(self._flush_candidates)
-                last_flush = now
+                tick_flush.reset(now)
 
-            # Periodic BEP44 + torrent gets. Slower when pool is full.
-            peer_count = self.pool.count()
-            at_max     = peer_count >= self.pool._max_peers
-            get_interval = 300 if at_max else GET_INTERVAL
-            if now - last_get > get_interval:
+            tick_get._interval = 300 if at_max else GET_INTERVAL
+            if tick_get.ready(now):
                 self._bep44_get_all(ses)
                 self._torrent_get_peers(ses)
-                last_get = now
+                tick_get.reset(now)
 
-            # Periodic crawl of current pool for deeper graph data.
-            crawl_interval = CRAWL_INTERVAL if at_max else GET_INTERVAL
-            if now - last_crawl > crawl_interval:
+            tick_crawl._interval = CRAWL_INTERVAL if at_max else GET_INTERVAL
+            if tick_crawl.ready(now):
                 self._validate_executor.submit(self._crawl_and_enqueue)
-                last_crawl = now
+                tick_crawl.reset(now)
 
-            # Periodic put: refresh our slot on a fixed cadence, staggered
-            # by my_offset so nodes don't all put at once.
-            first_put_ready = (last_put == 0 and now - start_time >= PUT_DELAY + my_offset % 300)
-            refresh_ready   = (last_put != 0 and now - last_put >= PUT_REFRESH_INTERVAL)
-            if first_put_ready or refresh_ready:
+            put_ready = (not tick_put._last and now - start_time >= put_delay) or tick_put.ready(now)
+            if put_ready:
                 my_addr = f"{self._my_ip()}:{self.port}"
                 self._bep44_put(ses, my_slot, my_addr)
                 self._torrent_announce(ses)
-                last_put = now
+                tick_put.reset(now)
 
-            # Evict stale, save state
             self.pool.evict_stale()
-            if now - last_save > SAVE_INTERVAL:
+            if tick_save.ready(now):
                 self._save_peer_cache()
                 self._save_lt_state(ses)
                 new_ip = self._upnp_map_port()
                 if new_ip and new_ip != self._external_ip:
                     log.info("[upnp] external IP changed: %s -> %s", self._external_ip, new_ip)
                     self._external_ip = new_ip
-                last_save = now
+                tick_save.reset(now)
 
     # ------------------------------------------------------------------
     # Alert processing
@@ -466,7 +473,7 @@ class Discovery:
 
     def _save_lt_state(self, ses):
         try:
-                state = ses.save_state()
+            state = ses.save_state()
             with open(DHT_STATE_FILE, "wb") as f:
                 f.write(lt.bencode(state))
         except Exception:

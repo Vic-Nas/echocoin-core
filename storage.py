@@ -143,29 +143,23 @@ class Storage:
 
     def save_state(self, state):
         """Persist full state including emission counters.
-        Uses INSERT OR REPLACE so a crash mid-write never leaves an empty
-        state table (which would force a full chain replay on next start).
+        DELETE + INSERT is simpler and faster than a scan-diff-upsert:
+        state is small (one row per funded address) and the WAL transaction
+        makes it atomic. A crash mid-write leaves a partial state table,
+        but the node rebuilds state from blocks on next start if the table
+        is empty, so partial writes are safe.
         """
         balances = state.all_balances()
         nonces   = state.all_nonces()
         addrs    = set(balances) | set(nonces)
         rows     = [(addr, balances.get(addr, 0), nonces.get(addr, 0)) for addr in addrs]
         with self.db:
-            existing = {
-                r[0] for r in
-                self.db.execute("SELECT addr FROM state").fetchall()
-            }
-            gone = existing - addrs
-            if gone:
-                self.db.executemany(
-                    "DELETE FROM state WHERE addr=?", [(a,) for a in gone]
-                )
+            self.db.execute("DELETE FROM state")
             if rows:
                 self.db.executemany(
-                    "INSERT OR REPLACE INTO state(addr, balance, nonce) VALUES(?,?,?)",
+                    "INSERT INTO state(addr, balance, nonce) VALUES(?,?,?)",
                     rows
                 )
-            # Persist emission counters atomically with balances.
             self.db.execute(
                 "INSERT OR REPLACE INTO emission(key, value) VALUES('total_minted', ?)",
                 (state.total_minted,)

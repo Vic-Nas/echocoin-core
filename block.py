@@ -77,47 +77,32 @@ def block_size(blk):
     return len(json.dumps(blk, sort_keys=True, separators=(",", ":")).encode())
 
 
-def validate(blk, state, chain, get_fee_rate_at_height):
-    """
-    Full block validation. Returns (True, None) or (False, error).
-
-    blk: block dict
-    state: State object (balances/nonces at parent block)
-    chain: list of previous blocks
-    get_fee_rate_at_height: callable(height) -> fee_rate
-
-    VDF proof verification is handled by vdf.verify before this function
-    is called. This function checks structural integrity, tx validity,
-    fee rate, and timestamp rules.
-
-    IMPORTANT: this function applies transactions to `state` in place as
-    part of balance-constraint checking. Callers must pass a snapshot
-    (state.snapshot()) rather than the live state object, so that a
-    validation failure leaves the live state untouched. Rewards are NOT
-    applied here; the caller applies them after successful validation.
-    """
-    height = blk["height"]
-
-    # 1. Hash integrity
+def _check_hash(blk):
     if blk.get("hash") != block_hash(blk):
         return False, "block hash mismatch"
+    return True, None
 
-    # 2. Previous hash
-    if height > 0:
-        parent = chain[-1] if chain else None
-        if parent is None:
-            return False, "no parent block"
-        if blk["previous_hash"] != parent["hash"]:
-            return False, "previous_hash does not match parent"
-        if blk["height"] != parent["height"] + 1:
-            return False, "height does not follow parent"
 
-    # 3. Timestamp
+def _check_parent(blk, chain):
+    height = blk["height"]
+    if height == 0:
+        return True, None
+    parent = chain[-1] if chain else None
+    if parent is None:
+        return False, "no parent block"
+    if blk["previous_hash"] != parent["hash"]:
+        return False, "previous_hash does not match parent"
+    if height != parent["height"] + 1:
+        return False, "height does not follow parent"
+    return True, None
+
+
+def _check_timestamp(blk, chain):
+    height = blk["height"]
     ts = blk.get("timestamp")
     if not isinstance(ts, (int, float)):
         return False, "block missing timestamp"
-    now = _time.time()
-    if ts > now + 30:
+    if ts > _time.time() + 30:
         return False, f"block timestamp {ts} is too far in the future"
     if height > 0:
         parent_ts = chain[-1].get("timestamp")
@@ -128,55 +113,85 @@ def validate(blk, state, chain, get_fee_rate_at_height):
                 f"block timestamp {ts} is less than "
                 f"parent {parent_ts} + {BLOCK_CYCLE_SECONDS}s"
             )
+    return True, None
 
-    # 4. Block size
-    size = block_size(blk)
-    if size > BLOCK_SIZE_LIMIT:
-        return False, f"block exceeds size limit: {size} > {BLOCK_SIZE_LIMIT}"
 
-    # 5. Builder field
-    if height > 0:
-        builder = blk.get("builder")
-        if not isinstance(builder, str) or not crypto.is_valid_address(builder):
-            return False, f"invalid builder address: {builder!r}"
+def _check_builder_and_vdf(blk, chain):
+    if blk["height"] == 0:
+        return True, None
+    builder = blk.get("builder")
+    if not isinstance(builder, str) or not crypto.is_valid_address(builder):
+        return False, f"invalid builder address: {builder!r}"
+    import vdf as vdf_mod
+    vdf_output = blk.get("vdf_output")
+    vdf_proof  = blk.get("vdf_proof")
+    if not isinstance(vdf_output, str) or not isinstance(vdf_proof, str):
+        return False, "missing vdf_output or vdf_proof"
+    challenge = bytes.fromhex(chain[-1]["hash"])
+    if not vdf_mod.verify(challenge, vdf_output, vdf_proof):
+        return False, "invalid VDF proof"
+    return True, None
 
-    # 5b. VDF proof -- verify before checking transactions
-    if height > 0:
-        import vdf as vdf_mod
-        vdf_output = blk.get("vdf_output")
-        vdf_proof  = blk.get("vdf_proof")
-        if not isinstance(vdf_output, str) or not isinstance(vdf_proof, str):
-            return False, "missing vdf_output or vdf_proof"
-        challenge = bytes.fromhex(chain[-1]["hash"])
-        if not vdf_mod.verify(challenge, vdf_output, vdf_proof):
-            return False, "invalid VDF proof"
 
-    # 6. Transaction ordering
-    if blk["transactions"]:
-        for i, t in enumerate(blk["transactions"]):
-            if not isinstance(t, dict):
-                return False, f"transaction at position {i} is not a dict"
-            missing = _TX_SORT_FIELDS - t.keys()
-            if missing:
-                return False, f"transaction at position {i} missing fields for ordering: {missing}"
-        sorted_txs = tx_mod.sort_txs(blk["transactions"])
-        for i, (actual, expected) in enumerate(zip(blk["transactions"], sorted_txs)):
-            if tx_mod.tx_hash(actual) != tx_mod.tx_hash(expected):
-                return False, f"transaction ordering violation at position {i}"
+def _check_tx_ordering(blk):
+    txs = blk["transactions"]
+    if not txs:
+        return True, None
+    for i, t in enumerate(txs):
+        if not isinstance(t, dict):
+            return False, f"transaction at position {i} is not a dict"
+        missing = _TX_SORT_FIELDS - t.keys()
+        if missing:
+            return False, f"transaction at position {i} missing fields for ordering: {missing}"
+    sorted_txs = tx_mod.sort_txs(txs)
+    for i, (actual, expected) in enumerate(zip(txs, sorted_txs)):
+        if tx_mod.tx_hash(actual) != tx_mod.tx_hash(expected):
+            return False, f"transaction ordering violation at position {i}"
+    return True, None
 
-    # 7. Fee rate check
-    if height > 0:
-        expected_rate = compute_expected_fee_rate(chain)
-        if blk["fee_rate"] != expected_rate:
-            return False, "fee rate mismatch"
 
-    # 8. Validate and apply each transaction
+def _check_fee_rate(blk, chain):
+    if blk["height"] == 0:
+        return True, None
+    expected_rate = compute_expected_fee_rate(chain)
+    if blk["fee_rate"] != expected_rate:
+        return False, "fee rate mismatch"
+    return True, None
+
+
+def _apply_transactions(blk, state, get_fee_rate_at_height):
+    height = blk["height"]
     for t in blk["transactions"]:
         ok, err = tx_mod.validate(t, state, height - 1, get_fee_rate_at_height)
         if not ok:
             return False, f"invalid tx: {err}"
         state.apply_tx(t)
+    return True, None
 
+
+def validate(blk, state, chain, get_fee_rate_at_height):
+    """Full block validation. Returns (True, None) or (False, error_string).
+
+    Applies transactions to `state` in place. Callers must pass
+    state.snapshot() -- not the live state -- so a failure leaves it clean.
+    Rewards are NOT applied here; the caller applies them after success.
+    """
+    size = block_size(blk)
+    if size > BLOCK_SIZE_LIMIT:
+        return False, f"block exceeds size limit: {size} > {BLOCK_SIZE_LIMIT}"
+
+    for check, args in (
+        (_check_hash,            (blk,)),
+        (_check_parent,          (blk, chain)),
+        (_check_timestamp,       (blk, chain)),
+        (_check_builder_and_vdf, (blk, chain)),
+        (_check_tx_ordering,     (blk,)),
+        (_check_fee_rate,        (blk, chain)),
+        (_apply_transactions,    (blk, state, get_fee_rate_at_height)),
+    ):
+        ok, err = check(*args)
+        if not ok:
+            return False, err
     return True, None
 
 

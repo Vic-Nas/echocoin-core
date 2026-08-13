@@ -54,22 +54,16 @@ def compute_fee(from_addr, pubkey_hex, outputs, nonce, fee_height, fee_rate):
 
 
 
-def validate(tx_dict, state, chain_tip_height, get_fee_rate_at_height):
-    """
-    Validate a transaction. Returns (True, None) or (False, error_string).
+_REQUIRED_FIELDS = ["from", "pubkey", "outputs", "nonce", "fee_height", "fee", "signature"]
 
-    state: object with .get_balance(addr), .get_nonce(addr)
-    get_fee_rate_at_height: callable(height) -> fee_rate or None
-    """
-    required = ["from", "pubkey", "outputs", "nonce", "fee_height", "fee", "signature"]
-    for field in required:
+
+def _check_fields_and_outputs(tx_dict):
+    for field in _REQUIRED_FIELDS:
         if field not in tx_dict:
             return False, f"missing field: {field}"
-
     outputs = tx_dict["outputs"]
-    if not isinstance(outputs, list) or len(outputs) == 0:
+    if not isinstance(outputs, list) or not outputs:
         return False, "outputs must be a non-empty list"
-
     for out in outputs:
         if "to" not in out or "amount" not in out:
             return False, "each output must have 'to' and 'amount'"
@@ -77,12 +71,13 @@ def validate(tx_dict, state, chain_tip_height, get_fee_rate_at_height):
             return False, "output amounts must be positive integers"
         if not crypto.is_valid_address(out["to"]):
             return False, f"invalid address format: {out['to']!r}"
-
     fee = tx_dict["fee"]
     if not isinstance(fee, int) or fee < 0:
         return False, "fee must be a non-negative integer"
+    return True, None
 
-    # Pubkey must be a valid hex string before any crypto work
+
+def _check_signature(tx_dict):
     pubkey_hex = tx_dict["pubkey"]
     sig_hex    = tx_dict["signature"]
     if not isinstance(pubkey_hex, str) or not isinstance(sig_hex, str):
@@ -92,23 +87,21 @@ def validate(tx_dict, state, chain_tip_height, get_fee_rate_at_height):
         sig_bytes    = bytes.fromhex(sig_hex)
     except ValueError:
         return False, "pubkey or signature is not valid hex"
-
-    # Pubkey must match from address
-    expected_addr = crypto.public_key_to_address(pubkey_bytes)
-    if expected_addr != tx_dict["from"]:
+    if crypto.public_key_to_address(pubkey_bytes) != tx_dict["from"]:
         return False, "pubkey does not match from address"
-
-    # Signature
-    msg = crypto.serialize_for_signing(tx_dict)
-    if not crypto.verify(msg, sig_bytes, pubkey_bytes):
+    if not crypto.verify(crypto.serialize_for_signing(tx_dict), sig_bytes, pubkey_bytes):
         return False, "invalid signature"
+    return True, None
 
-    # Nonce: must be exactly current + 1
-    current_nonce = state.get_nonce(tx_dict["from"])
-    if tx_dict["nonce"] != current_nonce + 1:
-        return False, f"bad nonce: expected {current_nonce + 1}, got {tx_dict['nonce']}"
 
-    # Fee height: must exist and be within last FEE_HEIGHT_MAX_AGE blocks
+def _check_nonce(tx_dict, state):
+    current = state.get_nonce(tx_dict["from"])
+    if tx_dict["nonce"] != current + 1:
+        return False, f"bad nonce: expected {current + 1}, got {tx_dict['nonce']}"
+    return True, None
+
+
+def _check_fee(tx_dict, chain_tip_height, get_fee_rate_at_height):
     fh = tx_dict["fee_height"]
     if not isinstance(fh, int):
         return False, "fee_height must be an integer"
@@ -116,27 +109,44 @@ def validate(tx_dict, state, chain_tip_height, get_fee_rate_at_height):
         return False, "fee_height is in the future"
     if fh < chain_tip_height - (FEE_HEIGHT_MAX_AGE - 1):
         return False, "fee_height is too old"
-
-    # Fee must match exactly
     fee_rate = get_fee_rate_at_height(fh)
     if fee_rate is None:
         return False, f"no fee rate at height {fh}"
     try:
-        expected_fee = compute_fee(
+        expected = compute_fee(
             tx_dict["from"], tx_dict["pubkey"], tx_dict["outputs"],
-            tx_dict["nonce"], fh, fee_rate
+            tx_dict["nonce"], fh, fee_rate,
         )
     except ValueError as e:
         return False, f"fee computation error: {e}"
-    if fee != expected_fee:
-        return False, f"fee mismatch: expected {expected_fee}, got {fee}"
+    if tx_dict["fee"] != expected:
+        return False, f"fee mismatch: expected {expected}, got {tx_dict['fee']}"
+    return True, None
 
-    # Balance: total outputs + fee must not exceed sender balance
-    total_out = sum(o["amount"] for o in outputs)
-    balance   = state.get_balance(tx_dict["from"])
-    if total_out + fee > balance:
+
+def _check_balance(tx_dict, state):
+    total_out = sum(o["amount"] for o in tx_dict["outputs"])
+    if total_out + tx_dict["fee"] > state.get_balance(tx_dict["from"]):
         return False, "insufficient balance"
+    return True, None
 
+
+def validate(tx_dict, state, chain_tip_height, get_fee_rate_at_height):
+    """Validate a transaction. Returns (True, None) or (False, error_string).
+
+    state: object with .get_balance(addr), .get_nonce(addr)
+    get_fee_rate_at_height: callable(height) -> fee_rate or None
+    """
+    for check, args in (
+        (_check_fields_and_outputs, (tx_dict,)),
+        (_check_signature,          (tx_dict,)),
+        (_check_nonce,              (tx_dict, state)),
+        (_check_fee,                (tx_dict, chain_tip_height, get_fee_rate_at_height)),
+        (_check_balance,            (tx_dict, state)),
+    ):
+        ok, err = check(*args)
+        if not ok:
+            return False, err
     return True, None
 
 

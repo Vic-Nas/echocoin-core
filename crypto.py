@@ -16,11 +16,7 @@ import nacl.secret
 import nacl.utils
 from pqcrypto.sign.falcon_512 import (
     generate_keypair as _falcon_keygen,
-)
-from pqcrypto.sign.falcon_512 import (
     sign as _falcon_sign,
-)
-from pqcrypto.sign.falcon_512 import (
     verify as _falcon_verify,
 )
 

@@ -489,8 +489,9 @@ class Node:
             new_state = probe
             validated.append(blk)
 
-        old_confirmed = {
-            tx_mod.tx_hash(t)
+        # Build a hash->tx map in one pass so reorg restore is O(n) not O(n³).
+        old_tx_by_hash = {
+            tx_mod.tx_hash(t): t
             for blk in self.chain[fork_point:]
             for t in blk.get("transactions", [])
         }
@@ -500,11 +501,9 @@ class Node:
             for t in blk.get("transactions", [])
         }
         self.mempool.remove_many(new_confirmed)
-        for h in old_confirmed - new_confirmed:
-            for blk in self.chain[fork_point:]:
-                for t in blk.get("transactions", []):
-                    if tx_mod.tx_hash(t) == h:
-                        self.mempool.add(t)
+        for h, t in old_tx_by_hash.items():
+            if h not in new_confirmed:
+                self.mempool.add(t)
 
         self.storage.replace_chain(fork_point, candidate_chain[fork_point:])
         self.chain = list(candidate_chain)
