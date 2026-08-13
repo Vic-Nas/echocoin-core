@@ -22,18 +22,19 @@ from pqcrypto.sign.falcon_512 import (
 
 from params import ADDRESS_WORD_COUNT, WORD_BITS
 
-_WORDLIST = None
-
 def _load_wordlist():
-    global _WORDLIST
-    if _WORDLIST is not None:
-        return _WORDLIST
-    base = getattr(__import__("sys"), "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    """Load BIP39 wordlist from disk. Called once at module import."""
+    import sys as _sys
+    base = getattr(_sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
     path = os.path.join(base, "bip39_english.txt")
     with open(path) as f:
-        _WORDLIST = [w.strip() for w in f if w.strip()]
-    assert len(_WORDLIST) == 2048, f"BIP39 wordlist must have 2048 words, got {len(_WORDLIST)}"
-    return _WORDLIST
+        words = [w.strip() for w in f if w.strip()]
+    assert len(words) == 2048, f"BIP39 wordlist must have 2048 words, got {len(words)}"
+    return words
+
+# Immutable module-level constant. No global mutation after import.
+_WORDLIST: list[str] = _load_wordlist()
+_WORDLIST_SET: frozenset[str] = frozenset(_WORDLIST)
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +75,7 @@ def public_key_to_address(public_key_bytes):
     """sha256(pubkey) -> 132 bits -> twelve 11-bit BIP39 indices -> dotted words."""
     h = sha256(public_key_bytes)
     bits = int.from_bytes(h[:17], "big") >> (17 * 8 - ADDRESS_WORD_COUNT * WORD_BITS)
-    wordlist = _load_wordlist()
+    wordlist = _WORDLIST
     words = []
     for _ in range(ADDRESS_WORD_COUNT):
         words.append(wordlist[bits & ((1 << WORD_BITS) - 1)])
@@ -97,8 +98,7 @@ def is_valid_address(addr):
     words = addr.split(".")
     if len(words) != ADDRESS_WORD_COUNT:
         return False
-    wordlist_set = set(_load_wordlist())
-    return all(w in wordlist_set for w in words)
+    return all(w in _WORDLIST_SET for w in words)
 
 
 def serialize_for_signing(tx_dict):

@@ -6,6 +6,7 @@ import time as _time
 
 import crypto
 import tx as tx_mod
+import vdf as vdf_mod
 from params import (
     BLOCK_CYCLE_SECONDS,
     BLOCK_SIZE_LIMIT,
@@ -122,7 +123,6 @@ def _check_builder_and_vdf(blk, chain):
     builder = blk.get("builder")
     if not isinstance(builder, str) or not crypto.is_valid_address(builder):
         return False, f"invalid builder address: {builder!r}"
-    import vdf as vdf_mod
     vdf_output = blk.get("vdf_output")
     vdf_proof  = blk.get("vdf_proof")
     if not isinstance(vdf_output, str) or not isinstance(vdf_proof, str):

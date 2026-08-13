@@ -1,7 +1,7 @@
 """Block cycle orchestrator. Linear sequence. Persists every block to SQLite."""
 
-import getpass
 import logging
+import os
 import queue
 import secrets as _secrets
 import threading
@@ -40,6 +40,24 @@ class NodeView:
 log = logging.getLogger("ec.node")
 
 SYNC_EVERY_N_CYCLES = 3
+
+
+def _replay_blocks(blocks, state):
+    """Replay a slice of blocks onto state in place.
+    Applies transactions then block reward for each block.
+    Used by both _rebuild_state and _apply_chain to avoid duplication
+    and ensure the tx-then-reward order is correct everywhere.
+    blocks: iterable of block dicts, skipping genesis (height > 0).
+    """
+    for blk in blocks:
+        if blk["height"] == 0:
+            continue
+        for t in blk["transactions"]:
+            state.apply_tx(t)
+        builder = blk.get("builder")
+        if builder:
+            reward = state.compute_block_reward()
+            state.apply_reward(builder, reward)
 
 
 class Node:
@@ -93,15 +111,10 @@ class Node:
             log.info("[startup] genesis created")
 
     def _rebuild_state(self):
-        """Replay chain from genesis to reconstruct balance/nonce state."""
+        """Replay chain from genesis to reconstruct balance/nonce state.
+        Uses _replay_blocks so the tx-then-reward order matches _commit."""
         self.state = state_mod.State()
-        for blk in self.chain[1:]:
-            for t in blk["transactions"]:
-                self.state.apply_tx(t)
-            builder = blk.get("builder")
-            if builder:
-                reward = self.state.compute_block_reward()
-                self.state.apply_reward(builder, reward)
+        _replay_blocks(self.chain, self.state)
         log.info("[startup] state rebuilt  blocks=%d", len(self.chain))
 
     def _publish_view(self):
@@ -109,21 +122,23 @@ class Node:
         self.view = NodeView(self.chain, self.state)
 
     # ------------------------------------------------------------------
-    # Public
+    # Public interface
     # ------------------------------------------------------------------
 
-    def start(self, kek=None):
-        if kek is None:
-            passphrase = getpass.getpass("Signing passphrase: ")
-            try:
-                kek = crypto.derive_kek(self.keyfile, passphrase)
-                sk_test = crypto.decrypt_secret_key(self.keyfile, kek=kek)
-                del sk_test
-            except (ValueError, FileNotFoundError, OSError) as e:
-                raise RuntimeError(f"could not load key: {e}") from None
-            finally:
-                del passphrase
+    def is_signing_active(self):
+        """True when the node loop is running and the KEK is loaded.
+        API layer uses this instead of reaching into _kek directly."""
+        return self._kek is not None
 
+    def mark_tx_seen(self, tx_hash):
+        """Thread-safe dedup check for inbound tx. Returns True if already seen.
+        Exposes gossip._seen_tx check so api.py doesn't reach into gossip internals."""
+        return self.gossip.mark_seen(tx_hash)
+
+
+    def start(self, kek):
+        """Start the block loop. kek must be derived via crypto.derive_kek()
+        before calling; main.py handles passphrase prompting."""
         self._kek         = kek
         self.running      = True
         self._loop_thread = threading.current_thread()
@@ -213,22 +228,13 @@ class Node:
     # ------------------------------------------------------------------
 
     def _run_cycle(self):
-        """One block cycle: evaluate VDF, assemble block, collect winner.
-
-        The VDF evaluation is the sole timing mechanism -- it blocks for
-        approximately BLOCK_CYCLE_SECONDS of real sequential time. No
-        wall-clock sleep is needed. After the VDF completes, we broadcast
-        our block and open a short window to receive competing blocks from
-        peers who finished at roughly the same time. The lower block hash
-        wins (deterministic, no coordination needed).
-        """
+        """One block cycle: evaluate VDF, assemble block, collect winner."""
         import tx as _tx
         import vdf as vdf_mod
 
         self._cycle_count += 1
         self._drain_queue(timeout=0)
 
-        # Periodically sync with a peer before starting a new VDF.
         if self._cycle_count % SYNC_EVERY_N_CYCLES == 0:
             self.syncer.check_and_sync(
                 self.chain[-1]["height"],
@@ -242,18 +248,15 @@ class Node:
                  tip["height"] + 1, tip["hash"][:12],
                  self.pool.count(), self.mempool.size())
 
-        # Prune mempool of stale txs before assembling.
         pruned = self.mempool.prune_stale(tip["height"], self.state)
         if pruned:
             log.info("[vdf] mempool pruned  dropped=%d  remaining=%d",
                      len(pruned), self.mempool.size())
 
-        # --- Sequential VDF evaluation (~120s) ---
-        challenge     = bytes.fromhex(tip["hash"])
+        challenge          = bytes.fromhex(tip["hash"])
         vdf_out, vdf_proof = vdf_mod.evaluate(challenge)
         log.info("[vdf] proof ready  height=%d", tip["height"] + 1)
 
-        # Assemble our candidate block.
         sorted_txs = _tx.sort_txs(self.mempool.all_txs())
         candidate  = block_mod.assemble(tip, sorted_txs, self.addr, fee_rate)
         candidate["vdf_output"] = vdf_out
@@ -261,14 +264,11 @@ class Node:
         candidate["hash"]       = block_mod.block_hash(candidate)
         self.gossip.broadcast_block(candidate)
 
-        # Collect competing blocks for a short window.
-        # Any peer that finished their VDF at the same time may have a
-        # lower-hash block; we accept it if it's valid and beats ours.
-        COLLECTION_WINDOW = 5  # seconds
+        COLLECTION_WINDOW = 5
         best_block = candidate
-        best_probe = None  # lazily validated below
+        best_probe = None
 
-        peer_blocks = self._drain_queue(timeout=COLLECTION_WINDOW)
+        peer_blocks  = self._drain_queue(timeout=COLLECTION_WINDOW)
         peer_blocks += self._drain_queue(timeout=0)
 
         for blk in peer_blocks:
@@ -277,7 +277,7 @@ class Node:
             if blk.get("previous_hash") != tip["hash"]:
                 continue
             if blk.get("hash", "") >= best_block["hash"]:
-                continue  # can't beat current best
+                continue
             probe = self.state.snapshot()
             ok, err = block_mod.validate(blk, probe, self.chain, self._fee_rate_at)
             if not ok:
@@ -290,9 +290,7 @@ class Node:
             best_block = blk
             best_probe = probe
 
-        # Commit whichever block won.
         if best_block is candidate:
-            # Our own block: validate it to get a probe state.
             probe = self.state.snapshot()
             ok, err = block_mod.validate(candidate, probe, self.chain, self._fee_rate_at)
             if not ok:
@@ -300,8 +298,6 @@ class Node:
                 return
             self._commit(candidate, probe, relay=False)
         else:
-            # A peer block beat ours -- relay it so peers that only heard our
-            # candidate learn about the winner.
             self._commit(best_block, best_probe, relay=True)
 
     # ------------------------------------------------------------------
@@ -309,34 +305,32 @@ class Node:
     # ------------------------------------------------------------------
 
     def _drain_queue(self, timeout=0):
-        """Drain all pending messages from net_in_q.
-
-        Blocks pending:
-          timeout=0: non-blocking, drains what is already queued.
-          timeout>0: blocks up to that many seconds on the first message,
-                     then drains the rest non-blocking.
-        Used at cycle start and during the post-VDF collection window.
-        Returns list of any 'block' messages seen (callers may inspect them).
-        """
+        """Drain all pending messages from net_in_q."""
         assert threading.current_thread() is self._loop_thread, \
             "_drain_queue must be called from the node loop thread"
         block_msgs = []
-        first = True
+        # First message: block up to timeout seconds.
+        try:
+            msg = self.net_in_q.get(block=timeout > 0, timeout=timeout if timeout > 0 else None)
+            self._dispatch_message(msg, block_msgs)
+        except queue.Empty:
+            return block_msgs
+        # Drain the rest non-blocking.
         while True:
             try:
-                if first and timeout > 0:
-                    msg = self.net_in_q.get(block=True, timeout=timeout)
-                else:
-                    msg = self.net_in_q.get(block=False)
+                msg = self.net_in_q.get_nowait()
+                self._dispatch_message(msg, block_msgs)
             except queue.Empty:
                 break
-            first = False
-            mtype = msg.get("type")
-            if mtype == "block":
-                block_msgs.append(msg["block"])
-            else:
-                self._handle_message(msg)
         return block_msgs
+
+    def _dispatch_message(self, msg, block_msgs):
+        """Route one message. block-type messages go into block_msgs list."""
+        mtype = msg.get("type")
+        if mtype == "block":
+            block_msgs.append(msg["block"])
+        else:
+            self._handle_message(msg)
 
     def _handle_message(self, msg):
         """Single dispatch for non-block messages."""
@@ -346,7 +340,6 @@ class Node:
             msg["reply"].put(result)
         elif mtype == "tx":
             self._handle_tx_message(msg)
-        # Unknown types are silently dropped.
 
     def _handle_tx_message(self, msg):
         tx_dict    = msg["tx"]
@@ -360,8 +353,9 @@ class Node:
             if ok:
                 added, _ = self.mempool.add(tx_dict)
                 if added:
-                    self.gossip._broadcast("/api/receive_tx",
-                                           {"type": "tx_fluff", "tx": tx_dict})
+                    # Use relay_tx so the dedup check in gossip._seen_tx fires
+                    # and the same tx isn't re-broadcast to all peers twice.
+                    self.gossip.relay_tx(tx_dict)
 
     # ------------------------------------------------------------------
     # Censorship resistance
@@ -385,12 +379,7 @@ class Node:
         return score
 
     def _update_exclusion_ages(self, accepted_blk):
-        """Update _tx_exclusion_age after a block is accepted.
-
-        Call exactly once per cycle, after the winning block is chosen.
-        Increments ages only for txs missing from non-full blocks.
-        Evicts hashes that have left the mempool.
-        """
+        """Update _tx_exclusion_age after a block is accepted."""
         confirmed = {tx_mod.tx_hash(t) for t in accepted_blk.get("transactions", [])}
         pending   = self.mempool.pending_hashes()
         missing   = pending - confirmed
@@ -465,23 +454,16 @@ class Node:
         def fee_rate_at(h):
             return candidate_chain[h]["fee_rate"] if 0 <= h < len(candidate_chain) else None
 
-        for i, blk in enumerate(candidate_chain):
-            if i == 0:
-                validated.append(blk)
-                continue
-            if i < fork_point:
-                for t in blk["transactions"]:
-                    new_state.apply_tx(t)
-                builder = blk.get("builder")
-                if builder:
-                    reward = new_state.compute_block_reward()
-                    new_state.apply_reward(builder, reward)
-                validated.append(blk)
-                continue
+        # Replay the shared prefix (no validation needed -- already trusted).
+        _replay_blocks(candidate_chain[:fork_point], new_state)
+        validated = list(candidate_chain[:fork_point])
+
+        # Validate and apply the new tail.
+        for blk in candidate_chain[fork_point:]:
             probe = new_state.snapshot()
             ok, err = block_mod.validate(blk, probe, validated, fee_rate_at)
             if not ok:
-                return False, f"invalid block at {i}: {err}"
+                return False, f"invalid block at {blk['height']}: {err}"
             builder = blk.get("builder")
             if builder:
                 reward = probe.compute_block_reward()
@@ -489,7 +471,7 @@ class Node:
             new_state = probe
             validated.append(blk)
 
-        # Build a hash->tx map in one pass so reorg restore is O(n) not O(n³).
+        # Reorg mempool: restore txs from the old tail that aren't in the new tail.
         old_tx_by_hash = {
             tx_mod.tx_hash(t): t
             for blk in self.chain[fork_point:]

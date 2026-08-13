@@ -36,6 +36,18 @@ logging.getLogger("urllib3").setLevel(logging.WARNING)
 log = logging.getLogger("ec.main")
 
 
+def _resolve_passphrase(prompt):
+    """Return a passphrase string from ECHOCOIN_PASSPHRASE env var or interactive prompt.
+    Non-interactive deployments (Docker, systemd) set ECHOCOIN_PASSPHRASE.
+    Interactive sessions are prompted via getpass (no shell-history exposure).
+    --passphrase CLI flag has been removed; it was visible in process listings.
+    """
+    env_pass = os.environ.get("ECHOCOIN_PASSPHRASE")
+    if env_pass:
+        return env_pass
+    return getpass.getpass(prompt)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Echocoin node")
     parser.add_argument("--host",    default="0.0.0.0")
@@ -48,13 +60,6 @@ def main():
         help="Hard cap on peer table size (default %(default)s).",
     )
     parser.add_argument(
-        "--passphrase", default=None,
-        help=(
-            "Key passphrase. WARNING: visible in shell history and process list. "
-            "Only use in non-interactive environments where you accept that risk."
-        ),
-    )
-    parser.add_argument(
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="Logging verbosity (default: INFO).",
@@ -65,7 +70,9 @@ def main():
     # Key setup
     if not os.path.exists(args.keyfile):
         print("No key file found. Creating new FALCON-512 keypair.")
-        passphrase = args.passphrase or _prompt_new_passphrase()
+        passphrase = _resolve_passphrase("New passphrase: ")
+        if not os.environ.get("ECHOCOIN_PASSPHRASE"):
+            passphrase = _prompt_new_passphrase(passphrase)
         sk, pk = crypto.generate_keypair()
         crypto.save_key(args.keyfile, sk, pk, passphrase)
         kek = crypto.derive_kek(args.keyfile, passphrase)
@@ -74,7 +81,7 @@ def main():
         log.info("[startup] address=%s", addr)
         del sk, passphrase
     else:
-        passphrase = args.passphrase or getpass.getpass("Passphrase: ")
+        passphrase = _resolve_passphrase("Passphrase: ")
         try:
             pk = crypto.load_pubkey(args.keyfile)
             kek = crypto.derive_kek(args.keyfile, passphrase)
@@ -89,7 +96,6 @@ def main():
     genesis  = block_mod.create_genesis()
     pk_hex   = pk.hex()
 
-    # Compose the four modules
     pool      = PeerPool(args.host, args.port, max_peers=args.max_peers)
     gossip    = Gossip(pool, args.port)
     syncer    = Syncer(pool)
@@ -97,15 +103,11 @@ def main():
     discovery = Discovery(pool, genesis["hash"], args.port, pk_hex)
     node      = Node(args.keyfile, pk, gossip, syncer, pool, net_in_q, db_path=args.db)
 
-    # Manual --peer flags: just add to pool (discovery will validate later,
-    # and the periodic syncer will fetch the chain if needed)
     for peer in args.peer:
         parts = peer.split(":")
         if len(parts) == 2:
-            # Validate inline so the node can sync before first cycle
             discovery._validate_and_add(f"{parts[0]}:{parts[1]}")
 
-    # Start background threads
     threading.Thread(target=discovery.run, daemon=True).start()
 
     app = create_app(node, pool, net_in_q, discovery)
@@ -116,7 +118,6 @@ def main():
     log.info("[startup] API on http://%s:%d", args.host, args.port)
     log.info("[startup] genesis=%s", genesis["hash"][:12])
 
-    # Initial sync from any peers added via --peer
     if pool.count() > 0:
         syncer.check_and_sync(
             len(node.chain) - 1,
@@ -131,9 +132,10 @@ def main():
         node.stop()
 
 
-def _prompt_new_passphrase():
+def _prompt_new_passphrase(first=None):
     while True:
-        p1 = getpass.getpass("New passphrase: ")
+        p1 = first if first else getpass.getpass("New passphrase: ")
+        first = None
         if len(p1) < 8:
             print("Passphrase must be at least 8 characters.")
             continue

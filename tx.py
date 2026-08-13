@@ -36,21 +36,30 @@ def tx_size(tx_dict):
 
 
 def compute_fee(from_addr, pubkey_hex, outputs, nonce, fee_height, fee_rate):
-    """Compute fee = body_size * fee_rate. Iterates to handle the fee field's
-    own digit count affecting body size. Converges in at most 2 iterations
-    for any realistic fee_rate (pubkey and output fields dwarf the fee digits)."""
+    """Compute fee = body_size * fee_rate.
+
+    The fee field itself contributes to body_size (its digit count is priced).
+    Two passes always suffice: pass 1 uses fee=0 to get a baseline size, pass 2
+    uses that fee to get the exact size. A third pass is only needed if the fee
+    value crosses a digit-count boundary (e.g. 9999 -> 10000), which is handled
+    by the loop. Convergence beyond 3 iterations is not possible for any
+    realistic fee_rate; ValueError indicates a bug in the caller.
+    """
     skeleton = {
         "from": from_addr, "pubkey": pubkey_hex, "outputs": outputs,
         "nonce": nonce, "fee_height": fee_height, "fee": 0,
     }
     fee = 0
-    for _ in range(6):
+    for _ in range(4):
         skeleton["fee"] = fee
         new_fee = tx_size(skeleton) * fee_rate
         if new_fee == fee:
             return fee
         fee = new_fee
-    raise ValueError(f"compute_fee did not converge (last fee={fee}, fee_rate={fee_rate})")
+    raise ValueError(
+        f"compute_fee did not converge after 4 iterations "
+        f"(last fee={fee}, fee_rate={fee_rate}) -- this is a bug"
+    )
 
 
 

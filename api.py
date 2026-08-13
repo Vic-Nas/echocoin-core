@@ -140,7 +140,8 @@ _TX_REQUIRED_FIELDS = {"from", "pubkey", "outputs", "nonce", "fee_height", "fee"
 
 def create_app(node, pool, net_in_q, discovery):
     app = Flask(__name__)
-    tx_limiter       = RateLimiter(capacity=20, refill_per_second=5)   # ~5/sec sustained, bursts to 20
+    tx_limiter    = RateLimiter(capacity=20, refill_per_second=5)   # tx submissions
+    block_limiter = RateLimiter(capacity=10, refill_per_second=2)   # block receives
 
     app.logger.setLevel(logging.WARNING)
 
@@ -235,7 +236,7 @@ def create_app(node, pool, net_in_q, discovery):
                 alert = f'<div class="alert alert-err">{"<br>".join(errors)}</div>'
             elif not outputs:
                 alert = '<div class="alert alert-err">No valid outputs.</div>'
-            elif not passphrase and node._kek is None:
+            elif not passphrase and not node.is_signing_active():
                 alert = '<div class="alert alert-err">Passphrase required to sign (leave blank if the mining loop is already running).</div>'
             else:
                 try:
@@ -322,7 +323,7 @@ def create_app(node, pool, net_in_q, discovery):
               <td>{t['fee']}</td>
             </tr>"""
 
-        builder = b.get("builder") or ""
+        builder = html.escape(b.get("builder") or "")
 
         body = f"""
         <h2>Block {height}</h2>
@@ -651,7 +652,7 @@ def create_app(node, pool, net_in_q, discovery):
         })
 
     @app.route("/api/receive_block", methods=["POST"])
-    @_rate_limited(tx_limiter)
+    @_rate_limited(block_limiter)
     def api_recv_block():
         data = request.get_json()
         if not data or "block" not in data:
@@ -694,7 +695,7 @@ def create_app(node, pool, net_in_q, discovery):
         h = tx_mod.tx_hash(tx_dict)
         # Dedup at the API boundary so concurrent Flask threads
         # don't double-enqueue the same tx.
-        if node.gossip.mark_seen(h):
+        if node.mark_tx_seen(h):
             return jsonify({"ok": True})
         net_in_q.put({
             "type":           "tx",
