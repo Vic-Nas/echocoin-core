@@ -231,10 +231,9 @@ class Node:
 
         # Periodically sync with a peer before starting a new VDF.
         if self._cycle_count % SYNC_EVERY_N_CYCLES == 0:
-            tip_hash = self.chain[-1]["hash"]
-            self.syncer._local_tip_hash = lambda: tip_hash
             self.syncer.check_and_sync(
                 self.chain[-1]["height"],
+                self.chain[-1]["hash"],
                 lambda chain: self.sync_chain(chain)[0],
             )
 

@@ -17,8 +17,7 @@ class FakeGossip:
 
 
 class FakeSyncer:
-    def check_and_sync(self, h, fn): return False
-    _local_tip_hash = lambda self: ""
+    def check_and_sync(self, h, tip_hash, fn): return False
 
 
 class FakePool:

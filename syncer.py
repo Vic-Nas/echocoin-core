@@ -1,18 +1,14 @@
-"""Periodic chain sync. Compares local height with a random peer,
+"""Periodic chain sync. Compares local tip with a random peer,
 fetches their chain if they are ahead.
 
-No threads of its own. Called by the node loop on a timer.
+No threads of its own. Called by the node loop once per N cycles.
 """
 
 import logging
-
 import requests
 
 log = logging.getLogger("ec.syncer")
 
-# Hard cap on blocks fetched in a single sync to bound memory usage.
-# At one block per 2 minutes, 50,000 blocks is ~70 days of chain history.
-# A node that far behind should sync in multiple passes regardless.
 FETCH_CHAIN_MAX_BLOCKS = 50_000
 
 
@@ -21,11 +17,15 @@ class Syncer:
     def __init__(self, pool):
         self.pool = pool
 
-    def check_and_sync(self, local_height, apply_fn):
-        """Pick a random peer, compare height and tip hash, sync if they have
-        a better chain (longer, or same height with lower tip hash).
-        apply_fn(chain) should return True on success.
-        Returns True if the chain was updated."""
+    def check_and_sync(self, local_height, local_tip_hash, apply_fn):
+        """Pick a random peer, compare tip, sync if they have a better chain.
+
+        local_height:   int, current chain height
+        local_tip_hash: str, current tip block hash (for tie-breaking)
+        apply_fn:       callable(chain) -> bool, called with the fetched chain
+
+        Returns True if the chain was updated.
+        """
         peer = self.pool.random()
         if not peer:
             return False
@@ -40,27 +40,23 @@ class Syncer:
 
         remote_height   = info.get("height", 0)
         remote_tip_hash = info.get("tip_hash", "")
-        local_tip_hash  = self._local_tip_hash()
+
         if remote_height < local_height:
             return False
-        # Same height: only sync if the remote tip hash is strictly lower
+        # Same height: only sync if remote tip hash is strictly lower
         # (lowest hash wins; same or higher means we already have the better chain).
         if remote_height == local_height and remote_tip_hash >= local_tip_hash:
             return False
 
-        log.info("[sync] peer %s is ahead  remote=%d  local=%d  fetching chain",
+        log.info("[sync] peer %s is ahead  remote=%d  local=%d  fetching",
                  peer, remote_height, local_height)
-        chain = self.fetch_chain_from(peer)
+        chain = self._fetch_chain(peer)
         if chain:
             return apply_fn(chain)
         return False
 
-    def _local_tip_hash(self):
-        """Return the local tip hash for tie-breaking. Override in tests."""
-        return ""
-
-    def fetch_chain_from(self, peer_addr):
-        """Paginated chain fetch from one peer. Returns list or None."""
+    def _fetch_chain(self, peer_addr):
+        """Paginated chain fetch. Returns list of block dicts or None."""
         try:
             chain, from_h = [], 0
             while True:
@@ -83,4 +79,3 @@ class Syncer:
             return chain or None
         except Exception:
             return None
-

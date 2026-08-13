@@ -32,7 +32,7 @@ INITIAL_FEE_RATE = 1_000  # rings/byte; gives fee formula room above the integer
 # commodity hardware. Must be calibrated empirically before genesis and
 # cannot change after launch without breaking chain identity.
 # Placeholder: replace with measured value before mainnet.
-VDF_ITERATIONS = 3_300_000   # calibrated: ~120s on flash-mint (Intel, ~27.5k iters/sec)
+VDF_ITERATIONS = 85_000_000  # calibrated: ~120s on flash-mint (~700k iters/sec at 1024-bit)
 
 # Genesis message. Embedded in block 0 and hashed into the genesis block hash.
 # Cannot change after launch without breaking network identity.
