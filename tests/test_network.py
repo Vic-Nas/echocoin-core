@@ -51,10 +51,9 @@ def test_duplicate_tx_dedup():
     sk, pk, pk_hex, addr = make_keypair()
     st = state_mod.State()
     st.credit(addr, 10_000_000_000)
-    _, t = tx_mod.compute_fee_fixed_point(
-        addr, pk_hex, [{"to": addr, "amount": 1_000_000}],
-        1, 0, 1, sk
-    )
+    outputs = [{"to": addr, "amount": 1_000_000}]
+    fee = tx_mod.compute_fee(addr, pk_hex, outputs, 1, 0, 1)
+    t = tx_mod.create(addr, pk_hex, outputs, 1, 0, fee, sk)
     h = tx_mod.tx_hash(t)
     gossip.mark_seen(h)
     gossip.mark_seen(h)

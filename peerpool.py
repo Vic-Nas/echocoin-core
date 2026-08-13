@@ -22,9 +22,7 @@ STALE_SECONDS        = 300
 
 class PeerPool:
 
-    def __init__(self, host, port, max_peers=None):
-        self._host      = host
-        self._port      = port
+    def __init__(self, host, port, max_peers=None):  # noqa: ARG002 (host/port reserved for future self-filtering)
         self._max_peers = max_peers if max_peers is not None else MAX_PEERS
         self._peers     = {}          # addr -> last_seen (wall clock)
         self._fails     = {}          # addr -> {"strikes": int, "cooldown_until": monotonic}

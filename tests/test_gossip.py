@@ -15,13 +15,16 @@ def make_gossip():
 
 # ---- relay_tx dedup ----
 
+def _make_tx(sk, pk_hex, addr):
+    outputs = [{"to": addr, "amount": 1_000_000}]
+    fee = tx_mod.compute_fee(addr, pk_hex, outputs, 1, 0, 1)
+    return tx_mod.create(addr, pk_hex, outputs, 1, 0, fee, sk)
+
+
 def test_relay_tx_first_call_not_duplicate():
     gossip, pool = make_gossip()
     sk, pk, pk_hex, addr = make_keypair()
-    st = state_mod.State()
-    st.credit(addr, 10_000_000)
-    _, t = tx_mod.compute_fee_fixed_point(
-        addr, pk_hex, [{"to": addr, "amount": 1_000_000}], 1, 0, 1, sk)
+    t = _make_tx(sk, pk_hex, addr)
     h = tx_mod.tx_hash(t)
     # No peers, so relay does nothing except mark seen
     gossip.relay_tx(t)
@@ -30,10 +33,7 @@ def test_relay_tx_first_call_not_duplicate():
 def test_relay_tx_second_call_is_noop():
     gossip, pool = make_gossip()
     sk, pk, pk_hex, addr = make_keypair()
-    st = state_mod.State()
-    st.credit(addr, 10_000_000)
-    _, t = tx_mod.compute_fee_fixed_point(
-        addr, pk_hex, [{"to": addr, "amount": 1_000_000}], 1, 0, 1, sk)
+    t = _make_tx(sk, pk_hex, addr)
     h = tx_mod.tx_hash(t)
     gossip.relay_tx(t)
     # Manually clear from cache and relay again — relay_tx should re-gate on seen

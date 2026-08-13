@@ -269,8 +269,6 @@ class Node:
         best_block = candidate
         best_probe = None  # lazily validated below
 
-        import time as _time_mod
-        window_end = _time_mod.time() + COLLECTION_WINDOW
         peer_blocks = self._drain_queue(timeout=COLLECTION_WINDOW)
         peer_blocks += self._drain_queue(timeout=0)
 
@@ -301,9 +299,11 @@ class Node:
             if not ok:
                 log.error("[vdf] own block invalid: %s", err)
                 return
-            self._commit(candidate, probe)
+            self._commit(candidate, probe, relay=False)
         else:
-            self._commit(best_block, best_probe)
+            # A peer block beat ours -- relay it so peers that only heard our
+            # candidate learn about the winner.
+            self._commit(best_block, best_probe, relay=True)
 
     # ------------------------------------------------------------------
     # Queue handling
@@ -325,8 +325,10 @@ class Node:
         first = True
         while True:
             try:
-                t = timeout if first else 0
-                msg = self.net_in_q.get(block=(t > 0), timeout=t if t > 0 else None)
+                if first and timeout > 0:
+                    msg = self.net_in_q.get(block=True, timeout=timeout)
+                else:
+                    msg = self.net_in_q.get(block=False)
             except queue.Empty:
                 break
             first = False
@@ -406,7 +408,7 @@ class Node:
     # Commit
     # ------------------------------------------------------------------
 
-    def _commit(self, new_block, new_state):
+    def _commit(self, new_block, new_state, relay=False):
         self._update_exclusion_ages(new_block)
         builder = new_block.get("builder")
         if builder:
@@ -418,11 +420,12 @@ class Node:
         self.storage.save_state(new_state)
         self.mempool.remove_many([tx_mod.tx_hash(t) for t in new_block["transactions"]])
         self._publish_view()
-        try:
-            self.gossip.broadcast_block(new_block)
-        except Exception:
-            log.exception("[commit] broadcast failed for block=%d, peers may miss it",
-                          new_block["height"])
+        if relay:
+            try:
+                self.gossip.broadcast_block(new_block)
+            except Exception:
+                log.exception("[commit] broadcast failed for block=%d, peers may miss it",
+                              new_block["height"])
         log.info("[commit] block=%d  hash=%s  tx=%d  builder=%s",
                  new_block["height"], new_block["hash"][:12],
                  len(new_block["transactions"]),

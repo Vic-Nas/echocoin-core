@@ -120,11 +120,13 @@ def _parse_sender(data):
         return None
 
 
-def _register_sender(pool, data):
-    """Register the sender as a peer (one-liner, no side effects)."""
+def _register_sender(discovery, data):
+    """Enqueue the block sender as a discovery candidate.
+    They spoke the protocol so they're worth probing, but they go through
+    the same nomination-ranked pipeline as every other source."""
     addr = _parse_sender(data)
     if addr:
-        pool.add(addr)
+        discovery.enqueue_candidate(addr)
 
 
 def _strike_sender(pool, data):
@@ -137,7 +139,7 @@ def _strike_sender(pool, data):
 _TX_REQUIRED_FIELDS = {"from", "pubkey", "outputs", "nonce", "fee_height", "fee", "signature"}
 
 
-def create_app(node, pool, net_in_q):
+def create_app(node, pool, net_in_q, discovery):
     app = Flask(__name__)
     tx_limiter       = RateLimiter(capacity=20, refill_per_second=5)   # ~5/sec sustained, bursts to 20
 
@@ -679,7 +681,7 @@ def create_app(node, pool, net_in_q):
             "type":  "block",
             "block": blk,
         })
-        _register_sender(pool, data)
+        _register_sender(discovery, data)
         return jsonify({"ok": True})
 
     @app.route("/api/receive_tx", methods=["POST"])

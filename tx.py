@@ -51,19 +51,6 @@ def compute_fee(from_addr, pubkey_hex, outputs, nonce, fee_height, fee_rate):
     raise ValueError(f"compute_fee did not converge (last fee={fee}, fee_rate={fee_rate})")
 
 
-def compute_fee_fixed_point(from_addr, pubkey_hex, outputs, nonce, fee_height, fee_rate, secret_key_bytes):
-    """Compute fee then sign. Returns (fee, signed_tx_dict).
-
-    Used by tests/helpers.py. Not the production signing path -- node.py calls
-    compute_fee and tx_mod.create separately so it can manage key material
-    (decrypt, sign, del sk) without exposing the secret key to this function.
-    Keep these two paths consistent: any change to fee computation or tx
-    structure must be reflected in both.
-    """
-    fee = compute_fee(from_addr, pubkey_hex, outputs, nonce, fee_height, fee_rate)
-    t   = create(from_addr, pubkey_hex, outputs, nonce, fee_height, fee, secret_key_bytes)
-    return fee, t
-
 
 def validate(tx_dict, state, chain_tip_height, get_fee_rate_at_height):
     """

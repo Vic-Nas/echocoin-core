@@ -108,7 +108,7 @@ def main():
     # Start background threads
     threading.Thread(target=discovery.run, daemon=True).start()
 
-    app = create_app(node, pool, net_in_q)
+    app = create_app(node, pool, net_in_q, discovery)
     threading.Thread(
         target=lambda: app.run(host=args.host, port=args.port, threaded=True),
         daemon=True,
@@ -120,6 +120,7 @@ def main():
     if pool.count() > 0:
         syncer.check_and_sync(
             len(node.chain) - 1,
+            node.chain[-1]["hash"],
             lambda chain: node.sync_chain(chain)[0],
         )
 

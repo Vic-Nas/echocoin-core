@@ -30,8 +30,8 @@ def make_signed_tx(sk, pk_hex, from_addr, to_addr, amount, nonce, fee_height, fe
 
 def make_valid_tx(sk, pk_hex, from_addr, to_addr, amount, nonce, fee_height, fee_rate):
     outputs = [{"to": to_addr, "amount": amount}]
-    fee, t = tx_mod.compute_fee_fixed_point(from_addr, pk_hex, outputs, nonce, fee_height, fee_rate, sk)
-    return t
+    fee = tx_mod.compute_fee(from_addr, pk_hex, outputs, nonce, fee_height, fee_rate)
+    return tx_mod.create(from_addr, pk_hex, outputs, nonce, fee_height, fee, sk)
 
 
 def fee_rate_fn(rate=1):
