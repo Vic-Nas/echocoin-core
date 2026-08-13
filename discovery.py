@@ -39,14 +39,30 @@ log = logging.getLogger("ec.discovery")
 
 
 class _Ticker:
-    """Minimal interval timer. Avoids five scattered last_X variables in run()."""
-    __slots__ = ("_interval", "_last")
+    """Minimal interval timer. Avoids scattered last_X variables in run().
+
+    fire_immediately=True:  fires on the first ready() call.
+    fire_immediately=False: fires after the first full interval has elapsed
+                            since the first call to ready().
+    """
+    __slots__ = ("_interval", "_fire_immediately", "_last", "_first_seen")
 
     def __init__(self, interval: float, *, fire_immediately: bool = False) -> None:
-        self._interval = interval
-        self._last = 0.0 if fire_immediately else float("inf")
+        self._interval        = interval
+        self._fire_immediately = fire_immediately
+        self._last: float     = 0.0
+        self._first_seen: float = 0.0
 
     def ready(self, now: float) -> bool:
+        if self._last == 0.0 and self._first_seen == 0.0:
+            # First call ever.
+            if self._fire_immediately:
+                return True
+            self._first_seen = now
+            return False
+        if self._last == 0.0:
+            # Waiting for first interval since first_seen.
+            return now - self._first_seen >= self._interval
         return now - self._last >= self._interval
 
     def reset(self, now: float) -> None:
@@ -153,7 +169,14 @@ class Discovery:
                 self._validate_executor.submit(self._crawl_and_enqueue)
                 tick_crawl.reset(now)
 
-            put_ready = (not tick_put._last and now - start_time >= put_delay) or tick_put.ready(now)
+            # First put is staggered by put_delay (= PUT_DELAY + node-specific offset)
+            # so all nodes don't hammer the DHT simultaneously on startup.
+            if tick_put._last == 0.0 and tick_put._first_seen == 0.0:
+                tick_put._first_seen = start_time  # override: measure from bootstrap, not loop start
+                tick_put._interval   = put_delay
+            elif tick_put._last != 0.0:
+                tick_put._interval   = PUT_REFRESH_INTERVAL  # restore normal cadence after first fire
+            put_ready = tick_put.ready(now)
             if put_ready:
                 my_addr = f"{self._my_ip()}:{self.port}"
                 self._bep44_put(ses, my_slot, my_addr)
