@@ -5,6 +5,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import block as block_mod
+import mempool as mempool_mod
 import crypto
 import state as state_mod
 import tx as tx_mod
