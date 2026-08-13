@@ -1,8 +1,10 @@
 # Echocoin build targets
 #
-# make linux   -- build dist/echocoin        (run on Linux)
-# make windows -- build dist/echocoin.exe    (run on Windows)
-# make icons   -- regenerate favicon.ico and echocoin.png from echocoin.svg
+# make linux   -- regenerate icons then build dist/echocoin        (Linux only)
+# make windows -- build dist/echocoin.exe using pre-committed icons (Windows/Linux)
+# make icons   -- regenerate favicon.ico and echocoin.png from echocoin.svg (Linux only,
+#                 requires libcairo2-dev + pip install cairosvg Pillow)
+#                 Commit the results so Windows builds don't need cairo.
 # make clean   -- remove build artifacts
 #
 # PyInstaller must build on the target platform. Cross-compilation is not supported.
@@ -21,7 +23,7 @@ linux: icons
 	pyinstaller --clean --noconfirm $(SPEC)
 	@echo "Built: $(DIST)/echocoin"
 
-windows: icons
+windows:
 	pyinstaller --clean --noconfirm $(SPEC)
 	@echo "Built: $(DIST)/echocoin.exe"
 

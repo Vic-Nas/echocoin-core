@@ -137,10 +137,11 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pyinstaller cairosvg Pillow
+          pip install pyinstaller
 
       - name: Build
-        run: make windows
+        # Icons are pre-committed from the Linux build; no cairo needed on Windows.
+        run: pyinstaller --clean --noconfirm echocoin.spec
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
