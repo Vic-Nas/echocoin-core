@@ -106,14 +106,20 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller
 
+      - name: Install icon build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libcairo2-dev pkg-config python3-dev
+          pip install cairosvg Pillow
+
       - name: Build
         run: make linux
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: poolcoin-linux
-          path: dist/poolcoin
+          name: echocoin-linux
+          path: dist/echocoin
 
   build-windows:
     needs: test
@@ -131,7 +137,7 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pyinstaller
+          pip install pyinstaller cairosvg Pillow
 
       - name: Build
         run: make windows
@@ -139,8 +145,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: poolcoin-windows
-          path: dist/poolcoin.exe
+          name: echocoin-windows
+          path: dist/echocoin.exe
 
   release:
     needs: [version, build-linux, build-windows]
@@ -156,22 +162,21 @@ jobs:
       - name: Download Linux binary
         uses: actions/download-artifact@v4
         with:
-          name: poolcoin-linux
+          name: echocoin-linux
           path: artifacts/linux
 
       - name: Download Windows binary
         uses: actions/download-artifact@v4
         with:
-          name: poolcoin-windows
+          name: echocoin-windows
           path: artifacts/windows
 
       - name: Make Linux binary executable
-        run: chmod +x artifacts/linux/poolcoin
+        run: chmod +x artifacts/linux/echocoin
 
       - name: Generate changelog
         id: changelog
         run: |
-          # Find the previous release tag to scope the log
           PREV_TAG=$(git tag --sort=-version:refname | grep -v "${{ needs.version.outputs.tag }}" | head -1)
           if [ -n "$PREV_TAG" ]; then
             RANGE="${PREV_TAG}..HEAD"
@@ -199,37 +204,32 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          name: PoolCoin ${{ needs.version.outputs.tag }}
+          name: Echocoin ${{ needs.version.outputs.tag }}
           body: ${{ steps.changelog.outputs.CHANGELOG }}
           files: |
-            artifacts/linux/poolcoin
-            artifacts/windows/poolcoin.exe
+            artifacts/linux/echocoin
+            artifacts/windows/echocoin.exe
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Runs whenever any upstream job fails, regardless of which one.
-  # Reverts the VERSION file content so the next attempt starts clean.
   revert-on-failure:
     needs: [version, set-genesis, test, build-linux, build-windows, release]
     runs-on: ubuntu-latest
-    # always() so this job runs even when upstream jobs are skipped or failed.
-    # The if condition then checks that at least one upstream job actually failed.
     if: |
       always() && (
-        needs.version.result      == 'failure' ||
-        needs.set-genesis.result  == 'failure' ||
-        needs.test.result         == 'failure' ||
-        needs.build-linux.result  == 'failure' ||
+        needs.version.result       == 'failure' ||
+        needs.set-genesis.result   == 'failure' ||
+        needs.test.result          == 'failure' ||
+        needs.build-linux.result   == 'failure' ||
         needs.build-windows.result == 'failure' ||
-        needs.release.result      == 'failure'
+        needs.release.result       == 'failure'
       )
     permissions:
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          # Need push access; use a token with write permission.
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Revert VERSION and GENESIS_TIMESTAMP
@@ -244,8 +244,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git pull --rebase origin main
           echo "$PREV" > VERSION
-          # Reset GENESIS_TIMESTAMP only for testnet; mainnet value is set manually.
-          IS_TESTNET=$(python3 -c "import re; m=re.search(r'^TESTNET\\s*=\\s*(\\S+)', open('params.py').read(), re.M); print(m.group(1) if m else 'False')")
+          IS_TESTNET=$(python3 -c "import re; m=re.search(r'^TESTNET\s*=\s*(\S+)', open('params.py').read(), re.M); print(m.group(1) if m else 'False')")
           if [ "$IS_TESTNET" = "True" ]; then
             sed -i "s/^GENESIS_TIMESTAMP = .*/GENESIS_TIMESTAMP = 0/" params.py
             git add VERSION params.py
