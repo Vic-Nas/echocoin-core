@@ -9,8 +9,8 @@ __pycache__/
 *.dat
 dist/
 build/
-poolcoin
-poolcoin.exe
+echocoin
+echocoin.exe
 *.log
 *.egg-info/
 .pytest_cache/
