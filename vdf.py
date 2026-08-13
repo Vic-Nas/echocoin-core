@@ -47,7 +47,8 @@ Cannot change after genesis without breaking chain identity.
 """
 
 import chiavdf
-from params import VDF_ITERATIONS, BLOCK_CYCLE_SECONDS
+
+from params import VDF_ITERATIONS
 
 # chiavdf constants for 1024-bit discriminant.
 DISC_SIZE_BITS = 1024

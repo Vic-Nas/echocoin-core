@@ -1,7 +1,8 @@
 """Crypto module tests: key gen, signing, verification, address, key storage."""
-import pytest
 import os
 import tempfile
+
+import pytest
 from helpers import *
 
 
@@ -19,7 +20,7 @@ def test_sign_verify():
 
 
 def test_wrong_key_rejects():
-    sk, pk, _, _ = make_keypair()
+    sk, _pk, _, _ = make_keypair()
     _, pk2, _, _ = make_keypair()
     msg = b"test message"
     sig = crypto.sign(msg, sk)

@@ -19,7 +19,7 @@ def test_debit_below_zero_raises():
 
 
 def test_apply_tx_debits_outputs_and_fee():
-    sk, pk, pk_hex, addr = make_keypair()
+    _sk, _pk, pk_hex, addr = make_keypair()
     _, _, _, to = make_keypair()
     s = funded_state(addr, 1000)
     t = {"from": addr, "outputs": [{"to": to, "amount": 100}],
@@ -32,7 +32,7 @@ def test_apply_tx_debits_outputs_and_fee():
 
 def test_fee_is_burned_and_tracked():
     """Fee reduces total balances AND increments total_burnt."""
-    sk, pk, pk_hex, addr = make_keypair()
+    _sk, _pk, pk_hex, addr = make_keypair()
     _, _, _, to = make_keypair()
     s = funded_state(addr, 1000)
     t = {"from": addr, "outputs": [{"to": to, "amount": 100}],
@@ -91,7 +91,7 @@ def test_burnt_fees_increase_can_mint():
 
 
 def test_multiple_outputs():
-    sk, pk, pk_hex, addr = make_keypair()
+    _sk, _pk, pk_hex, addr = make_keypair()
     _, _, _, to1 = make_keypair()
     _, _, _, to2 = make_keypair()
     s = funded_state(addr, 1000)

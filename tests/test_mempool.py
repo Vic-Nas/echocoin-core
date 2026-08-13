@@ -1,5 +1,4 @@
 """Mempool and candidate list tests: deterministic assembly, censorship resistance."""
-import pytest
 from helpers import *
 
 

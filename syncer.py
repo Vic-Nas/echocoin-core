@@ -5,6 +5,7 @@ No threads of its own. Called by the node loop once per N cycles.
 """
 
 import logging
+
 import requests
 
 log = logging.getLogger("ec.syncer")

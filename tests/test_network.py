@@ -1,8 +1,9 @@
 """PeerPool and Gossip tests: peer management and message dedup."""
+
 from helpers import *
-import queue
-from peerpool import PeerPool
+
 from gossip import Gossip
+from peerpool import PeerPool
 
 
 def _make_pool():
@@ -47,8 +48,8 @@ def test_not_added_when_full():
 def test_duplicate_tx_dedup():
     """Same tx hash marked seen twice only records once."""
     import tx as tx_mod
-    gossip, pool = _make_gossip()
-    sk, pk, pk_hex, addr = make_keypair()
+    gossip, _pool = _make_gossip()
+    sk, _pk, pk_hex, addr = make_keypair()
     st = state_mod.State()
     st.credit(addr, 10_000_000_000)
     outputs = [{"to": addr, "amount": 1_000_000}]

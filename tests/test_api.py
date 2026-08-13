@@ -1,5 +1,9 @@
 """API endpoint tests."""
-import os, tempfile, queue as _queue, threading
+import os
+import queue as _queue
+import tempfile
+import threading
+
 import pytest
 from helpers import *
 
@@ -27,10 +31,14 @@ class FakePool:
     def all_addrs(self):        return list(self._peers.keys())
 
 
+class FakeDiscovery:
+    def enqueue_candidate(self, addr): pass
+
+
 @pytest.fixture
 def client():
-    from node import Node
     from api import create_app
+    from node import Node
     sk, pk, pk_hex, addr = make_keypair()
     gossip   = FakeGossip()
     syncer   = FakeSyncer()
@@ -44,7 +52,8 @@ def client():
     n = Node(keyfile, pk, gossip, syncer, pool, net_in_q, db_path=dbfile)
     n.state.credit(addr, 100_000_000)
     n._publish_view()
-    app = create_app(n, pool, net_in_q)
+    discovery = FakeDiscovery()
+    app = create_app(n, pool, net_in_q, discovery)
     app.config["TESTING"] = True
 
     # Drain thread: routes submit_tx queue messages back to node loop.
@@ -136,7 +145,7 @@ def test_send_valid_tx(client):
 
 
 def test_send_invalid_tx_returns_400(client):
-    c, n, sk, pk_hex, addr = client
+    c, _n, sk, pk_hex, addr = client
     _, _, _, to_addr = make_keypair()
     # nonce 99 is invalid (no prior txs so expected nonce is 1)
     t = make_valid_tx(sk, pk_hex, addr, to_addr, 100, 99, 0, 1)

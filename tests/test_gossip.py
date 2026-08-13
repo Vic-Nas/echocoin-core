@@ -1,11 +1,11 @@
 """Gossip: tx dedup, dandelion routing shape, broadcast fan-out."""
-import pytest
 import threading
-from collections import OrderedDict
+
 from helpers import *
-from peerpool import PeerPool
-from gossip import Gossip, SEEN_TX_CACHE_SIZE
+
 import tx as tx_mod
+from gossip import SEEN_TX_CACHE_SIZE, Gossip
+from peerpool import PeerPool
 
 
 def make_gossip():
@@ -22,8 +22,8 @@ def _make_tx(sk, pk_hex, addr):
 
 
 def test_relay_tx_first_call_not_duplicate():
-    gossip, pool = make_gossip()
-    sk, pk, pk_hex, addr = make_keypair()
+    gossip, _pool = make_gossip()
+    sk, _pk, pk_hex, addr = make_keypair()
     t = _make_tx(sk, pk_hex, addr)
     h = tx_mod.tx_hash(t)
     # No peers, so relay does nothing except mark seen
@@ -31,10 +31,10 @@ def test_relay_tx_first_call_not_duplicate():
     assert h in gossip._seen_tx
 
 def test_relay_tx_second_call_is_noop():
-    gossip, pool = make_gossip()
-    sk, pk, pk_hex, addr = make_keypair()
+    gossip, _pool = make_gossip()
+    sk, _pk, pk_hex, addr = make_keypair()
     t = _make_tx(sk, pk_hex, addr)
-    h = tx_mod.tx_hash(t)
+    tx_mod.tx_hash(t)
     gossip.relay_tx(t)
     # Manually clear from cache and relay again — relay_tx should re-gate on seen
     # Actually, relay_tx checks _seen_tx before adding. Test that second call returns early.
@@ -84,12 +84,12 @@ def test_seen_tx_evicts_oldest_at_capacity():
 # ---- dandelion_send: no peers falls back to broadcast (noop with empty pool) ----
 
 def test_dandelion_with_no_peers_does_not_crash():
-    gossip, pool = make_gossip()
+    gossip, _pool = make_gossip()
     # Just must not raise
     gossip.dandelion_send({"nonce": 1}, remaining_hops=4)
 
 # ---- broadcast: no peers does nothing ----
 
 def test_broadcast_with_no_peers_does_not_crash():
-    gossip, pool = make_gossip()
+    gossip, _pool = make_gossip()
     gossip._broadcast("/api/receive_tx", {"type": "tx_fluff", "tx": {}})

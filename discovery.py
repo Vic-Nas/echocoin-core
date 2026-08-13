@@ -17,17 +17,23 @@ step, so no source gets special trust and the nomination sort always has
 the widest possible picture before it commits any HTTP work.
 """
 
-import json
-import time
 import hashlib
+import json
 import logging
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from typing import ClassVar
 
-import requests
 import nacl.signing
+import requests
 
 from params import BEP44_SLOT_COUNT
+
+try:
+    import libtorrent as lt
+except ImportError:
+    lt = None  # type: ignore[assignment]
 
 log = logging.getLogger("ec.discovery")
 
@@ -76,7 +82,6 @@ class Discovery:
     # ------------------------------------------------------------------
 
     def run(self):
-        import libtorrent as lt
 
         self._external_ip = self._upnp_map_port()
         if self._external_ip:
@@ -163,7 +168,6 @@ class Discovery:
     # ------------------------------------------------------------------
 
     def _process_alerts(self, ses):
-        import libtorrent as lt
         for a in ses.pop_alerts():
             if isinstance(a, lt.dht_mutable_item_alert):
                 try:
@@ -333,11 +337,11 @@ class Discovery:
     # BEP44 helpers
     # ------------------------------------------------------------------
 
-    _PUBLIC_IP_SERVICES = [
+    _PUBLIC_IP_SERVICES: ClassVar[tuple[str, ...]] = (
         "https://api.ipify.org",
         "https://icanhazip.com",
         "https://checkip.amazonaws.com",
-    ]
+    )
 
     def _my_ip(self):
         """Return the best IP to advertise: external (UPnP) if available,
@@ -390,7 +394,7 @@ class Discovery:
             ses.dht_put_mutable_item(sk_64, pk, value, b"echocoin-v1")
             log.info("[dht] BEP44 put  slot=%d  addr=%s", slot_index, my_addr)
         except Exception:
-            log.error("[dht] BEP44 put error", exc_info=True)
+            log.exception("[dht] BEP44 put error")
 
     def _bep44_get_all(self, ses):
         my_slot = getattr(self, "_my_slot", None)
@@ -413,7 +417,6 @@ class Discovery:
         """SHA-1 of the genesis hash bytes -- used as the torrent info-hash
         so Echocoin nodes appear as peers on a well-known info-hash that any
         BitTorrent client in the DHT can stumble across organically."""
-        import libtorrent as lt
         raw = hashlib.sha1(bytes.fromhex(self.genesis_hash)).digest()
         return lt.sha1_hash(raw)
 
@@ -435,7 +438,6 @@ class Discovery:
             log.debug("[dht] torrent get_peers failed", exc_info=True)
 
     def _make_lt_session(self):
-        import libtorrent as lt
         settings = lt.default_settings()
         settings["enable_dht"]    = True
         settings["enable_lsd"]    = False
@@ -464,8 +466,7 @@ class Discovery:
 
     def _save_lt_state(self, ses):
         try:
-            import libtorrent as lt
-            state = ses.save_state()
+                state = ses.save_state()
             with open(DHT_STATE_FILE, "wb") as f:
                 f.write(lt.bencode(state))
         except Exception:

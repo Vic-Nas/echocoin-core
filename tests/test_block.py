@@ -1,8 +1,8 @@
 """Block validation tests: structure, ordering, timestamps, VDF, fee rate."""
-import pytest
 from unittest.mock import patch
-from helpers import *
 
+import pytest
+from helpers import *
 
 # ---------------------------------------------------------------------------
 # Genesis
@@ -146,7 +146,7 @@ def test_missing_vdf_fields_rejected():
 # ---------------------------------------------------------------------------
 
 def test_transaction_ordering_violation_rejected():
-    sk, pk, pk_hex, addr = make_keypair()
+    sk, _pk, pk_hex, addr = make_keypair()
     _, _, _, to = make_keypair()
     s = funded_state(addr, 1_000_000)
 
@@ -181,8 +181,8 @@ def test_fee_rate_initial_is_1000():
 
 def test_fee_rate_stable_at_target_volume():
     """Median volume exactly at BLOCK_SIZE_TARGET_BYTES keeps rate stable."""
+
     from params import BLOCK_SIZE_TARGET_BYTES, INITIAL_FEE_RATE
-    import statistics
     # Build a chain where every block has exactly TARGET bytes of txs.
     # Since compute_expected_fee_rate uses median of the window, we inject
     # fake blocks with pre-set byte volumes by controlling the tx list size.
@@ -198,7 +198,7 @@ def test_fee_rate_stable_at_target_volume():
 
 def test_fee_rate_rises_above_target():
     """Blocks above the soft target cause rate to rise."""
-    from params import BLOCK_SIZE_TARGET_BYTES, INITIAL_FEE_RATE
+    from params import INITIAL_FEE_RATE
     rate = INITIAL_FEE_RATE
     vol_ratio = 2.0  # 2x target
     adjustment = min(1.05, vol_ratio)

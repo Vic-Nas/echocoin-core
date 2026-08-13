@@ -13,8 +13,8 @@ The node calls storage after every block is validated and applied.
 """
 
 import json
-import sqlite3
 import logging
+import sqlite3
 
 import tx as tx_mod
 

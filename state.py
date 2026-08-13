@@ -1,6 +1,6 @@
 """Balance ledger, nonce tracking, and emission accounting. No disk I/O."""
 
-from params import SUPPLY_CAP, EMISSION_RATE
+from params import EMISSION_RATE, SUPPLY_CAP
 
 
 class State:

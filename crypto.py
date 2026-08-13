@@ -6,17 +6,21 @@ Key storage: Argon2id + NaCl secretbox. Passphrase mandatory.
              Secret key decrypted per signing call, reference dropped immediately.
 """
 
+import base64
 import hashlib
 import json
 import os
-import base64
 
+import nacl.pwhash
 import nacl.secret
 import nacl.utils
-import nacl.pwhash
 from pqcrypto.sign.falcon_512 import (
     generate_keypair as _falcon_keygen,
+)
+from pqcrypto.sign.falcon_512 import (
     sign as _falcon_sign,
+)
+from pqcrypto.sign.falcon_512 import (
     verify as _falcon_verify,
 )
 

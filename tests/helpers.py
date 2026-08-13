@@ -1,13 +1,14 @@
 """Shared test fixtures and helpers for Echocoin tests."""
-import sys, os
+import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import crypto
-import tx as tx_mod
-import state as state_mod
 import block as block_mod
-import mempool as mempool_mod
-from params import BLOCK_CYCLE_SECONDS, RINGS_PER_ECH
+import crypto
+import state as state_mod
+import tx as tx_mod
+from params import BLOCK_CYCLE_SECONDS
 
 
 def make_keypair():

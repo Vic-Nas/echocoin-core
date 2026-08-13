@@ -1,19 +1,17 @@
 """HTTP API + node UI + whitepaper renderer. Thin wrapper over node + pool."""
 
-import os
-import time
-import logging
 import html
+import logging
+import os
+import threading
+import time
 from collections import OrderedDict
 
-import threading
-
 import markdown
-from flask import Flask, request, jsonify, render_template_string
+from flask import Flask, jsonify, render_template_string, request
 
-import tx as tx_mod
 import crypto as crypto_mod
-
+import tx as tx_mod
 from params import RINGS_PER_ECH, SUPPLY_CAP
 
 
@@ -105,6 +103,7 @@ def _rate_limited(limiter):
 # ---------------------------------------------------------------------------
 
 from templates import _BASE, _STATS_BODY
+
 
 def _parse_sender(data):
     """Extract sender addr from inbound message data."""
@@ -240,7 +239,7 @@ def create_app(node, pool, net_in_q, discovery):
                 alert = '<div class="alert alert-err">Passphrase required to sign (leave blank if the mining loop is already running).</div>'
             else:
                 try:
-                    t, fee = node.build_and_sign_tx(outputs, passphrase or None)
+                    t, _fee = node.build_and_sign_tx(outputs, passphrase or None)
                     ok, result = node.submit_tx_from_api(t)
                     if ok:
                         alert = f'<div class="alert alert-ok">Sent. tx hash: <span class="hash">{result}</span></div>'
@@ -408,10 +407,9 @@ def create_app(node, pool, net_in_q, discovery):
         alert = ""
         content = ""
 
-        if addr:
-            if not crypto_mod.is_valid_address(addr):
-                alert = '<div class="alert alert-err">Invalid address format.</div>'
-                addr = ""
+        if addr and not crypto_mod.is_valid_address(addr):
+            alert = '<div class="alert alert-err">Invalid address format.</div>'
+            addr = ""
         if addr:
             v       = node.view
             state   = v.state

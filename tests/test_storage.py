@@ -1,7 +1,10 @@
 """Storage tests: persistence, state save/load, emission counters, reorg."""
-import os, tempfile
+import os
+import tempfile
+
 import pytest
 from helpers import *
+
 from storage import Storage
 
 
@@ -48,7 +51,7 @@ def test_state_save_and_load_balances_nonces(db):
     s.set_nonce("alice", 3)
     db.save_state(s)
     assert db.state_exists()
-    balances, nonces, minted, burnt = db.load_state()
+    balances, nonces, _minted, _burnt = db.load_state()
     assert balances["alice"] == 500
     assert balances["bob"] == 300
     assert nonces["alice"] == 3

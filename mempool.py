@@ -83,11 +83,7 @@ class Mempool:
         now = time.monotonic()
         for h, t in list(self._txs.items()):
             stale = False
-            if _is_fee_height_stale(t, chain_tip_height):
-                stale = True
-            elif t["nonce"] <= state.get_nonce(t["from"]):
-                stale = True
-            elif now - self._entered.get(h, now) > ttl_seconds:
+            if _is_fee_height_stale(t, chain_tip_height) or t["nonce"] <= state.get_nonce(t["from"]) or now - self._entered.get(h, now) > ttl_seconds:
                 stale = True
             if stale:
                 pruned.append(h)

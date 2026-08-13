@@ -5,10 +5,10 @@ touches peers reads from or writes to a PeerPool instance, but they
 never call each other.
 """
 
-import time
-import secrets
 import logging
+import secrets
 import threading
+import time
 
 from params import MAX_PEERS
 
@@ -22,7 +22,7 @@ STALE_SECONDS        = 300
 
 class PeerPool:
 
-    def __init__(self, host, port, max_peers=None):  # noqa: ARG002 (host/port reserved for future self-filtering)
+    def __init__(self, host, port, max_peers=None):
         self._max_peers = max_peers if max_peers is not None else MAX_PEERS
         self._peers     = {}          # addr -> last_seen (wall clock)
         self._fails     = {}          # addr -> {"strikes": int, "cooldown_until": monotonic}

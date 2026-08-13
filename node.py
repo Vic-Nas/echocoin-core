@@ -1,25 +1,24 @@
 """Block cycle orchestrator. Linear sequence. Persists every block to SQLite."""
 
-import time
-import queue
 import getpass
 import logging
-import threading
+import queue
 import secrets as _secrets
+import threading
+import time
 
 _rng = _secrets.SystemRandom()
 
-import crypto
-import tx as tx_mod
 import block as block_mod
+import crypto
 import mempool as mempool_mod
 import state as state_mod
-from storage import Storage
+import tx as tx_mod
 from params import (
-    BLOCK_CYCLE_SECONDS,
     BLOCK_SIZE_LIMIT,
     DB_PATH,
 )
+from storage import Storage
 
 
 class NodeView:
@@ -28,7 +27,7 @@ class NodeView:
     Flask reads node.view -- one attribute swap, GIL-atomic, no lock.
     chain is a frozen copy so Flask iteration can never race with
     node-loop appends."""
-    __slots__ = ("tip", "chain", "state", "genesis_hash", "height")
+    __slots__ = ("chain", "genesis_hash", "height", "state", "tip")
 
     def __init__(self, chain, state):
         self.chain        = list(chain)
@@ -223,8 +222,8 @@ class Node:
         peers who finished at roughly the same time. The lower block hash
         wins (deterministic, no coordination needed).
         """
-        import vdf as vdf_mod
         import tx as _tx
+        import vdf as vdf_mod
 
         self._cycle_count += 1
         self._drain_queue(timeout=0)

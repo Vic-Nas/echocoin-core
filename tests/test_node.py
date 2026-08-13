@@ -1,7 +1,11 @@
 """Node tests: startup, chain sync, reorg, submit_tx, censorship, commit."""
-import os, tempfile, queue as _queue, threading
-import pytest
+import os
+import queue as _queue
+import tempfile
+import threading
 from unittest.mock import patch
+
+import pytest
 from helpers import *
 
 
@@ -83,23 +87,23 @@ def test_node_info_fields(node_setup):
 # ---------------------------------------------------------------------------
 
 def test_submit_valid_tx(node_setup):
-    n, sk, pk, pk_hex, addr, gossip = node_setup
+    n, sk, _pk, pk_hex, addr, gossip = node_setup
     _, _, _, to_addr = make_keypair()
     n.state.credit(addr, 100_000_000)
     rate = n.chain[-1]["fee_rate"]
     t = make_valid_tx(sk, pk_hex, addr, to_addr, 100, 1, 0, rate)
-    ok, h = n.submit_tx(t)
+    ok, _h = n.submit_tx(t)
     assert ok
     assert n.mempool.size() == 1
     assert len(gossip.relayed_txs) == 1
 
 
 def test_submit_invalid_tx_rejected(node_setup):
-    n, sk, pk, pk_hex, addr, _ = node_setup
+    n, _sk, _pk, pk_hex, addr, _ = node_setup
     _, _, _, to_addr = make_keypair()
     t = {"from": addr, "pubkey": pk_hex, "outputs": [{"to": to_addr, "amount": 9999}],
          "nonce": 1, "fee_height": 0, "fee": 1, "signature": "bad"}
-    ok, err = n.submit_tx(t)
+    ok, _err = n.submit_tx(t)
     assert not ok
 
 
@@ -133,7 +137,7 @@ def test_sync_chain_bad_genesis_rejected(node_setup):
 
 def test_chain_reloaded_from_disk(node_setup):
     from node import Node
-    n, sk, pk, pk_hex, addr, gossip = node_setup
+    n, _sk, pk, _pk_hex, _addr, _gossip = node_setup
     blk = make_block(n.chain)
     n.storage.save_block(blk)
     n2 = Node(n.keyfile, pk, FakeGossip(), FakeSyncer(), FakePool(),
@@ -148,7 +152,7 @@ def test_chain_reloaded_from_disk(node_setup):
 # ---------------------------------------------------------------------------
 
 def test_commit_appends_block_and_removes_mempool_txs(node_setup):
-    n, sk, pk, pk_hex, addr, _ = node_setup
+    n, sk, _pk, pk_hex, addr, _ = node_setup
     n.state.credit(addr, 100_000_000)
     _, _, _, to_addr = make_keypair()
     rate = n.chain[-1]["fee_rate"]
@@ -188,7 +192,7 @@ def test_censorship_score_is_1_when_no_missing_txs(node_setup):
 
 
 def test_non_full_block_missing_tx_increments_age(node_setup):
-    n, sk, pk, pk_hex, addr, _ = node_setup
+    n, sk, _pk, pk_hex, addr, _ = node_setup
     n.state.credit(addr, 100_000_000)
     _, _, _, to_addr = make_keypair()
     rate = n.chain[-1]["fee_rate"]
@@ -203,7 +207,7 @@ def test_non_full_block_missing_tx_increments_age(node_setup):
 
 def test_full_block_does_not_increment_age(node_setup):
     from params import BLOCK_SIZE_LIMIT
-    n, sk, pk, pk_hex, addr, _ = node_setup
+    n, sk, _pk, pk_hex, addr, _ = node_setup
     n.state.credit(addr, 100_000_000)
     _, _, _, to_addr = make_keypair()
     rate = n.chain[-1]["fee_rate"]

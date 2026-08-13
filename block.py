@@ -2,19 +2,18 @@
 
 import json
 import statistics
+import time as _time
 
 import crypto
 import tx as tx_mod
-import time as _time
-
 from params import (
+    BLOCK_CYCLE_SECONDS,
     BLOCK_SIZE_LIMIT,
     BLOCK_SIZE_TARGET_BYTES,
-    BLOCK_CYCLE_SECONDS,
     FEE_RATE_WINDOW,
-    INITIAL_FEE_RATE,
     GENESIS_MESSAGE,
     GENESIS_TIMESTAMP,
+    INITIAL_FEE_RATE,
 )
 
 _TX_SORT_FIELDS = {"fee_height", "nonce"}

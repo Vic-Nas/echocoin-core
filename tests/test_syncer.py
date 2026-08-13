@@ -1,7 +1,8 @@
 """Syncer: height comparison and chain fetch logic."""
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
+
 from helpers import *
+
 from peerpool import PeerPool
 from syncer import Syncer
 
@@ -21,7 +22,7 @@ def test_no_peers_returns_false():
 
 def test_peer_at_same_height_same_hash_skips_sync():
     """Same height and same tip hash: no sync needed."""
-    syncer, pool = make_syncer()
+    syncer, _pool = make_syncer()
     with patch("requests.get") as mock_get:
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = {"height": 5, "tip_hash": "aabb"}
@@ -33,7 +34,7 @@ def test_peer_at_same_height_same_hash_skips_sync():
 
 def test_peer_at_same_height_lower_hash_syncs():
     """Same height but peer has lower tip hash: should sync."""
-    syncer, pool = make_syncer()
+    syncer, _pool = make_syncer()
     genesis = block_mod.create_genesis()
     with patch("requests.get") as mock_get:
         mock_get.return_value.status_code = 200
@@ -48,7 +49,7 @@ def test_peer_at_same_height_lower_hash_syncs():
     assert result is True
 
 def test_peer_behind_skips_sync():
-    syncer, pool = make_syncer()
+    syncer, _pool = make_syncer()
     with patch("requests.get") as mock_get:
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = {"height": 3, "tip_hash": "aaaa"}
@@ -58,7 +59,7 @@ def test_peer_behind_skips_sync():
     assert called == []
 
 def test_peer_ahead_calls_apply_fn():
-    syncer, pool = make_syncer()
+    syncer, _pool = make_syncer()
     genesis = block_mod.create_genesis()
     fake_chain = [genesis]
     def fake_get(url, **kwargs):
@@ -84,7 +85,7 @@ def test_peer_unreachable_strikes():
     assert pool._fails.get("10.0.0.1:8333", {}).get("strikes", 0) == 1
 
 def test_info_non_200_returns_false():
-    syncer, pool = make_syncer()
+    syncer, _pool = make_syncer()
     with patch("requests.get") as mock_get:
         mock_get.return_value.status_code = 503
         result = syncer.check_and_sync(0, "aaaa", lambda c: True)
@@ -93,20 +94,20 @@ def test_info_non_200_returns_false():
 # ---- fetch_chain_from pagination ----
 
 def test_fetch_chain_returns_none_on_error():
-    syncer, pool = make_syncer()
+    syncer, _pool = make_syncer()
     with patch("requests.get", side_effect=Exception("conn refused")):
         result = syncer._fetch_chain("10.0.0.1:8333")
     assert result is None
 
 def test_fetch_chain_returns_none_on_404():
-    syncer, pool = make_syncer()
+    syncer, _pool = make_syncer()
     with patch("requests.get") as mock_get:
         mock_get.return_value.status_code = 404
         result = syncer._fetch_chain("10.0.0.1:8333")
     assert result is None
 
 def test_fetch_chain_single_page():
-    syncer, pool = make_syncer()
+    syncer, _pool = make_syncer()
     genesis = block_mod.create_genesis()
     with patch("requests.get") as mock_get:
         mock_get.return_value.status_code = 200
@@ -116,7 +117,7 @@ def test_fetch_chain_single_page():
     assert result == [genesis]
 
 def test_fetch_chain_empty_page_stops():
-    syncer, pool = make_syncer()
+    syncer, _pool = make_syncer()
     with patch("requests.get") as mock_get:
         mock_get.return_value.status_code = 200
         mock_get.return_value.json.return_value = []

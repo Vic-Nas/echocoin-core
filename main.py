@@ -1,23 +1,23 @@
 """Entry point. Creates PeerPool, Discovery, Gossip, Syncer, Node, API."""
 
-import os
-import sys
-import queue
-import logging
 import argparse
 import getpass
+import logging
+import os
+import queue
+import sys
 import threading
 
-import crypto
 import block as block_mod
-from peerpool import PeerPool
+import crypto
+import params
+from api import create_app
 from discovery import Discovery
 from gossip import Gossip
-from syncer import Syncer
 from node import Node
-from api import create_app
-import params
 from params import DB_PATH
+from peerpool import PeerPool
+from syncer import Syncer
 
 logging.basicConfig(
     level=logging.INFO,

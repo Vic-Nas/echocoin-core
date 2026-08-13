@@ -1,10 +1,11 @@
 """PeerPool: exhaustive tests for the peer address store."""
-import time
 import threading
-import pytest
+import time
+
 from helpers import *
-from peerpool import PeerPool
+
 from params import MAX_PEERS
+from peerpool import PeerPool
 
 
 def make_pool():
