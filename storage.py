@@ -153,8 +153,10 @@ class Storage:
         """
         balances = state.all_balances()
         nonces   = state.all_nonces()
-        addrs    = set(balances) | set(nonces)
-        rows     = [(addr, balances.get(addr, 0), nonces.get(addr, 0)) for addr in addrs]
+        rows     = [
+            (addr, balances.get(addr, 0), nonces.get(addr, 0))
+            for addr in balances.keys() | nonces.keys()
+        ]
         with self.db:
             self.db.execute("DELETE FROM state")
             if rows:

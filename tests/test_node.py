@@ -65,8 +65,8 @@ def test_full_block_does_not_increment_exclusion_age(node_setup):
     h = tx_mod.tx_hash(t)
     n.mempool.add(t)
     blk = make_block(n.chain, txs=[])
-    with patch("block.block_size", return_value=BLOCK_SIZE_LIMIT):
-        n._update_exclusion_ages(blk)
+    blk["tx_bytes"] = BLOCK_SIZE_LIMIT  # simulate full block
+    n._update_exclusion_ages(blk)
     assert n._tx_exclusion_age.get(h, 0) == 0
 
 

@@ -88,5 +88,8 @@ class Gossip:
             self.pool.touch(peer_addr)
         except requests.exceptions.Timeout:
             log.debug("[gossip] send timed out  peer=%s", peer_addr)
-        except Exception:
             self.pool.strike(peer_addr)
+        except requests.exceptions.ConnectionError:
+            self.pool.strike(peer_addr)
+        except Exception:
+            log.debug("[gossip] send error  peer=%s", peer_addr, exc_info=True)

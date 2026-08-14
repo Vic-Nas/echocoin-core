@@ -254,10 +254,9 @@ def assemble(tip, txs, builder_addr, fee_rate, deadline=None):
     deadline: float unix time; stop packing if exceeded
 
     Size tracking: builds a skeleton block once to measure the fixed overhead
-    (header fields), then adds tx_size(t) incrementally -- no full
+    (header fields), then adds tx_size_in_block(t) incrementally -- no full
     re-serialization per tx.
     """
-    import time as _t
 
     # Measure fixed overhead: empty block minus the transactions field value.
     # tx_size() is computed at fee time so it's already available on each tx dict.
@@ -274,7 +273,7 @@ def assemble(tip, txs, builder_addr, fee_rate, deadline=None):
     valid_txs   = []
 
     for t in txs:
-        if deadline is not None and _t.time() >= deadline:
+        if deadline is not None and _time.time() >= deadline:
             break
         # Size of this tx as it would appear serialized inside the block.
         # We add 1 for the "," separator between txs (except the first).

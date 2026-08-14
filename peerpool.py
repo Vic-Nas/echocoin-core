@@ -54,14 +54,16 @@ class PeerPool:
     def strike(self, addr):
         """Record a failure. Enough strikes cause removal."""
         with self._lock:
-            rec = self._fails.get(addr, {"strikes": 0, "cooldown_until": 0.0})
+            rec     = self._fails.get(addr, {"strikes": 0, "cooldown_until": 0.0})
             strikes = rec["strikes"] + 1
-            cooldown = min(COOLDOWN_SECONDS * (2 ** (strikes - 1)), COOLDOWN_MAX_SECONDS)
-            self._fails[addr] = {"strikes": strikes, "cooldown_until": time.monotonic() + cooldown}
-            if strikes >= MAX_STRIKES:
+            banned  = strikes >= MAX_STRIKES
+            cooldown = COOLDOWN_MAX_SECONDS if banned else min(
+                COOLDOWN_SECONDS * (2 ** (strikes - 1)), COOLDOWN_MAX_SECONDS
+            )
+            self._fails[addr] = {"strikes": strikes,
+                                  "cooldown_until": time.monotonic() + cooldown}
+            if banned:
                 self._peers.pop(addr, None)
-                # Keep the fail record so cooldown_until blocks re-adding.
-                self._fails[addr] = {"strikes": strikes, "cooldown_until": time.monotonic() + COOLDOWN_MAX_SECONDS}
                 log.warning("[peer] banned  addr=%s  strikes=%d", addr, strikes)
 
     def remove(self, addr):

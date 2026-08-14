@@ -45,40 +45,72 @@ class NodeView:
     chain is a frozen copy so Flask iteration can never race with
     node-loop appends."""
     __slots__ = ("chain", "cumulative_score", "genesis_hash", "height",
-                 "state", "tip", "stats_points")
+                 "state", "tip", "stats_points", "_cum_burned")
 
-    def __init__(self, chain, state, cumulative_score=0):
+    def __init__(self, chain, state, cumulative_score=0, prev_view=None):
         self.chain            = list(chain)
         self.tip              = chain[-1]
         self.genesis_hash     = chain[0]["hash"]
         self.state            = state.snapshot()
         self.height           = chain[-1]["height"]
         self.cumulative_score = cumulative_score
-        self.stats_points     = self._build_stats_points(self.chain, self.state)
+        prev_points    = getattr(prev_view, "stats_points",    None)
+        prev_cum       = getattr(prev_view, "_cum_burned",     0)
+        self.stats_points, self._cum_burned = self._build_stats_points(
+            self.chain, self.state, prev_points, prev_cum
+        )
 
     @staticmethod
-    def _build_stats_points(chain, state):
-        """Build the chart data points for /api/stats. Called once per block."""
+    def _build_stats_points(chain, state, prev_points=None, prev_cum_burned=0):
+        """Build chart data points for /api/stats.
+
+        Incremental: if prev_points is given (from the previous view) and the
+        chain only grew by one block, append that one point instead of walking
+        the whole chain. Falls back to full rebuild on reorg (length mismatch).
+        Downsamples to 500 points when the chain exceeds that length.
+        """
         if len(chain) <= 1:
-            return []
-        points, cum_burned = [], 0
+            return [], 0
+
         total_minted = state.total_minted
         max_height   = max(len(chain) - 1, 1)
+
+        # Incremental path: chain grew by exactly one block
+        if (prev_points is not None
+                and len(prev_points) < 500
+                and len(chain) == len(prev_points) + 2):  # +2: genesis not in points
+            blk       = chain[-1]
+            block_fee = sum(t["fee"] for t in blk.get("transactions", []))
+            cum       = prev_cum_burned + block_fee
+            prev_points.append({
+                "height":       blk["height"],
+                "minted":       int(total_minted * blk["height"] / max_height),
+                "burned_fees":  cum,
+                "circulating":  int(total_minted * blk["height"] / max_height) - cum,
+                "net_emission": block_fee,
+            })
+            return prev_points, cum
+
+        # Full rebuild
+        points, cum = [], 0
         for blk in chain[1:]:
-            cum_burned += sum(t["fee"] for t in blk.get("transactions", []))
-            frac         = blk["height"] / max_height
-            approx_minted = int(total_minted * frac)
+            block_fee  = sum(t["fee"] for t in blk.get("transactions", []))
+            cum       += block_fee
+            frac       = blk["height"] / max_height
+            minted     = int(total_minted * frac)
             points.append({
                 "height":       blk["height"],
-                "minted":       approx_minted,
-                "burned_fees":  cum_burned,
-                "circulating":  approx_minted - cum_burned,
-                "net_emission": sum(t["fee"] for t in blk.get("transactions", [])),
+                "minted":       minted,
+                "burned_fees":  cum,
+                "circulating":  minted - cum,
+                "net_emission": block_fee,
             })
+
         if len(points) > 500:
-            step = len(points) / 500
+            step   = len(points) / 500
             points = [points[int(i * step)] for i in range(500)]
-        return points
+
+        return points, cum
 
 
 log = logging.getLogger("ec.node")
@@ -182,7 +214,8 @@ class Node:
 
     def _publish_view(self):
         """Publish a consistent snapshot for Flask threads. Single ref swap."""
-        self.view = NodeView(self.chain, self.state, self._cumulative_score)
+        self.view = NodeView(self.chain, self.state, self._cumulative_score,
+                             prev_view=self.view)
 
     # ------------------------------------------------------------------
     # Public interface
@@ -380,7 +413,7 @@ class Node:
         block_msgs = []
         # First message: block up to timeout seconds.
         try:
-            msg = self.net_in_q.get(block=timeout > 0, timeout=timeout if timeout > 0 else None)
+            msg = self.net_in_q.get(block=timeout > 0, timeout=timeout or None)
             self._dispatch_message(msg, block_msgs)
         except queue.Empty:
             return block_msgs
@@ -452,7 +485,7 @@ class Node:
         confirmed = {tx_mod.tx_hash(t) for t in accepted_blk.get("transactions", [])}
         pending   = self.mempool.pending_hashes()
         missing   = pending - confirmed
-        is_full   = block_mod.block_size(accepted_blk) >= BLOCK_SIZE_LIMIT * 0.99
+        is_full   = accepted_blk.get("tx_bytes", 0) >= BLOCK_SIZE_LIMIT * 0.99
 
         if not is_full:
             for h in missing:
@@ -543,14 +576,13 @@ class Node:
         def fee_rate_at(h):
             return candidate_chain[h]["fee_rate"] if 0 <= h < len(candidate_chain) else None
 
-        # Replay the shared prefix (no validation needed -- already trusted).
-        _replay_blocks(candidate_chain[:fork_point], new_state)
-        validated = list(candidate_chain[:fork_point])
-
-        # Validate and apply the new tail.
+        # Replay the shared prefix (trusted -- already on chain, no revalidation).
+        # Build the burn window for the prefix in the same pass.
         tail_window = pob_mod.BurnWindow()
+        _replay_blocks(candidate_chain[:fork_point], new_state)
         for blk in candidate_chain[:fork_point]:
             tail_window.add_block(blk)
+        validated = list(candidate_chain[:fork_point])
         for blk in candidate_chain[fork_point:]:
             tail_window.add_block(blk)
             probe = new_state.snapshot()
