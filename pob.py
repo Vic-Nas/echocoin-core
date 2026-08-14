@@ -57,6 +57,8 @@ class BurnWindow:
         self._blocks: "collections.deque" = collections.deque()
         # aggregated: beneficiary -> contributor -> total in window
         self._totals: "dict[str, dict[str, int]]" = {}
+        # flat history list newest-first for UI display
+        self._history: "list[dict]" = []
 
     def add_block(self, blk):
         """Add a block to the window, expiring blocks outside POB_WINDOW."""
@@ -64,7 +66,7 @@ class BurnWindow:
 
         # Expire old blocks
         while self._blocks and height - self._blocks[0][0] >= POB_WINDOW:
-            _, old_burns = self._blocks.popleft()
+            _, old_burns, old_history = self._blocks.popleft()
             for beneficiary, contribs in old_burns.items():
                 for contributor, amount in contribs.items():
                     self._totals[beneficiary][contributor] -= amount
@@ -72,9 +74,12 @@ class BurnWindow:
                         del self._totals[beneficiary][contributor]
                     if not self._totals[beneficiary]:
                         del self._totals[beneficiary]
+            for entry in old_history:
+                self._history.remove(entry)
 
         # Extract burns from this block
         block_burns: "dict[str, dict[str, int]]" = {}
+        block_history = []
         for tx in blk.get("transactions", []):
             sender = tx.get("from", "")
             for out in tx.get("outputs", []):
@@ -87,8 +92,13 @@ class BurnWindow:
                 block_burns[beneficiary][sender] = (
                     block_burns[beneficiary].get(sender, 0) + amount
                 )
+                block_history.append({
+                    "height": height, "addr": sender,
+                    "beneficiary": beneficiary, "amount": amount,
+                })
 
-        self._blocks.append((height, block_burns))
+        self._blocks.append((height, block_burns, block_history))
+        self._history = block_history + self._history   # newest first
 
         # Merge into totals
         for beneficiary, contribs in block_burns.items():
@@ -102,6 +112,22 @@ class BurnWindow:
     def burns_for(self, beneficiary):
         """Return {contributor: amount} for beneficiary in the current window."""
         return dict(self._totals.get(beneficiary, {}))
+
+    def pool_totals(self):
+        """Return {beneficiary: total_tagged_burns} for all pools in window."""
+        return {b: sum(c.values()) for b, c in self._totals.items()}
+
+    def sender_totals(self):
+        """Return {sender: total_burned} across all beneficiaries."""
+        totals = {}
+        for contribs in self._totals.values():
+            for sender, amount in contribs.items():
+                totals[sender] = totals.get(sender, 0) + amount
+        return totals
+
+    def history(self):
+        """Return burn history entries newest-first."""
+        return list(self._history)
 
     def builder_burn(self, address):
         """Total burn weight for address as a builder (self + proxy burns)."""
@@ -140,50 +166,12 @@ def _tip_hash_int(chain):
     return int(vdf_out[:64], 16)      # 256-bit int from first 32 bytes of hex
 
 
-def _burns_by_contributor(chain, beneficiary):
-    """Return {contributor_addr: total_burned} for all burns tagged to
-    beneficiary in the last POB_WINDOW blocks.
-
-    A burn output tags a beneficiary via {"to": BURN_ADDRESS, "beneficiary": addr}.
-    If beneficiary is absent, the sender is the implicit beneficiary (solo burn).
-    Only burns where the resolved beneficiary matches the argument are counted.
-    """
-    window = chain[-POB_WINDOW:] if len(chain) > POB_WINDOW else chain
-    totals = {}
-    for blk in window:
-        for tx in blk.get("transactions", []):
-            sender = tx.get("from", "")
-            for out in tx.get("outputs", []):
-                if out.get("to") != BURN_ADDRESS:
-                    continue
-                tag = out.get("beneficiary") or sender   # default: self
-                if tag != beneficiary:
-                    continue
-                totals[sender] = totals.get(sender, 0) + out["amount"]
-    return totals
-
-
-def _builder_burn(chain, address):
-    """Sum intentional burns tagged to address (self-burns) for score computation.
-    For score, only burns where the sender IS the beneficiary count --
-    proxy burns (tagging someone else) benefit the tagged address, not the sender.
-    """
-    return _burns_by_contributor(chain, address).get(address, 0) + _proxy_burns(chain, address)
-
-
-def _proxy_burns(chain, address):
-    """Sum burns by others that tag address as beneficiary."""
-    window = chain[-POB_WINDOW:] if len(chain) > POB_WINDOW else chain
-    total = 0
-    for blk in window:
-        for tx in blk.get("transactions", []):
-            sender = tx.get("from", "")
-            if sender == address:
-                continue   # self-burns counted separately
-            for out in tx.get("outputs", []):
-                if out.get("to") == BURN_ADDRESS and out.get("beneficiary") == address:
-                    total += out["amount"]
-    return total
+def _make_window(chain):
+    """Build a BurnWindow from a chain slice. Used by one-off callers."""
+    w = BurnWindow()
+    for blk in chain:
+        w.add_block(blk)
+    return w
 
 
 def _addr_int(address):
@@ -195,14 +183,11 @@ def _addr_int(address):
 def score(chain, address):
     """Compute PoB score for address at the current chain tip.
 
-    Lower is better. Unburnished builders score (tip_seed XOR addr_int),
-    which can be large. Heavy burners divide that by their burn total,
-    yielding a small score.
+    Lower is better. Use BurnWindow.score() during replay/live operation
+    to avoid rescanning; this one-off version is for sync candidates and tests.
     """
-    seed      = _tip_hash_int(chain) ^ _addr_int(address)
-    burn      = _builder_burn(chain, address)
-    denom     = max(1, burn)
-    return seed // denom
+    w = _make_window(chain)
+    return w.score(_tip_hash_int(chain), address)
 
 
 def cumulative_score(chain):
@@ -222,27 +207,10 @@ def cumulative_score(chain):
 def reward_distribution(chain, beneficiary, reward):
     """Compute the reward split for a block won by beneficiary.
 
-    Contributors are addresses who burned coins tagged to beneficiary in the
-    last POB_WINDOW blocks. The builder themselves is a contributor if they
-    burned with self as beneficiary (self-burns). Proxy burns from others
-    improve the builder's score but their reward share goes to the burner,
-    not back to the builder as an additional recipient.
-
-    Returns a list of (contributor_addr, amount_rings) for every contributor
-    whose integer share >= 1 ring. Total minted may be slightly less than
-    reward due to integer rounding; the remainder stays in can_mint.
-    Falls back to full reward to builder if no tagged burns exist.
+    One-off version for sync candidates and tests. For live/replay use,
+    call BurnWindow.reward_distribution() directly.
     """
-    burns = _burns_by_contributor(chain, beneficiary)
-    if not burns or reward == 0:
-        return [(beneficiary, reward)]
-    total = sum(burns.values())
-    distribution = [
-        (addr, reward * amount // total)
-        for addr, amount in burns.items()
-        if reward * amount // total >= 1
-    ]
-    return distribution if distribution else [(beneficiary, reward)]
+    return _make_window(chain).reward_distribution(beneficiary, reward)
 
 
 def best_builder(candidates, chain):

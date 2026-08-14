@@ -120,30 +120,6 @@ def _strike_sender(pool, data):
         pool.strike(addr)
 
 
-def _burn_window_data(chain, from_addr):
-    """Compute burn totals, pool leaderboard, and history over the last POB_WINDOW blocks."""
-    window = chain[-POB_WINDOW:] if len(chain) > POB_WINDOW else chain
-    burn_totals    = {}   # sender -> total self+proxy burns (for leaderboard by sender)
-    pool_totals    = {}   # beneficiary -> total tagged burns (pool leaderboard)
-    burn_history   = []
-    for blk in reversed(window):
-        for tx in blk.get("transactions", []):
-            sender = tx.get("from", "")
-            for o in tx.get("outputs", []):
-                if o.get("to") != BURN_ADDRESS:
-                    continue
-                amt         = o["amount"]
-                beneficiary = o.get("beneficiary") or sender
-                burn_totals[sender]      = burn_totals.get(sender, 0) + amt
-                pool_totals[beneficiary] = pool_totals.get(beneficiary, 0) + amt
-                burn_history.append({
-                    "height":      blk["height"],
-                    "addr":        sender,
-                    "beneficiary": beneficiary,
-                    "amount":      amt,
-                })
-    scores = {addr: pob_mod.score(chain, addr) for addr in pool_totals}
-    return burn_totals, pool_totals, burn_history, scores
 
 # ---------------------------------------------------------------------------
 # App factory
@@ -219,10 +195,15 @@ def create_app(node, pool, net_in_q, discovery):
         v = node.view
         chain = v.chain
         balance = v.state.get_balance(node.addr)
-        burn_totals, pool_totals, burn_history, scores = _burn_window_data(chain, node.addr)
+        bw          = node._burn_window
+        pool_totals = bw.pool_totals()
+        burn_totals = bw.sender_totals()
+        burn_history = bw.history()
+        tip_hash_int = pob_mod._tip_hash_int(chain)
+        scores = {addr: bw.score(tip_hash_int, addr) for addr in pool_totals}
         ctx = dict(title="Burn", from_addr=node.addr, balance=balance,
                    my_burn=burn_totals.get(node.addr, 0),
-                   my_score=pob_mod.score(chain, node.addr),
+                   my_score=bw.score(tip_hash_int, node.addr),
                    total_burn=sum(pool_totals.values()),
                    sorted_burners=sorted(burn_totals.items(), key=lambda x: -x[1]),
                    sorted_pools=sorted(pool_totals.items(), key=lambda x: -x[1]),

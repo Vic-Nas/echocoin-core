@@ -73,19 +73,12 @@ class Storage:
     def _index_block(self, blk, tx_hashes=None):
         """Insert tx_index and addr_index rows for all transactions in blk.
         tx_hashes: optional list of pre-computed hashes (same order as blk["transactions"]).
-        If omitted, hashes are computed here using json+sha256 directly to avoid
-        importing tx_mod (keeping storage.py free of domain-logic dependencies).
         Must be called inside a transaction."""
-        import hashlib, json as _json
+        import tx as tx_mod
         height = blk["height"]
         txs = blk.get("transactions", [])
         if tx_hashes is None:
-            tx_hashes = [
-                hashlib.sha256(
-                    _json.dumps(t, sort_keys=True, separators=(",", ":")).encode()
-                ).hexdigest()
-                for t in txs
-            ]
+            tx_hashes = [tx_mod.tx_hash(t) for t in txs]
         for t, h in zip(txs, tx_hashes):
             self.db.execute(
                 "INSERT OR IGNORE INTO tx_index(tx_hash, block_height) VALUES(?,?)",

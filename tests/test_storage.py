@@ -59,7 +59,7 @@ def test_state_save_and_load_balances_nonces(db):
 
 def test_state_save_and_load_emission_counters(db):
     s = state_mod.State()
-    s.apply_reward("miner", 1_000_000)
+    s.apply_reward_distribution([("miner", 1_000_000)])
     s.total_burnt = 50_000
     db.save_state(s)
     _, _, minted, burnt = db.load_state()

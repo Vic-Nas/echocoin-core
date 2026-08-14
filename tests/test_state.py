@@ -46,7 +46,7 @@ def test_fee_is_burned_and_tracked():
 
 def test_snapshot_preserves_emission_counters():
     s = state_mod.State()
-    s.apply_reward("alice", 1000)
+    s.apply_reward_distribution([("alice", 1000)])
     s.total_burnt = 200
     snap = s.snapshot()
     assert snap.total_minted == 1000
@@ -66,7 +66,7 @@ def test_apply_reward_increments_minted():
     s = state_mod.State()
     reward = s.compute_block_reward()
     assert reward > 0
-    s.apply_reward("builder", reward)
+    s.apply_reward_distribution([("builder", reward)])
     assert s.total_minted == reward
     assert s.get_balance("builder") == reward
 
@@ -74,7 +74,7 @@ def test_apply_reward_increments_minted():
 def test_compute_block_reward_decreases_as_minted_grows():
     s = state_mod.State()
     r0 = s.compute_block_reward()
-    s.apply_reward("x", r0)
+    s.apply_reward_distribution([("x", r0)])
     r1 = s.compute_block_reward()
     assert r1 < r0  # emission decays
 
@@ -83,7 +83,7 @@ def test_burnt_fees_increase_can_mint():
     """Burnt fees flow back into can_mint, sustaining future rewards."""
     s = state_mod.State()
     r0 = s.compute_block_reward()
-    s.apply_reward("x", r0)
+    s.apply_reward_distribution([("x", r0)])
     s.total_burnt = r0  # simulate fee burns equal to one block reward
     r1 = s.compute_block_reward()
     # With burns restoring can_mint, reward should be close to r0 again
