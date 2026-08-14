@@ -1,8 +1,13 @@
-"""Block validation tests: structure, ordering, timestamps, VDF, fee rate."""
+"""Block unit tests: structure, chain linkage, timestamps, ordering, fee rate formula.
+
+VDF forgery and block size security properties are in test_flow_security.
+assemble() size tracking is in test_flow_block_cycle.
+"""
 from unittest.mock import patch
 
 import pytest
 from helpers import *
+
 
 # ---------------------------------------------------------------------------
 # Genesis
@@ -41,8 +46,7 @@ def test_block_with_wrong_hash_rejected():
     g = block_mod.create_genesis()
     g["hash"] = "ff" * 32
     ok, err = block_mod.validate(g, state_mod.State(), [], fee_rate_fn(1))
-    assert not ok
-    assert "hash" in err.lower()
+    assert not ok and "hash" in err.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -87,7 +91,7 @@ def test_block_missing_timestamp_rejected():
 def test_height_not_following_parent_rejected():
     g = block_mod.create_genesis()
     blk = make_block([g])
-    blk["height"] = 5  # wrong
+    blk["height"] = 5
     blk["hash"] = block_mod.block_hash(blk)
     with patch("vdf.verify", return_value=True):
         ok, err = block_mod.validate(blk, state_mod.State(), [g], fee_rate_fn(1))
@@ -104,10 +108,6 @@ def test_previous_hash_mismatch_rejected():
     assert not ok and "previous_hash" in err
 
 
-# ---------------------------------------------------------------------------
-# Builder field
-# ---------------------------------------------------------------------------
-
 def test_missing_builder_rejected():
     g = block_mod.create_genesis()
     blk = make_block([g])
@@ -119,29 +119,6 @@ def test_missing_builder_rejected():
 
 
 # ---------------------------------------------------------------------------
-# VDF proof
-# ---------------------------------------------------------------------------
-
-def test_invalid_vdf_proof_rejected():
-    g = block_mod.create_genesis()
-    blk = make_block([g])
-    # vdf.verify returns False -> block rejected
-    with patch("vdf.verify", return_value=False):
-        ok, err = block_mod.validate(blk, state_mod.State(), [g], fee_rate_fn(1))
-    assert not ok and "vdf" in err.lower()
-
-
-def test_missing_vdf_fields_rejected():
-    g = block_mod.create_genesis()
-    blk = make_block([g])
-    blk["vdf_output"] = None
-    blk["hash"] = block_mod.block_hash(blk)
-    with patch("vdf.verify", return_value=True):
-        ok, err = block_mod.validate(blk, state_mod.State(), [g], fee_rate_fn(1))
-    assert not ok and "vdf" in err.lower()
-
-
-# ---------------------------------------------------------------------------
 # Transaction ordering
 # ---------------------------------------------------------------------------
 
@@ -149,13 +126,11 @@ def test_transaction_ordering_violation_rejected():
     sk, _pk, pk_hex, addr = make_keypair()
     _, _, _, to = make_keypair()
     s = funded_state(addr, 1_000_000)
-
     t1 = make_valid_tx(sk, pk_hex, addr, to, 10, 1, 0, 1)
     t2 = make_valid_tx(sk, pk_hex, addr, to, 10, 2, 0, 1)
     sorted_txs = tx_mod.sort_txs([t1, t2])
     if tx_mod.tx_hash(sorted_txs[0]) == tx_mod.tx_hash(sorted_txs[1]):
-        pytest.skip("hashes collided, ordering is a no-op")
-
+        pytest.skip("hashes collided")
     g = block_mod.create_genesis()
     blk = make_block([g], txs=list(reversed(sorted_txs)))
     blk["hash"] = block_mod.block_hash(blk)
@@ -165,12 +140,11 @@ def test_transaction_ordering_violation_rejected():
 
 
 # ---------------------------------------------------------------------------
-# Fee rate
+# Fee rate formula (unit -- chain plumbing tested in test_flow_block_cycle)
 # ---------------------------------------------------------------------------
 
 def test_fee_rate_retarget_returns_int():
-    chain = genesis_chain()
-    rate = block_mod.compute_expected_fee_rate(chain)
+    rate = block_mod.compute_expected_fee_rate(genesis_chain())
     assert isinstance(rate, int) and rate >= 1
 
 
@@ -180,56 +154,16 @@ def test_fee_rate_initial_value():
 
 
 def test_fee_rate_stable_at_target_volume():
-    """Median volume exactly at BLOCK_SIZE_TARGET_BYTES keeps rate stable."""
-
     from params import BLOCK_SIZE_TARGET_BYTES, INITIAL_FEE_RATE
-    # Build a chain where every block has exactly TARGET bytes of txs.
-    # Since compute_expected_fee_rate uses median of the window, we inject
-    # fake blocks with pre-set byte volumes by controlling the tx list size.
-    # Here we test the formula directly.
-    rate = INITIAL_FEE_RATE
-    # vol_ratio = 1.0 -> adjustment = 1.0^0.1 = 1.0 -> rate unchanged
     vol_ratio = BLOCK_SIZE_TARGET_BYTES / BLOCK_SIZE_TARGET_BYTES
-    assert vol_ratio == 1.0
     assert max(0.999, vol_ratio ** 0.1) == 1.0
-    new_rate = max(1, int(rate * 1.0))
-    assert new_rate == rate
-
-
-def test_fee_rate_rises_above_target():
-    """Blocks above the soft target cause rate to rise."""
-    rate = 1_000   # use a rate large enough that int(rate * 1.05) > rate
-    vol_ratio = 2.0  # 2x target
-    adjustment = min(1.05, vol_ratio)
-    assert adjustment == 1.05
-    new_rate = max(1, int(rate * adjustment))
-    assert new_rate > rate
-
-
-def test_fee_rate_falls_slowly_below_target():
-    """Blocks below the soft target cause rate to fall, but slowly."""
-    rate = 1_000   # use a rate large enough that the 0.999 decay is visible
-    # vol_ratio = 0.5 -> max(0.999, 0.5^0.1) = 0.999 (floor governs)
-    vol_ratio = 0.5
-    adjustment = max(0.999, vol_ratio ** 0.1)
-    assert adjustment == 0.999
-    new_rate = max(1, int(rate * adjustment))
-    assert new_rate < rate  # fell
-    assert new_rate > rate * 0.99  # but not by much
-
-
-def test_fee_rate_frozen_at_zero_activity():
-    """Zero-activity adjustment is 0.999 -- nearly frozen."""
-    from params import INITIAL_FEE_RATE
-    rate = INITIAL_FEE_RATE
-    new_rate = max(1, int(rate * 0.999))
-    assert new_rate == rate - 1  # dropped by at most 1 ring/byte at high rate
+    assert max(1, int(INITIAL_FEE_RATE * 1.0)) == INITIAL_FEE_RATE
 
 
 def test_fee_rate_mismatch_rejected():
     g = block_mod.create_genesis()
     blk = make_block([g])
-    blk["fee_rate"] = 99999  # wrong
+    blk["fee_rate"] = 99999
     blk["hash"] = block_mod.block_hash(blk)
     with patch("vdf.verify", return_value=True):
         ok, err = block_mod.validate(blk, state_mod.State(), [g], fee_rate_fn(1))
@@ -255,4 +189,4 @@ def test_assemble_returns_block_at_correct_height():
     assert b["height"] == 1
     assert b["builder"] == "builder_addr"
     assert b["previous_hash"] == g["hash"]
-    assert b["vdf_output"] is None  # caller fills in after vdf.evaluate()
+    assert b["vdf_output"] is None

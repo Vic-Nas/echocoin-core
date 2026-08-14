@@ -1,4 +1,7 @@
-"""Transaction validation tests: replay, nonce, balance, fee, signature, malleability."""
+"""Transaction validation tests: nonce, fee, signature, ordering, malleability.
+
+Replay, nonce-gap, and balance-overflow are covered in test_flow_security.
+"""
 import pytest
 from helpers import *
 
@@ -20,26 +23,6 @@ def test_valid_tx(setup):
     assert ok, err
 
 
-def test_replay_rejected(setup):
-    """Same tx sent twice: second should fail (nonce already used)."""
-    sk, _pk, pk_hex, addr, to_addr, s = setup
-    t = make_valid_tx(sk, pk_hex, addr, to_addr, 100, 1, 0, 1)
-    ok, _ = tx_mod.validate(t, s, 0, fee_rate_fn(1))
-    assert ok
-    s.apply_tx(t)
-    ok, err = tx_mod.validate(t, s, 0, fee_rate_fn(1))
-    assert not ok
-    assert "nonce" in err.lower()
-
-
-def test_nonce_gap_rejected(setup):
-    sk, _pk, pk_hex, addr, to_addr, s = setup
-    t = make_valid_tx(sk, pk_hex, addr, to_addr, 100, 3, 0, 1)
-    ok, err = tx_mod.validate(t, s, 0, fee_rate_fn(1))
-    assert not ok
-    assert "nonce" in err.lower()
-
-
 def test_nonce_zero_rejected(setup):
     sk, _pk, pk_hex, addr, to_addr, s = setup
     t = make_valid_tx(sk, pk_hex, addr, to_addr, 100, 0, 0, 1)
@@ -48,14 +31,6 @@ def test_nonce_zero_rejected(setup):
 
 
 # --- Balance ---
-
-def test_insufficient_balance(setup):
-    sk, _pk, pk_hex, addr, to_addr, s = setup
-    t = make_valid_tx(sk, pk_hex, addr, to_addr, 999_999_999, 1, 0, 1)
-    ok, err = tx_mod.validate(t, s, 0, fee_rate_fn(1))
-    assert not ok
-    assert "balance" in err.lower()
-
 
 def test_zero_amount_rejected(setup):
     sk, _pk, pk_hex, addr, to_addr, s = setup

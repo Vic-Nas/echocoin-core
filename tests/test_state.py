@@ -1,4 +1,7 @@
-"""State ledger invariant tests: balances, nonces, fee burns, emission."""
+"""State ledger invariant tests: balances, nonces, fee burns, emission.
+
+Debit underflow is covered in test_flow_security.
+"""
 import pytest
 from helpers import *
 
@@ -9,13 +12,6 @@ def test_credit_debit():
     assert s.get_balance("alice") == 100
     s.debit("alice", 40)
     assert s.get_balance("alice") == 60
-
-
-def test_debit_below_zero_raises():
-    s = state_mod.State()
-    s.credit("alice", 10)
-    with pytest.raises(ValueError):
-        s.debit("alice", 11)
 
 
 def test_apply_tx_debits_outputs_and_fee():
