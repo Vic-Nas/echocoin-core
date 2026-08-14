@@ -165,9 +165,9 @@ _STATS_BODY = r"""
         </div>
 
         <script>
-        const SEEDS = 100_000_000; // 1 PC = 100,000,000 seeds
-        const fmt = seeds => (seeds / SEEDS).toFixed(4) + ' PC';
-        const fmtSeeds = n => n.toLocaleString() + ' seeds';
+        const RINGS_PER_ECH = 100_000_000;
+        const fmt = rings => (rings / RINGS_PER_ECH).toFixed(4) + ' ECH';
+        const fmtRings = n => n.toLocaleString() + ' rings';
 
         function polyline(points, xKey, yKey, W, H, PAD, maxX, maxY) {
           if (!points.length) return '';
@@ -186,7 +186,7 @@ _STATS_BODY = r"""
           }
           for (let i = 0; i <= 4; i++) {
             const y = H - PAD - (i / 4) * (H - PAD * 2);
-            const val = (i / 4) * maxY / SEEDS;
+            const val = (i / 4) * maxY / RINGS_PER_ECH;
             svg.innerHTML += `<text x="${PAD - 4}" y="${y + 4}" fill="#5a6070" font-size="10" text-anchor="end">${val.toFixed(1)}K</text>`;
           }
           for (let i = 1; i <= 3; i++) {
