@@ -116,6 +116,8 @@ def _rate_limited(limiter):
 # ---------------------------------------------------------------------------
 
 from templates import _BASE, _STATS_BODY
+import pob as pob_mod
+from pob import BURN_ADDRESS
 
 
 def _parse_sender(data):
@@ -289,6 +291,164 @@ def create_app(node, pool, net_in_q, discovery):
           </form>
         </div>"""
         return render_template_string(_BASE.format(title="Send", body=body))
+
+
+    # ---- Burn ------------------------------------------------------------
+
+    @app.route("/burn", methods=["GET", "POST"])
+    def burn():
+        if request.remote_addr not in ("127.0.0.1", "::1"):
+            return jsonify({"ok": False, "error": "localhost only"}), 403
+
+        alert = ""
+        v         = node.view
+        chain     = v.chain
+        tip       = v.tip
+        state     = v.state
+        from_addr = node.addr
+        fee_rate  = tip["fee_rate"]
+        balance   = state.get_balance(from_addr)
+        nonce     = state.get_nonce(from_addr) + 1
+
+        # Build per-address burn totals over the last POB_WINDOW blocks
+        from params import POB_WINDOW
+        window = chain[-POB_WINDOW:] if len(chain) > POB_WINDOW else chain
+        burn_totals: dict[str, int] = {}
+        burn_history: list[dict]    = []
+        for blk in reversed(window):
+            for tx in blk.get("transactions", []):
+                tx_burns = sum(
+                    o["amount"] for o in tx.get("outputs", [])
+                    if o.get("to") == BURN_ADDRESS
+                )
+                if tx_burns:
+                    addr = tx.get("from", "")
+                    burn_totals[addr] = burn_totals.get(addr, 0) + tx_burns
+                    burn_history.append({
+                        "height": blk["height"],
+                        "addr":   addr,
+                        "amount": tx_burns,
+                    })
+
+        my_burn    = burn_totals.get(from_addr, 0)
+        my_score   = pob_mod.score(chain, from_addr)
+        total_burn = sum(burn_totals.values())
+
+        # Handle burn form POST
+        if request.method == "POST":
+            raw        = request.form.get("amount", "").strip()
+            passphrase = request.form.get("passphrase", "").strip()
+            try:
+                burn_rings = int(raw)
+                if burn_rings <= 0:
+                    raise ValueError("must be positive")
+            except ValueError as e:
+                alert = f'<div class="alert alert-err">Invalid amount: {e}</div>'
+            else:
+                if not passphrase and not node.is_signing_active():
+                    alert = '<div class="alert alert-err">Passphrase required (leave blank if mining loop is active).</div>'
+                elif burn_rings > balance:
+                    alert = '<div class="alert alert-err">Insufficient balance.</div>'
+                else:
+                    try:
+                        outputs = [{"to": BURN_ADDRESS, "amount": burn_rings}]
+                        t, _fee = node.build_and_sign_tx(outputs, passphrase or None)
+                        ok, result = node.submit_tx_from_api(t)
+                        if ok:
+                            alert = f'<div class="alert alert-ok">Burn submitted. tx: <span class="hash">{result}</span></div>'
+                        else:
+                            alert = f'<div class="alert alert-err">Error: {result}</div>'
+                    except Exception as e:
+                        alert = f'<div class="alert alert-err">Error: {e}</div>'
+
+        # Leaderboard rows
+        sorted_burners = sorted(burn_totals.items(), key=lambda x: -x[1])
+        lb_rows = ""
+        for rank, (addr, amount) in enumerate(sorted_burners[:20], 1):
+            is_me = " style=\"color:var(--green)\"" if addr == from_addr else ""
+            lb_rows += f"""
+            <tr>
+              <td>{rank}</td>
+              <td class="hash-short"{is_me}>{addr}</td>
+              <td>{fmt_balance(amount)}</td>
+              <td>{fmt_balance(pob_mod.score(chain, addr))}</td>
+            </tr>"""
+
+        if not lb_rows:
+            lb_rows = '<tr><td colspan="4" style="color:var(--muted);text-align:center">No burns in the last ' + str(POB_WINDOW) + ' blocks.</td></tr>'
+
+        # Recent burn history rows (latest first, cap at 30)
+        hist_rows = ""
+        for entry in burn_history[:30]:
+            is_me = " style=\"color:var(--green)\"" if entry["addr"] == from_addr else ""
+            hist_rows += f"""
+            <tr>
+              <td><a href="/explorer/block/{entry['height']}">{entry['height']}</a></td>
+              <td class="hash-short"{is_me}>{entry['addr']}</td>
+              <td>{fmt_balance(entry['amount'])}</td>
+            </tr>"""
+
+        if not hist_rows:
+            hist_rows = '<tr><td colspan="3" style="color:var(--muted);text-align:center">None yet.</td></tr>'
+
+        body = f"""
+        <h2>Burn</h2>
+        {alert}
+        <div class="stats" style="margin-bottom:1rem">
+          <div class="stat">
+            <div class="stat-label">Your balance</div>
+            <div class="stat-value" style="font-size:1rem">{fmt_balance(balance)}</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Your burns (last {POB_WINDOW} blocks)</div>
+            <div class="stat-value" style="font-size:1rem">{fmt_balance(my_burn)}</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Your PoB score</div>
+            <div class="stat-value" style="font-size:1rem;font-family:var(--mono)">{my_score:,}</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Network burns (last {POB_WINDOW} blocks)</div>
+            <div class="stat-value" style="font-size:1rem">{fmt_balance(total_burn)}</div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Burn coins to earn block-building priority</div>
+          <p style="color:var(--muted);font-size:.85rem;margin-bottom:.75rem">
+            Burned coins are permanently destroyed and recycled into the emission pool.
+            Larger recent burns give you a lower (better) PoB score and higher chance
+            of winning each block slot. Burns count for the last {POB_WINDOW} blocks (~{POB_WINDOW * 2 // 60}h).
+          </p>
+          <form method="POST">
+            <div class="form-group">
+              <label>Amount to burn (rings)</label>
+              <input type="number" name="amount" min="1" max="{balance}" placeholder="e.g. 1000000 rings = 0.01 ECH">
+            </div>
+            <div class="form-group">
+              <label>Your signing passphrase (leave blank if mining loop is active)</label>
+              <input type="password" name="passphrase" placeholder="Passphrase">
+            </div>
+            <button type="submit" style="background:var(--red)">Burn</button>
+          </form>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Burn leaderboard (last {POB_WINDOW} blocks)</div>
+          <table>
+            <thead><tr><th>#</th><th>Address</th><th>Total burned</th><th>Current score</th></tr></thead>
+            <tbody>{lb_rows}</tbody>
+          </table>
+        </div>
+
+        <div class="card">
+          <div class="card-title">Recent burns</div>
+          <table>
+            <thead><tr><th>Block</th><th>Address</th><th>Amount</th></tr></thead>
+            <tbody>{hist_rows}</tbody>
+          </table>
+        </div>"""
+        return render_template_string(_BASE.format(title="Burn", body=body))
 
     # ---- Block explorer --------------------------------------------------
 

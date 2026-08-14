@@ -125,9 +125,10 @@ _BASE = """<!doctype html>
 </head>
 <body>
 <nav>
-  <span class="brand">POOLCOIN</span>
+  <span class="brand">ECHOCOIN</span>
   <a href="/">Dashboard</a>
   <a href="/send">Send</a>
+  <a href="/burn">Burn</a>
   <a href="/explorer">Explorer</a>
   <a href="/address">Address</a>
   <a href="/stats">Stats</a>
