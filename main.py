@@ -48,6 +48,37 @@ def _resolve_passphrase(prompt):
     return getpass.getpass(prompt)
 
 
+def _load_or_create_key(keyfile):
+    """Load or create a FALCON-512 keypair. Returns (public_key_bytes, kek).
+    The KEK (key-encryption key) is kept in memory; the passphrase is dropped.
+    """
+    if not os.path.exists(keyfile):
+        print("No key file found. Creating new FALCON-512 keypair.")
+        passphrase = _resolve_passphrase("New passphrase: ")
+        if not os.environ.get("ECHOCOIN_PASSPHRASE"):
+            passphrase = _prompt_new_passphrase(passphrase)
+        sk, pk = crypto.generate_keypair()
+        crypto.save_key(keyfile, sk, pk, passphrase)
+        kek = crypto.derive_kek(keyfile, passphrase)
+        addr = crypto.public_key_to_address(pk)
+        log.info("[startup] key created  file=%s", keyfile)
+        log.info("[startup] address=%s", addr)
+        del sk, passphrase
+        return pk, kek
+    passphrase = _resolve_passphrase("Passphrase: ")
+    try:
+        pk = crypto.load_pubkey(keyfile)
+        kek = crypto.derive_kek(keyfile, passphrase)
+        sk_test = crypto.decrypt_secret_key(keyfile, kek=kek)
+        del sk_test
+    except ValueError as e:
+        sys.exit(f"Error: {e}")
+    addr = crypto.public_key_to_address(pk)
+    log.info("[startup] key loaded  file=%s", keyfile)
+    del passphrase
+    return pk, kek
+
+
 def main():
     parser = argparse.ArgumentParser(description="Echocoin node")
     parser.add_argument("--host",    default="0.0.0.0")
@@ -67,31 +98,7 @@ def main():
     args = parser.parse_args()
     logging.getLogger("ec").setLevel(getattr(logging, args.log_level))
 
-    # Key setup
-    if not os.path.exists(args.keyfile):
-        print("No key file found. Creating new FALCON-512 keypair.")
-        passphrase = _resolve_passphrase("New passphrase: ")
-        if not os.environ.get("ECHOCOIN_PASSPHRASE"):
-            passphrase = _prompt_new_passphrase(passphrase)
-        sk, pk = crypto.generate_keypair()
-        crypto.save_key(args.keyfile, sk, pk, passphrase)
-        kek = crypto.derive_kek(args.keyfile, passphrase)
-        addr = crypto.public_key_to_address(pk)
-        log.info("[startup] key created  file=%s", args.keyfile)
-        log.info("[startup] address=%s", addr)
-        del sk, passphrase
-    else:
-        passphrase = _resolve_passphrase("Passphrase: ")
-        try:
-            pk = crypto.load_pubkey(args.keyfile)
-            kek = crypto.derive_kek(args.keyfile, passphrase)
-            sk_test = crypto.decrypt_secret_key(args.keyfile, kek=kek)
-            del sk_test
-        except ValueError as e:
-            sys.exit(f"Error: {e}")
-        addr = crypto.public_key_to_address(pk)
-        log.info("[startup] key loaded  file=%s", args.keyfile)
-        del passphrase
+    pk, kek = _load_or_create_key(args.keyfile)
 
     genesis  = block_mod.create_genesis()
     pk_hex   = pk.hex()
@@ -121,7 +128,6 @@ def main():
     if pool.count() > 0:
         syncer.check_and_sync(
             len(node.chain) - 1,
-            node.chain[-1]["hash"],
             lambda chain: node.sync_chain(chain)[0],
         )
 

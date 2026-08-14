@@ -18,43 +18,33 @@ def make_syncer():
 def test_no_peers_returns_false():
     pool = PeerPool("0.0.0.0", 8333)
     syncer = Syncer(pool)
-    assert syncer.check_and_sync(5, "aaaa", lambda c: True) is False
+    assert syncer.check_and_sync(5, lambda c: True) is False
 
-def test_peer_at_same_height_same_hash_skips_sync():
-    """Same height and same tip hash: no sync needed."""
-    syncer, _pool = make_syncer()
-    with patch("requests.get") as mock_get:
-        mock_get.return_value.status_code = 200
-        mock_get.return_value.json.return_value = {"height": 5, "tip_hash": "aabb"}
-        called = []
-        result = syncer.check_and_sync(5, "aabb", lambda c: called.append(c) or True)
-    assert result is False
-    assert called == []
-
-
-def test_peer_at_same_height_lower_hash_syncs():
-    """Same height but peer has lower tip hash: should sync."""
+def test_peer_at_same_height_delegates_to_apply_fn():
+    """Same height: fetch and let apply_fn (i.e. node._remote_is_better) decide."""
     syncer, _pool = make_syncer()
     genesis = block_mod.create_genesis()
-    with patch("requests.get") as mock_get:
-        mock_get.return_value.status_code = 200
-        mock_get.return_value.json.return_value = {"height": 0, "tip_hash": "aaaa"}
-        mock_get.return_value.json.side_effect = [
-            {"height": 0, "tip_hash": "aaaa"},
-            [genesis],
-            [],
-        ]
-        called = []
-        result = syncer.check_and_sync(0, "ffff", lambda c: called.append(c) or True)
+    def fake_get(url, **kwargs):
+        m = MagicMock()
+        m.status_code = 200
+        if "api/info" in url:
+            m.json.return_value = {"height": 0}
+        else:
+            m.json.return_value = [genesis]
+        return m
+    called = []
+    with patch("requests.get", side_effect=fake_get):
+        result = syncer.check_and_sync(0, lambda c: called.append(c) or True)
     assert result is True
+    assert called == [[genesis]]
 
 def test_peer_behind_skips_sync():
     syncer, _pool = make_syncer()
     with patch("requests.get") as mock_get:
         mock_get.return_value.status_code = 200
-        mock_get.return_value.json.return_value = {"height": 3, "tip_hash": "aaaa"}
+        mock_get.return_value.json.return_value = {"height": 3}
         called = []
-        result = syncer.check_and_sync(5, "aaaa", lambda c: called.append(c) or True)
+        result = syncer.check_and_sync(5, lambda c: called.append(c) or True)
     assert result is False
     assert called == []
 
@@ -73,14 +63,14 @@ def test_peer_ahead_calls_apply_fn():
         return m
     with patch("requests.get", side_effect=fake_get):
         called = []
-        result = syncer.check_and_sync(0, "ffff", lambda c: called.append(c) or True)
+        result = syncer.check_and_sync(0, lambda c: called.append(c) or True)
     assert result is True
     assert called == [fake_chain]
 
 def test_peer_unreachable_strikes():
     syncer, pool = make_syncer()
     with patch("requests.get", side_effect=Exception("timeout")):
-        result = syncer.check_and_sync(0, "aaaa", lambda c: True)
+        result = syncer.check_and_sync(0, lambda c: True)
     assert result is False
     assert pool._fails.get("10.0.0.1:8333", {}).get("strikes", 0) == 1
 
@@ -88,10 +78,10 @@ def test_info_non_200_returns_false():
     syncer, _pool = make_syncer()
     with patch("requests.get") as mock_get:
         mock_get.return_value.status_code = 503
-        result = syncer.check_and_sync(0, "aaaa", lambda c: True)
+        result = syncer.check_and_sync(0, lambda c: True)
     assert result is False
 
-# ---- fetch_chain_from pagination ----
+# ---- fetch_chain pagination ----
 
 def test_fetch_chain_returns_none_on_error():
     syncer, _pool = make_syncer()
@@ -111,7 +101,6 @@ def test_fetch_chain_single_page():
     genesis = block_mod.create_genesis()
     with patch("requests.get") as mock_get:
         mock_get.return_value.status_code = 200
-        # Return a short page (< 500) so pagination stops after one call
         mock_get.return_value.json.return_value = [genesis]
         result = syncer._fetch_chain("10.0.0.1:8333")
     assert result == [genesis]

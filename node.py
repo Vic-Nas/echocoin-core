@@ -28,14 +28,15 @@ class NodeView:
     Flask reads node.view -- one attribute swap, GIL-atomic, no lock.
     chain is a frozen copy so Flask iteration can never race with
     node-loop appends."""
-    __slots__ = ("chain", "genesis_hash", "height", "state", "tip")
+    __slots__ = ("chain", "cumulative_score", "genesis_hash", "height", "state", "tip")
 
-    def __init__(self, chain, state):
-        self.chain        = list(chain)
-        self.tip          = chain[-1]
-        self.genesis_hash = chain[0]["hash"]
-        self.state        = state.snapshot()
-        self.height       = chain[-1]["height"]
+    def __init__(self, chain, state, cumulative_score=0):
+        self.chain            = list(chain)
+        self.tip              = chain[-1]
+        self.genesis_hash     = chain[0]["hash"]
+        self.state            = state.snapshot()
+        self.height           = chain[-1]["height"]
+        self.cumulative_score = cumulative_score
 
 
 log = logging.getLogger("ec.node")
@@ -78,7 +79,8 @@ class Node:
         self._kek       = None
         self._loop_thread = None
         self.storage    = Storage(db_path or DB_PATH)
-        self._cycle_count = 0
+        self._cycle_count     = 0
+        self._cumulative_score = 0   # running PoB sum, updated in _commit
 
         # tx_hash -> number of non-full blocks since first appearance that
         # excluded it. Used for the transaction censorship score.
@@ -120,7 +122,7 @@ class Node:
 
     def _publish_view(self):
         """Publish a consistent snapshot for Flask threads. Single ref swap."""
-        self.view = NodeView(self.chain, self.state)
+        self.view = NodeView(self.chain, self.state, self._cumulative_score)
 
     # ------------------------------------------------------------------
     # Public interface
@@ -239,7 +241,6 @@ class Node:
         if self._cycle_count % SYNC_EVERY_N_CYCLES == 0:
             self.syncer.check_and_sync(
                 self.chain[-1]["height"],
-                self.chain[-1]["hash"],
                 lambda chain: self.sync_chain(chain)[0],
             )
 
@@ -266,11 +267,21 @@ class Node:
         self.gossip.broadcast_block(candidate)
 
         COLLECTION_WINDOW = 5
-        best_block = candidate
-        best_probe = None
-
         peer_blocks  = self._drain_queue(timeout=COLLECTION_WINDOW)
         peer_blocks += self._drain_queue(timeout=0)
+        winner, probe, relay = self._select_winner(candidate, peer_blocks, tip)
+        if winner is None:
+            return   # own block failed validation
+        self._commit(winner, probe, relay=relay)
+
+    def _select_winner(self, candidate, peer_blocks, tip):
+        """Pick the best block from our candidate and received peer blocks.
+
+        Returns (block, state_probe, relay) or (None, None, False) if our
+        own block failed validation (should not happen in normal operation).
+        """
+        best_block = candidate
+        best_probe = None
 
         for blk in peer_blocks:
             if blk.get("height") != tip["height"] + 1:
@@ -284,8 +295,7 @@ class Node:
             if not ok:
                 log.debug("[vdf] rejected peer block  reason=%s", err)
                 continue
-            score = self._censorship_score(blk)
-            if _rng.random() >= score:
+            if _rng.random() >= self._censorship_score(blk):
                 log.debug("[vdf] censorship check rejected peer block")
                 continue
             best_block = blk
@@ -296,14 +306,15 @@ class Node:
             ok, err = block_mod.validate(candidate, probe, self.chain, self._fee_rate_at)
             if not ok:
                 log.error("[vdf] own block invalid: %s", err)
-                return
-            self._commit(candidate, probe, relay=False)
-        else:
-            self._commit(best_block, best_probe, relay=True)
+                return None, None, False
+            return candidate, probe, False
+
+        return best_block, best_probe, True
 
     # ------------------------------------------------------------------
     # Queue handling
     # ------------------------------------------------------------------
+
 
     def _drain_queue(self, timeout=0):
         """Drain all pending messages from net_in_q."""
@@ -403,6 +414,9 @@ class Node:
         if builder:
             reward = new_state.compute_block_reward()
             new_state.apply_reward(builder, reward)
+            # Incrementally update cumulative PoB score. score() only scans
+            # the last POB_WINDOW blocks so this is O(window), not O(chain).
+            self._cumulative_score += pob_mod.score(self.chain, builder)
         self.state = new_state
         self.chain.append(new_block)
         self.storage.save_block(new_block)
@@ -436,9 +450,11 @@ class Node:
             return True
         if remote_height == local_height:
             # PoB fork choice: lower cumulative score = more economic commitment.
+            # Local score is cached (_cumulative_score). Remote is computed once
+            # (O(chain * window) only for sync candidates, not every block).
             # Falls back to hash comparison only if scores are equal (rare).
             remote_score = pob_mod.cumulative_score(remote_chain)
-            local_score  = pob_mod.cumulative_score(self.chain)
+            local_score  = self._cumulative_score
             if remote_score != local_score:
                 return remote_score < local_score
             return remote_chain[-1]["hash"] < self.chain[-1]["hash"]
@@ -497,6 +513,7 @@ class Node:
         self.storage.replace_chain(fork_point, candidate_chain[fork_point:])
         self.chain = list(candidate_chain)
         self.state = new_state
+        self._cumulative_score = pob_mod.cumulative_score(self.chain)
         self.storage.save_state(new_state)
         self._publish_view()
         if label == "reorg":

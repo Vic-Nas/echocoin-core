@@ -18,11 +18,10 @@ class Syncer:
     def __init__(self, pool):
         self.pool = pool
 
-    def check_and_sync(self, local_height, local_tip_hash, apply_fn):
+    def check_and_sync(self, local_height, apply_fn):
         """Pick a random peer, compare tip, sync if they have a better chain.
 
         local_height:   int, current chain height
-        local_tip_hash: str, current tip block hash (for tie-breaking)
         apply_fn:       callable(chain) -> bool, called with the fetched chain
 
         Returns True if the chain was updated.
@@ -39,17 +38,12 @@ class Syncer:
             self.pool.strike(peer)
             return False
 
-        remote_height   = info.get("height", 0)
-        remote_tip_hash = info.get("tip_hash", "")
+        remote_height = info.get("height", 0)
 
         if remote_height < local_height:
             return False
-        # Same height: only sync if remote tip hash is strictly lower
-        # (lowest hash wins; same or higher means we already have the better chain).
-        if remote_height == local_height and remote_tip_hash >= local_tip_hash:
-            return False
 
-        log.info("[sync] peer %s is ahead  remote=%d  local=%d  fetching",
+        log.info("[sync] peer %s at height=%d  local=%d  fetching",
                  peer, remote_height, local_height)
         chain = self._fetch_chain(peer)
         if chain:

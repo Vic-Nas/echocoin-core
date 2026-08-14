@@ -23,7 +23,6 @@ import logging
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from typing import ClassVar
 
 import nacl.signing
 import requests
@@ -38,36 +37,6 @@ except ImportError:
 log = logging.getLogger("ec.discovery")
 
 
-class _Ticker:
-    """Minimal interval timer. Avoids scattered last_X variables in run().
-
-    fire_immediately=True:  fires on the first ready() call.
-    fire_immediately=False: fires after the first full interval has elapsed
-                            since the first call to ready().
-    """
-    __slots__ = ("_interval", "_fire_immediately", "_last", "_first_seen")
-
-    def __init__(self, interval: float, *, fire_immediately: bool = False) -> None:
-        self._interval        = interval
-        self._fire_immediately = fire_immediately
-        self._last: float     = 0.0
-        self._first_seen: float = 0.0
-
-    def ready(self, now: float) -> bool:
-        if self._last == 0.0 and self._first_seen == 0.0:
-            # First call ever.
-            if self._fire_immediately:
-                return True
-            self._first_seen = now
-            return False
-        if self._last == 0.0:
-            # Waiting for first interval since first_seen.
-            return now - self._first_seen >= self._interval
-        return now - self._last >= self._interval
-
-    def reset(self, now: float) -> None:
-        self._last = now
-
 PEER_CACHE_FILE      = "echocoin_peers.json"
 DHT_STATE_FILE       = "echocoin_lt_dht.dat"
 SAVE_INTERVAL        = 300
@@ -80,16 +49,11 @@ STAGE_FLUSH_INTERVAL = 15     # drain candidates and rank every 15 s
 
 class Discovery:
 
-    # Bounded thread pool for peer validation. Cap at 32 so a burst of
-    # 256 DHT alerts doesn't spawn 256 simultaneous HTTP connections.
-    _VALIDATE_WORKERS = 32
-
     def __init__(self, pool, genesis_hash, port, node_pubkey_hex=""):
         self.pool               = pool
         self.genesis_hash       = genesis_hash
         self.port               = port
         self.node_pubkey_hex    = node_pubkey_hex
-        self._validate_executor = ThreadPoolExecutor(max_workers=self._VALIDATE_WORKERS)
         self._external_ip       = None   # set by UPnP in run()
         # Staging set: raw addresses from all sources, merged before ranking.
         self._candidates        = set()
@@ -131,19 +95,20 @@ class Discovery:
         my_offset = self._my_write_offset() if self.node_pubkey_hex else 0
         self._my_slot = my_slot  # stored so _bep44_get_all can skip it
 
-        # Stagger the first put by my_offset so all nodes don't announce at once.
-        put_delay   = PUT_DELAY + my_offset % 300
-        tick_flush  = _Ticker(STAGE_FLUSH_INTERVAL,  fire_immediately=True)
-        tick_get    = _Ticker(GET_INTERVAL,           fire_immediately=True)
-        tick_crawl  = _Ticker(GET_INTERVAL,           fire_immediately=False)
-        tick_put    = _Ticker(PUT_REFRESH_INTERVAL,   fire_immediately=False)
-        tick_save   = _Ticker(SAVE_INTERVAL,          fire_immediately=False)
-        start_time  = time.monotonic()
+        # Stagger the first put so all nodes don't announce simultaneously.
+        put_delay = PUT_DELAY + my_offset % 300
+        now = time.monotonic()
+
+        last_flush = now - STAGE_FLUSH_INTERVAL   # fire immediately
+        last_get   = now                           # fire after first interval
+        last_crawl = now
+        last_put   = now - PUT_REFRESH_INTERVAL + put_delay
+        last_save  = now
 
         # Initial BEP44 + genesis-hash torrent lookup immediately after bootstrap.
         self._bep44_get_all(ses)
         self._torrent_get_peers(ses)
-        tick_get.reset(time.monotonic())
+        last_get = time.monotonic()
 
         while True:
             alert_event.wait(timeout=1)
@@ -154,44 +119,36 @@ class Discovery:
             now    = time.monotonic()
             at_max = self.pool.count() >= self.pool._max_peers
 
-            if tick_flush.ready(now):
-                self._validate_executor.submit(self._flush_candidates)
-                tick_flush.reset(now)
+            if now - last_flush >= STAGE_FLUSH_INTERVAL:
+                self._flush_candidates()
+                last_flush = now
 
-            tick_get._interval = 300 if at_max else GET_INTERVAL
-            if tick_get.ready(now):
+            get_interval = 300 if at_max else GET_INTERVAL
+            if now - last_get >= get_interval:
                 self._bep44_get_all(ses)
                 self._torrent_get_peers(ses)
-                tick_get.reset(now)
+                last_get = now
 
-            tick_crawl._interval = CRAWL_INTERVAL if at_max else GET_INTERVAL
-            if tick_crawl.ready(now):
-                self._validate_executor.submit(self._crawl_and_enqueue)
-                tick_crawl.reset(now)
+            crawl_interval = CRAWL_INTERVAL if at_max else GET_INTERVAL
+            if now - last_crawl >= crawl_interval:
+                self._crawl_and_enqueue()
+                last_crawl = now
 
-            # First put is staggered by put_delay (= PUT_DELAY + node-specific offset)
-            # so all nodes don't hammer the DHT simultaneously on startup.
-            if tick_put._last == 0.0 and tick_put._first_seen == 0.0:
-                tick_put._first_seen = start_time  # override: measure from bootstrap, not loop start
-                tick_put._interval   = put_delay
-            elif tick_put._last != 0.0:
-                tick_put._interval   = PUT_REFRESH_INTERVAL  # restore normal cadence after first fire
-            put_ready = tick_put.ready(now)
-            if put_ready:
+            if now - last_put >= PUT_REFRESH_INTERVAL:
                 my_addr = f"{self._my_ip()}:{self.port}"
                 self._bep44_put(ses, my_slot, my_addr)
                 self._torrent_announce(ses)
-                tick_put.reset(now)
+                last_put = now
 
             self.pool.evict_stale()
-            if tick_save.ready(now):
+            if now - last_save >= SAVE_INTERVAL:
                 self._save_peer_cache()
                 self._save_lt_state(ses)
                 new_ip = self._upnp_map_port()
                 if new_ip and new_ip != self._external_ip:
                     log.info("[upnp] external IP changed: %s -> %s", self._external_ip, new_ip)
                     self._external_ip = new_ip
-                tick_save.reset(now)
+                last_save = now
 
     # ------------------------------------------------------------------
     # Alert processing
@@ -256,49 +213,39 @@ class Discovery:
 
         log.debug("[peer] flushing %d candidates", len(fresh))
 
-        # Fetch /api/peers from every candidate in parallel.
-        # This gives us one-hop graph data without doing any genesis work yet.
-        def fetch_peers(addr):
+        # Probe each candidate via /api/info: one trip gives genesis hash + peer list.
+        def probe(addr):
             try:
-                r = requests.get(f"http://{addr}/api/peers", timeout=3)
+                r = requests.get(f"http://{addr}/api/info", timeout=3)
                 if r.status_code == 200:
-                    return addr, r.json().get("peers", [])
+                    return addr, r.json()
             except Exception:
                 pass
-            return addr, None   # None = unreachable
+            return addr, None
 
         nominations: dict[str, int] = {}
-        reachable: set[str] = set()
+        valid: dict[str, dict] = {}
 
         with ThreadPoolExecutor(max_workers=min(len(fresh), 32)) as ex:
-            for addr, peers in ex.map(fetch_peers, fresh):
-                if peers is None:
-                    # Candidate didn't respond at all -- don't waste a
-                    # _validate_and_add call, just discard silently.
+            for addr, info in ex.map(probe, fresh):
+                if info is None:
                     continue
-                reachable.add(addr)
-                # Count cross-nominations among the candidates themselves.
-                # A candidate nominated by many of its peers' peers is
-                # already well-connected; one nominated by few is a potential
-                # bridge to a different part of the graph.
-                for p in peers:
+                if info.get("genesis_hash") != self.genesis_hash:
+                    log.debug("[peer] rejected %s, genesis mismatch", addr)
+                    continue
+                valid[addr] = info
+                for p in info.get("peers", []):
                     if isinstance(p, str) and p in fresh and p != addr:
                         nominations[p] = nominations.get(p, 0) + 1
 
-        if not reachable:
+        if not valid:
             return
 
-        # Sort reachable candidates by ascending nomination count.
-        # Ties broken arbitrarily. Lightly-nominated first = path diversity.
-        ranked = sorted(reachable, key=lambda a: nominations.get(a, 0))
-
-        log.info("[peer] ranked %d reachable candidates  unique=%d  cross_nominated=%d",
-                 len(ranked),
-                 sum(1 for a in ranked if nominations.get(a, 0) == 0),
-                 sum(1 for a in ranked if nominations.get(a, 0) > 0))
-
+        ranked = sorted(valid, key=lambda a: nominations.get(a, 0))
+        log.info("[peer] admitting %d valid candidates", len(ranked))
         for addr in ranked:
-            self._validate_executor.submit(self._validate_and_add, addr)
+            if self.pool.add(addr):
+                log.info("[peer] connected  addr=%s  pool=%d", addr, self.pool.count())
 
     # ------------------------------------------------------------------
     # Crawl current pool to enqueue deeper candidates
@@ -338,36 +285,10 @@ class Discovery:
             log.debug("[peer] crawl enqueued %d candidates", count)
 
     # ------------------------------------------------------------------
-    # Genesis check + pool admission
-    # ------------------------------------------------------------------
-
-    def _validate_and_add(self, peer_addr):
-        """Final step: genesis check via /api/info, then pool admission.
-        Only called after the candidate has already responded to /api/peers
-        (in _flush_candidates), so timeouts here are genuinely unexpected."""
-        try:
-            r = requests.get(f"http://{peer_addr}/api/info", timeout=3)
-            if r.status_code != 200:
-                self.pool.strike(peer_addr)
-                return
-            info = r.json()
-            if info.get("genesis_hash") != self.genesis_hash:
-                log.debug("[peer] rejected %s, genesis mismatch", peer_addr)
-                self.pool.remove(peer_addr)
-                return
-            if self.pool.add(peer_addr):
-                log.info("[peer] connected  addr=%s  pool=%d", peer_addr, self.pool.count())
-        except requests.exceptions.Timeout:
-            log.debug("[peer] validation timed out  addr=%s", peer_addr)
-        except Exception:
-            log.debug("[peer] validation failed  addr=%s", peer_addr, exc_info=True)
-            self.pool.strike(peer_addr)
-
-    # ------------------------------------------------------------------
     # BEP44 helpers
     # ------------------------------------------------------------------
 
-    _PUBLIC_IP_SERVICES: ClassVar[tuple[str, ...]] = (
+    _PUBLIC_IP_SERVICES = (
         "https://api.ipify.org",
         "https://icanhazip.com",
         "https://checkip.amazonaws.com",
