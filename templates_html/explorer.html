@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Block Explorer</h2>
+<div class="card">
+  <table>
+    <thead><tr><th>Height</th><th>Hash</th><th>Txs</th><th>Builder</th><th>Fee rate</th></tr></thead>
+    <tbody>
+    {% if recent %}
+      {% for b in recent %}
+      <tr>
+        <td><a href="/explorer/block/{{ b.height }}">{{ b.height }}</a></td>
+        <td class="hash"><a href="/explorer/block/{{ b.height }}">{{ b.hash[:32] }}…</a></td>
+        <td>{{ b.transactions | length }}</td>
+        <td class="hash-short">{{ (b.builder or '')[:20] }}{% if b.builder %}…{% endif %}</td>
+        <td>{{ fmt_fee_rate(b.fee_rate) }}</td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="5" style="color:var(--muted);text-align:center">No blocks yet</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

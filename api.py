@@ -1,6 +1,5 @@
-"""HTTP API + node UI + whitepaper renderer. Thin wrapper over node + pool."""
+"""HTTP API + node UI. Thin wrapper over node + pool. No HTML here."""
 
-import html
 import logging
 import os
 import threading
@@ -8,30 +7,26 @@ import time
 from collections import OrderedDict
 
 import markdown
-from flask import Flask, jsonify, render_template_string, request
+from flask import Flask, jsonify, render_template, request
 
 import crypto as crypto_mod
+import pob as pob_mod
 import tx as tx_mod
-from params import RINGS_PER_ECH, SUPPLY_CAP
+from params import POB_WINDOW, RINGS_PER_ECH, SUPPLY_CAP
+from pob import BURN_ADDRESS
 
 
 def fmt_balance(rings):
-    """Format a raw ring integer as 'X ECH Y rings' for display."""
-    ech  = rings // RINGS_PER_ECH
-    rem  = rings % RINGS_PER_ECH
+    ech = rings // RINGS_PER_ECH
+    rem = rings % RINGS_PER_ECH
     return f"{ech} ECH {rem:,} rings"
 
 
 def fmt_fee_rate(rings_per_byte):
-    """Format a fee rate (rings/byte) as ECH/byte with appropriate precision.
-
-    At INITIAL_FEE_RATE=1000 rings/byte: 0.00001 ECH/byte -- shown as 1e-05.
-    Switches to fixed notation once the value is >= 0.001 ECH/byte.
-    """
-    ech_per_byte = rings_per_byte / RINGS_PER_ECH
-    if ech_per_byte >= 0.001:
-        return f"{ech_per_byte:.6f} ECH/byte"
-    return f"{ech_per_byte:.2e} ECH/byte"
+    ech = rings_per_byte / RINGS_PER_ECH
+    if ech >= 0.001:
+        return f"{ech:.6f} ECH/byte"
+    return f"{ech:.2e} ECH/byte"
 
 
 log = logging.getLogger("ec.api")
@@ -39,13 +34,9 @@ log = logging.getLogger("ec.api")
 # ---------------------------------------------------------------------------
 # Rate limiting
 # ---------------------------------------------------------------------------
-# Simple per-source-IP token bucket, in-process/in-memory (fine for a
-# single-node deployment; would need a shared store like Redis behind a
-# load balancer). Protects endpoints that trigger expensive crypto work
-# (FALCON-512 verification, fee recomputation) from being flooded by an
-# unauthenticated caller: without this, POST /api/receive_tx and
-# /api/receive_block have no cost to the caller but real CPU cost to
-# us, and that CPU contends with the same process's VDF/validation loop.
+
+_RATE_LIMITER_MAX_BUCKETS = 10_000
+
 
 class _TokenBucket:
     def __init__(self, capacity, refill_per_second):
@@ -67,17 +58,7 @@ class _TokenBucket:
             return False
 
 
-# Maximum number of distinct IPs tracked by the rate limiter. Beyond this,
-# new IPs are denied immediately. Prevents unbounded memory growth from
-# scanners cycling through addresses.
-_RATE_LIMITER_MAX_BUCKETS = 10_000
-
-
 class RateLimiter:
-    """capacity: burst size. refill_per_second: sustained rate after burst.
-    Uses LRU eviction so that inactive IPs age out and new IPs are always
-    admitted, even when the table is at capacity.
-    """
     def __init__(self, capacity=20, refill_per_second=5):
         self.capacity = capacity
         self.refill_per_second = refill_per_second
@@ -87,11 +68,9 @@ class RateLimiter:
     def allow(self, key):
         with self._lock:
             if key in self._buckets:
-                # Move to end (most recently used).
                 self._buckets.move_to_end(key)
             else:
                 if len(self._buckets) >= _RATE_LIMITER_MAX_BUCKETS:
-                    # Evict the least recently used bucket.
                     self._buckets.popitem(last=False)
                 self._buckets[key] = _TokenBucket(self.capacity, self.refill_per_second)
             bucket = self._buckets[key]
@@ -99,12 +78,9 @@ class RateLimiter:
 
 
 def _rate_limited(limiter):
-    """Decorator: 429s the request before the view function (and whatever
-    expensive validation it does) ever runs."""
     def decorator(fn):
         def wrapped(*args, **kwargs):
-            key = request.remote_addr or "unknown"
-            if not limiter.allow(key):
+            if not limiter.allow(request.remote_addr or "unknown"):
                 return jsonify({"ok": False, "error": "rate limited"}), 429
             return fn(*args, **kwargs)
         wrapped.__name__ = fn.__name__
@@ -112,16 +88,14 @@ def _rate_limited(limiter):
     return decorator
 
 # ---------------------------------------------------------------------------
-# Templates
+# Helpers
 # ---------------------------------------------------------------------------
 
-from templates import _BASE, _STATS_BODY
-import pob as pob_mod
-from pob import BURN_ADDRESS
+_TX_REQUIRED_FIELDS = {"from", "pubkey", "outputs", "nonce", "fee_height", "fee", "signature"}
+_LOCALHOST = ("127.0.0.1", "::1")
 
 
 def _parse_sender(data):
-    """Extract sender addr from inbound message data."""
     port = data.get("sender_port")
     if port is None:
         return None
@@ -135,103 +109,72 @@ def _parse_sender(data):
 
 
 def _register_sender(discovery, data):
-    """Enqueue the block sender as a discovery candidate.
-    They spoke the protocol so they're worth probing, but they go through
-    the same nomination-ranked pipeline as every other source."""
     addr = _parse_sender(data)
     if addr:
         discovery.enqueue_candidate(addr)
 
 
 def _strike_sender(pool, data):
-    """Strike the sender for sending invalid data."""
     addr = _parse_sender(data)
     if addr:
         pool.strike(addr)
 
 
-_TX_REQUIRED_FIELDS = {"from", "pubkey", "outputs", "nonce", "fee_height", "fee", "signature"}
+def _burn_window_data(chain, from_addr):
+    """Compute burn totals and history over the last POB_WINDOW blocks."""
+    window = chain[-POB_WINDOW:] if len(chain) > POB_WINDOW else chain
+    burn_totals = {}
+    burn_history = []
+    for blk in reversed(window):
+        for tx in blk.get("transactions", []):
+            tx_burns = sum(
+                o["amount"] for o in tx.get("outputs", [])
+                if o.get("to") == BURN_ADDRESS
+            )
+            if tx_burns:
+                addr = tx.get("from", "")
+                burn_totals[addr] = burn_totals.get(addr, 0) + tx_burns
+                burn_history.append({"height": blk["height"], "addr": addr, "amount": tx_burns})
+    scores = {addr: pob_mod.score(chain, addr) for addr in burn_totals}
+    return burn_totals, burn_history, scores
+
+# ---------------------------------------------------------------------------
+# App factory
+# ---------------------------------------------------------------------------
 
 
 def create_app(node, pool, net_in_q, discovery):
-    app = Flask(__name__)
-    tx_limiter    = RateLimiter(capacity=20, refill_per_second=5)   # tx submissions
-    block_limiter = RateLimiter(capacity=10, refill_per_second=2)   # block receives
-
+    app = Flask(__name__, template_folder="templates_html")
+    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate)
     app.logger.setLevel(logging.WARNING)
 
-    # ---- Dashboard -------------------------------------------------------
+    tx_limiter    = RateLimiter(capacity=20, refill_per_second=5)
+    block_limiter = RateLimiter(capacity=10, refill_per_second=2)
+
+    # ---- UI pages --------------------------------------------------------
 
     @app.route("/")
     def dashboard():
         info = node.get_info()
-        chain = node.view.chain   # snapshot: avoids RuntimeError if mining thread appends mid-iteration
-        tip  = chain[-1]
-        recent_blocks = chain[-10:][::-1]
-
-        blocks_html = ""
-        for b in recent_blocks:
-            tx_count  = len(b["transactions"])
-            builder   = b.get("builder") or ""
-            blocks_html += f"""
-            <tr>
-              <td><a href="/explorer/block/{b['height']}">{b['height']}</a></td>
-              <td class="hash-short">{b['hash'][:20]}…</td>
-              <td>{tx_count}</td>
-              <td class="hash-short">{builder[:20] + "…" if builder else ""}</td>
-              <td>{fmt_fee_rate(b['fee_rate'])}</td>
-            </tr>"""
-
-        body = f"""
-        <div class="stats" style="margin-bottom:1rem">
-          <div class="stat"><div class="stat-label">Height</div><div class="stat-value">{info['height']}</div></div>
-          <div class="stat"><div class="stat-label">Mempool</div><div class="stat-value">{info['mempool_size']}</div></div>
-          <div class="stat"><div class="stat-label">Peers</div><div class="stat-value">{info['peer_count']}</div></div>
-          <div class="stat"><div class="stat-label">Fee Rate</div><div class="stat-value">{fmt_fee_rate(info['fee_rate'])}</div></div>
-        </div>
-        <div class="card">
-          <div class="card-title">Your address</div>
-          <div class="hash">{info['address']}</div>
-        </div>
-        <div class="card">
-          <div class="card-title">Tip hash</div>
-          <div class="hash">{tip['hash']}</div>
-        </div>
-        <div class="card">
-          <div class="card-title">Recent blocks</div>
-          <table>
-            <thead><tr><th>Height</th><th>Hash</th><th>Txs</th><th>Builder</th><th>Fee rate</th></tr></thead>
-            <tbody>{blocks_html}</tbody>
-          </table>
-        </div>"""
-        return render_template_string(_BASE.format(title="Dashboard", body=body))
-
-    # ---- Send ------------------------------------------------------------
+        chain = node.view.chain
+        return render_template("dashboard.html", title="Dashboard",
+            info=info, tip=chain[-1], recent_blocks=chain[-10:][::-1])
 
     @app.route("/send", methods=["GET", "POST"])
     def send():
-        # Signing key handling: restrict to localhost. Remote access requires an SSH tunnel.
-        # The passphrase is only needed when the mining loop is not running (KEK not cached).
-        # Any node can send -- mining is not required.
-        if request.remote_addr not in ("127.0.0.1", "::1"):
+        if request.remote_addr not in _LOCALHOST:
             return jsonify({"ok": False, "error": "localhost only"}), 403
-        alert = ""
-        from_addr = node.addr
-        v          = node.view
-        fee_rate   = v.tip["fee_rate"]
-        state      = v.state
-        nonce      = state.get_nonce(from_addr) + 1
-        balance    = state.get_balance(from_addr)
-
+        v = node.view
+        ctx = dict(title="Send", from_addr=node.addr, balance=v.state.get_balance(node.addr),
+                   nonce=v.state.get_nonce(node.addr) + 1, fee_rate=v.tip["fee_rate"],
+                   alert_ok="", alert_err="")
         if request.method == "POST":
             outputs_raw = request.form.get("outputs", "").strip()
             passphrase  = request.form.get("passphrase", "").strip()
             csv_file    = request.files.get("csv_file")
             if csv_file and csv_file.filename:
                 outputs_raw = csv_file.read().decode()
-
-            outputs = []
-            errors  = []
+            outputs, errors = [], []
             for i, line in enumerate(outputs_raw.splitlines()):
                 line = line.strip()
                 if not line or line.startswith("#"):
@@ -241,100 +184,42 @@ def create_app(node, pool, net_in_q, discovery):
                     errors.append(f"line {i+1}: expected 'address,amount'")
                     continue
                 try:
-                    amount = int(parts[1])
+                    outputs.append({"to": parts[0], "amount": int(parts[1])})
                 except ValueError:
                     errors.append(f"line {i+1}: amount must be an integer")
-                    continue
-                outputs.append({"to": parts[0], "amount": amount})
-
             if errors:
-                alert = f'<div class="alert alert-err">{"<br>".join(errors)}</div>'
+                ctx["alert_err"] = "<br>".join(errors)
             elif not outputs:
-                alert = '<div class="alert alert-err">No valid outputs.</div>'
+                ctx["alert_err"] = "No valid outputs."
             elif not passphrase and not node.is_signing_active():
-                alert = '<div class="alert alert-err">Passphrase required to sign (leave blank if the mining loop is already running).</div>'
+                ctx["alert_err"] = "Passphrase required (leave blank if mining loop is active)."
             else:
                 try:
                     t, _fee = node.build_and_sign_tx(outputs, passphrase or None)
                     ok, result = node.submit_tx_from_api(t)
                     if ok:
-                        alert = f'<div class="alert alert-ok">Sent. tx hash: <span class="hash">{result}</span></div>'
+                        ctx["alert_ok"] = f'Sent. tx hash: <span class="hash">{result}</span>'
                     else:
-                        alert = f'<div class="alert alert-err">Error: {result}</div>'
+                        ctx["alert_err"] = f"Error: {result}"
                 except Exception as e:
-                    alert = f'<div class="alert alert-err">Error: {e}</div>'
-
-        body = f"""
-        <h2>Send</h2>
-        {alert}
-        <div class="card">
-          <div class="card-title">Your address</div>
-          <div class="hash" style="margin-bottom:.5rem">{from_addr}</div>
-          <div class="stat-label">Balance: <strong style="color:var(--green)">{fmt_balance(balance)}</strong> &nbsp;|&nbsp; Nonce: {nonce} &nbsp;|&nbsp; Fee rate: {fmt_fee_rate(fee_rate)}</div>
-        </div>
-        <div class="card">
-          <div class="card-title">Outputs — paste CSV (address,amount) or upload file</div>
-          <form method="POST" enctype="multipart/form-data">
-            <div class="form-group">
-              <label>CSV outputs (one per line: address,amount)</label>
-              <textarea name="outputs" rows="6" placeholder="word1.word2...word12,1000&#10;word1.word2...word12,500"></textarea>
-            </div>
-            <div class="form-group">
-              <label>Or upload CSV file</label>
-              <input type="file" name="csv_file" accept=".csv,.txt">
-            </div>
-            <div class="form-group">
-              <label>Your signing passphrase (leave blank if mining loop is active)</label>
-              <input type="password" name="passphrase" placeholder="Your passphrase to sign the transaction">
-            </div>
-            <button type="submit">Sign &amp; Send</button>
-          </form>
-        </div>"""
-        return render_template_string(_BASE.format(title="Send", body=body))
-
-
-    # ---- Burn ------------------------------------------------------------
+                    ctx["alert_err"] = f"Error: {e}"
+        return render_template("send.html", **ctx)
 
     @app.route("/burn", methods=["GET", "POST"])
     def burn():
-        if request.remote_addr not in ("127.0.0.1", "::1"):
+        if request.remote_addr not in _LOCALHOST:
             return jsonify({"ok": False, "error": "localhost only"}), 403
-
-        alert = ""
-        v         = node.view
-        chain     = v.chain
-        tip       = v.tip
-        state     = v.state
-        from_addr = node.addr
-        fee_rate  = tip["fee_rate"]
-        balance   = state.get_balance(from_addr)
-        nonce     = state.get_nonce(from_addr) + 1
-
-        # Build per-address burn totals over the last POB_WINDOW blocks
-        from params import POB_WINDOW
-        window = chain[-POB_WINDOW:] if len(chain) > POB_WINDOW else chain
-        burn_totals: dict[str, int] = {}
-        burn_history: list[dict]    = []
-        for blk in reversed(window):
-            for tx in blk.get("transactions", []):
-                tx_burns = sum(
-                    o["amount"] for o in tx.get("outputs", [])
-                    if o.get("to") == BURN_ADDRESS
-                )
-                if tx_burns:
-                    addr = tx.get("from", "")
-                    burn_totals[addr] = burn_totals.get(addr, 0) + tx_burns
-                    burn_history.append({
-                        "height": blk["height"],
-                        "addr":   addr,
-                        "amount": tx_burns,
-                    })
-
-        my_burn    = burn_totals.get(from_addr, 0)
-        my_score   = pob_mod.score(chain, from_addr)
-        total_burn = sum(burn_totals.values())
-
-        # Handle burn form POST
+        v = node.view
+        chain = v.chain
+        balance = v.state.get_balance(node.addr)
+        burn_totals, burn_history, scores = _burn_window_data(chain, node.addr)
+        ctx = dict(title="Burn", from_addr=node.addr, balance=balance,
+                   my_burn=burn_totals.get(node.addr, 0),
+                   my_score=pob_mod.score(chain, node.addr),
+                   total_burn=sum(burn_totals.values()),
+                   sorted_burners=sorted(burn_totals.items(), key=lambda x: -x[1]),
+                   burn_history=burn_history, scores=scores,
+                   pob_window=POB_WINDOW, alert_ok="", alert_err="")
         if request.method == "POST":
             raw        = request.form.get("amount", "").strip()
             passphrase = request.form.get("passphrase", "").strip()
@@ -343,303 +228,85 @@ def create_app(node, pool, net_in_q, discovery):
                 if burn_rings <= 0:
                     raise ValueError("must be positive")
             except ValueError as e:
-                alert = f'<div class="alert alert-err">Invalid amount: {e}</div>'
+                ctx["alert_err"] = f"Invalid amount: {e}"
             else:
                 if not passphrase and not node.is_signing_active():
-                    alert = '<div class="alert alert-err">Passphrase required (leave blank if mining loop is active).</div>'
+                    ctx["alert_err"] = "Passphrase required (leave blank if mining loop is active)."
                 elif burn_rings > balance:
-                    alert = '<div class="alert alert-err">Insufficient balance.</div>'
+                    ctx["alert_err"] = "Insufficient balance."
                 else:
                     try:
-                        outputs = [{"to": BURN_ADDRESS, "amount": burn_rings}]
-                        t, _fee = node.build_and_sign_tx(outputs, passphrase or None)
+                        t, _fee = node.build_and_sign_tx(
+                            [{"to": BURN_ADDRESS, "amount": burn_rings}], passphrase or None)
                         ok, result = node.submit_tx_from_api(t)
                         if ok:
-                            alert = f'<div class="alert alert-ok">Burn submitted. tx: <span class="hash">{result}</span></div>'
+                            ctx["alert_ok"] = f'Burn submitted. tx: <span class="hash">{result}</span>'
                         else:
-                            alert = f'<div class="alert alert-err">Error: {result}</div>'
+                            ctx["alert_err"] = f"Error: {result}"
                     except Exception as e:
-                        alert = f'<div class="alert alert-err">Error: {e}</div>'
-
-        # Leaderboard rows
-        sorted_burners = sorted(burn_totals.items(), key=lambda x: -x[1])
-        lb_rows = ""
-        for rank, (addr, amount) in enumerate(sorted_burners[:20], 1):
-            is_me = " style=\"color:var(--green)\"" if addr == from_addr else ""
-            lb_rows += f"""
-            <tr>
-              <td>{rank}</td>
-              <td class="hash-short"{is_me}>{addr}</td>
-              <td>{fmt_balance(amount)}</td>
-              <td>{fmt_balance(pob_mod.score(chain, addr))}</td>
-            </tr>"""
-
-        if not lb_rows:
-            lb_rows = '<tr><td colspan="4" style="color:var(--muted);text-align:center">No burns in the last ' + str(POB_WINDOW) + ' blocks.</td></tr>'
-
-        # Recent burn history rows (latest first, cap at 30)
-        hist_rows = ""
-        for entry in burn_history[:30]:
-            is_me = " style=\"color:var(--green)\"" if entry["addr"] == from_addr else ""
-            hist_rows += f"""
-            <tr>
-              <td><a href="/explorer/block/{entry['height']}">{entry['height']}</a></td>
-              <td class="hash-short"{is_me}>{entry['addr']}</td>
-              <td>{fmt_balance(entry['amount'])}</td>
-            </tr>"""
-
-        if not hist_rows:
-            hist_rows = '<tr><td colspan="3" style="color:var(--muted);text-align:center">None yet.</td></tr>'
-
-        body = f"""
-        <h2>Burn</h2>
-        {alert}
-        <div class="stats" style="margin-bottom:1rem">
-          <div class="stat">
-            <div class="stat-label">Your balance</div>
-            <div class="stat-value" style="font-size:1rem">{fmt_balance(balance)}</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Your burns (last {POB_WINDOW} blocks)</div>
-            <div class="stat-value" style="font-size:1rem">{fmt_balance(my_burn)}</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Your PoB score</div>
-            <div class="stat-value" style="font-size:1rem;font-family:var(--mono)">{my_score:,}</div>
-          </div>
-          <div class="stat">
-            <div class="stat-label">Network burns (last {POB_WINDOW} blocks)</div>
-            <div class="stat-value" style="font-size:1rem">{fmt_balance(total_burn)}</div>
-          </div>
-        </div>
-
-        <div class="card">
-          <div class="card-title">Burn coins to earn block-building priority</div>
-          <p style="color:var(--muted);font-size:.85rem;margin-bottom:.75rem">
-            Burned coins are permanently destroyed and recycled into the emission pool.
-            Larger recent burns give you a lower (better) PoB score and higher chance
-            of winning each block slot. Burns count for the last {POB_WINDOW} blocks (~{POB_WINDOW * 2 // 60}h).
-          </p>
-          <form method="POST">
-            <div class="form-group">
-              <label>Amount to burn (rings)</label>
-              <input type="number" name="amount" min="1" max="{balance}" placeholder="e.g. 1000000 rings = 0.01 ECH">
-            </div>
-            <div class="form-group">
-              <label>Your signing passphrase (leave blank if mining loop is active)</label>
-              <input type="password" name="passphrase" placeholder="Passphrase">
-            </div>
-            <button type="submit" style="background:var(--red)">Burn</button>
-          </form>
-        </div>
-
-        <div class="card">
-          <div class="card-title">Burn leaderboard (last {POB_WINDOW} blocks)</div>
-          <table>
-            <thead><tr><th>#</th><th>Address</th><th>Total burned</th><th>Current score</th></tr></thead>
-            <tbody>{lb_rows}</tbody>
-          </table>
-        </div>
-
-        <div class="card">
-          <div class="card-title">Recent burns</div>
-          <table>
-            <thead><tr><th>Block</th><th>Address</th><th>Amount</th></tr></thead>
-            <tbody>{hist_rows}</tbody>
-          </table>
-        </div>"""
-        return render_template_string(_BASE.format(title="Burn", body=body))
-
-    # ---- Block explorer --------------------------------------------------
+                        ctx["alert_err"] = f"Error: {e}"
+        return render_template("burn.html", **ctx)
 
     @app.route("/explorer")
     def explorer():
-        recent = node.view.chain[-20:][::-1]
-        rows = ""
-        for b in recent:
-            rows += f"""<tr>
-              <td><a href="/explorer/block/{b['height']}">{b['height']}</a></td>
-              <td class="hash"><a href="/explorer/block/{b['height']}">{b['hash'][:32]}…</a></td>
-              <td>{len(b['transactions'])}</td>
-              <td class="hash-short">{(b.get("builder") or "")[:20] + "…" if b.get("builder") else ""}</td>
-              <td>{fmt_fee_rate(b['fee_rate'])}</td>
-            </tr>"""
-
-        body = f"""
-        <h2>Block Explorer</h2>
-        <div class="card">
-          <table>
-            <thead><tr><th>Height</th><th>Hash</th><th>Txs</th><th>Builder</th><th>Fee rate</th></tr></thead>
-            <tbody>{rows or '<tr><td colspan="5" style="color:var(--muted);text-align:center">No blocks yet</td></tr>'}</tbody>
-          </table>
-        </div>"""
-        return render_template_string(_BASE.format(title="Explorer", body=body))
+        return render_template("explorer.html", title="Explorer",
+            recent=node.view.chain[-20:][::-1])
 
     @app.route("/explorer/block/<int:height>")
     def block_detail(height):
         chain = node.view.chain
         if height < 0 or height >= len(chain):
-            return render_template_string(_BASE.format(title="Not found",
-                body='<div class="alert alert-err">Block not found.</div>')), 404
-
-        b   = chain[height]
-        msg = html.escape(b.get("message", ""))
-
-        tx_rows = ""
-        for t in b["transactions"]:
-            h = tx_mod.tx_hash(t)
-            total = sum(o["amount"] for o in t["outputs"])
-            tx_rows += f"""<tr>
-              <td class="hash-short"><a href="/explorer/tx/{h}">{h[:20]}…</a></td>
-              <td class="hash-short">{t['from'][:24]}…</td>
-              <td>{total}</td>
-              <td>{t['fee']}</td>
-            </tr>"""
-
-        builder = html.escape(b.get("builder") or "")
-
-        body = f"""
-        <h2>Block {height}</h2>
-        {f'<div class="alert alert-ok">{msg}</div>' if msg else ''}
-        <div class="card">
-          <div class="card-title">Block details</div>
-          <table>
-            <tr><td style="color:var(--muted);width:140px">Hash</td><td class="hash">{b['hash']}</td></tr>
-            <tr><td style="color:var(--muted)">Previous</td><td class="hash">{b['previous_hash']}</td></tr>
-            <tr><td style="color:var(--muted)">Height</td><td>{b['height']}</td></tr>
-            <tr><td style="color:var(--muted)">Transactions</td><td>{len(b['transactions'])}</td></tr>
-            <tr><td style="color:var(--muted)">Builder</td><td class="hash-short">{builder or "(none)"}</td></tr>
-            <tr><td style="color:var(--muted)">Fee rate</td><td>{fmt_fee_rate(b['fee_rate'])}</td></tr>
-          </table>
-        </div>
-        <div class="card">
-          <div class="card-title">Transactions</div>
-          <table>
-            <thead><tr><th>Hash</th><th>From</th><th>Total sent</th><th>Fee</th></tr></thead>
-            <tbody>{tx_rows or '<tr><td colspan="4" style="color:var(--muted);text-align:center">No transactions</td></tr>'}</tbody>
-          </table>
-        </div>
-        <a href="/explorer/block/{height-1}" style="margin-right:1rem">&larr; prev</a>
-        {'<a href="/explorer/block/'+str(height+1)+'">&rarr; next</a>' if height+1 < len(chain) else ''}
-        """
-        return render_template_string(_BASE.format(title=f"Block {height}", body=body))
+            return render_template("error.html", title="Not found",
+                message="Block not found."), 404
+        b = chain[height]
+        tx_rows = [(tx_mod.tx_hash(t), t, sum(o["amount"] for o in t["outputs"]))
+                   for t in b["transactions"]]
+        return render_template("block_detail.html", title=f"Block {height}",
+            b=b, tx_rows=tx_rows, has_next=height + 1 < len(chain))
 
     @app.route("/explorer/tx/<tx_hash>")
     def tx_detail(tx_hash):
-        found = None
-        found_height = None
-        # Use the tx_index for O(1) lookup.
+        found = found_height = None
         height = node.storage.get_tx_height(tx_hash)
         if height is not None:
             chain = node.view.chain
             if 0 <= height < len(chain):
                 for t in chain[height]["transactions"]:
                     if tx_mod.tx_hash(t) == tx_hash:
-                        found = t
-                        found_height = height
+                        found, found_height = t, height
                         break
         if not found:
             found = node.mempool.get(tx_hash)
-
         if not found:
-            return render_template_string(_BASE.format(title="Not found",
-                body='<div class="alert alert-err">Transaction not found.</div>')), 404
-
-        out_rows = "".join(
-            f"<tr><td class='hash-short'>{o['to']}</td><td>{o['amount']}</td></tr>"
-            for o in found["outputs"]
-        )
+            return render_template("error.html", title="Not found",
+                message="Transaction not found."), 404
         location = f"Block {found_height}" if found_height is not None else "Mempool (unconfirmed)"
-
-        body = f"""
-        <h2>Transaction</h2>
-        <div class="card">
-          <table>
-            <tr><td style="color:var(--muted);width:120px">Hash</td><td class="hash">{tx_hash}</td></tr>
-            <tr><td style="color:var(--muted)">Status</td><td>{location}</td></tr>
-            <tr><td style="color:var(--muted)">From</td><td class="hash-short">{found['from']}</td></tr>
-            <tr><td style="color:var(--muted)">Nonce</td><td>{found['nonce']}</td></tr>
-            <tr><td style="color:var(--muted)">Fee</td><td>{found['fee']}</td></tr>
-            <tr><td style="color:var(--muted)">Fee height</td><td>{found['fee_height']}</td></tr>
-          </table>
-        </div>
-        <div class="card">
-          <div class="card-title">Outputs</div>
-          <table>
-            <thead><tr><th>To</th><th>Amount</th></tr></thead>
-            <tbody>{out_rows}</tbody>
-          </table>
-        </div>"""
-        return render_template_string(_BASE.format(title="Transaction", body=body))
-
-    # ---- Address lookup --------------------------------------------------
+        return render_template("tx_detail.html", title="Transaction",
+            tx_hash=tx_hash, tx=found, location=location)
 
     @app.route("/address", methods=["GET", "POST"])
     def address_lookup():
-        addr  = request.args.get("addr", "").strip()
-        addr_html = html.escape(addr)
-        alert = ""
-        content = ""
-
+        addr = request.args.get("addr", "").strip()
+        ctx = dict(title="Address", addr=addr, alert_err="", history=None,
+                   balance=0, nonce=0)
         if addr and not crypto_mod.is_valid_address(addr):
-            alert = '<div class="alert alert-err">Invalid address format.</div>'
-            addr = ""
-        if addr:
-            v       = node.view
-            state   = v.state
-            balance = state.get_balance(addr)
-            nonce   = state.get_nonce(addr)
-            # O(1) lookup via addr_index, then fetch each tx from the chain.
+            ctx["alert_err"] = "Invalid address format."
+            ctx["addr"] = ""
+        elif addr:
+            v = node.view
+            ctx["balance"] = v.state.get_balance(addr)
+            ctx["nonce"]   = v.state.get_nonce(addr)
             history = []
-            for height, h in node.storage.get_tx_heights_for_addr(addr):
+            for h_height, h in node.storage.get_tx_heights_for_addr(addr):
                 chain = v.chain
-                if 0 <= height < len(chain):
-                    for t in chain[height]["transactions"]:
+                if 0 <= h_height < len(chain):
+                    for t in chain[h_height]["transactions"]:
                         if tx_mod.tx_hash(t) == h:
                             direction = "sent" if t["from"] == addr else "received"
-                            history.append((height, h, direction, t))
+                            history.append((h_height, h, direction, t))
                             break
-
-            h_rows = ""
-            for height, h, direction, t in reversed(history):
-                color = "var(--red)" if direction == "sent" else "var(--green)"
-                h_rows += f"""<tr>
-                  <td>{height}</td>
-                  <td><a href="/explorer/tx/{h}">{h[:20]}…</a></td>
-                  <td style="color:{color}">{direction}</td>
-                  <td>{sum(o['amount'] for o in t['outputs'])}</td>
-                </tr>"""
-
-            content = f"""
-            <div class="stats" style="margin-bottom:1rem">
-              <div class="stat"><div class="stat-label">Balance</div><div class="stat-value" style="color:var(--green)">{fmt_balance(balance)}</div></div>
-              <div class="stat"><div class="stat-label">Nonce</div><div class="stat-value">{nonce}</div></div>
-              <div class="stat"><div class="stat-label">Transactions</div><div class="stat-value">{len(history)}</div></div>
-            </div>
-            <div class="card">
-              <div class="card-title">History</div>
-              <table>
-                <thead><tr><th>Height</th><th>Tx hash</th><th>Direction</th><th>Amount</th></tr></thead>
-                <tbody>{h_rows or '<tr><td colspan="4" style="color:var(--muted);text-align:center">No transactions</td></tr>'}</tbody>
-              </table>
-            </div>"""
-
-        body = f"""
-        <h2>Address Lookup</h2>
-        {alert}
-        <div class="card">
-          <form method="GET">
-            <div class="form-group">
-              <label>Address (twelve dot-separated words)</label>
-              <input name="addr" value="{addr_html}" placeholder="word1.word2.word3...">
-            </div>
-            <button type="submit">Look up</button>
-          </form>
-        </div>
-        {content}"""
-        return render_template_string(_BASE.format(title="Address", body=body))
-
-    # ---- Whitepaper ------------------------------------------------------
+            ctx["history"] = history
+        return render_template("address.html", **ctx)
 
     @app.route("/whitepaper")
     def whitepaper():
@@ -647,82 +314,44 @@ def create_app(node, pool, net_in_q, discovery):
         wp_path = os.path.join(base, "whitepaper.md")
         try:
             with open(wp_path) as f:
-                md_text = f.read()
-            rendered = markdown.markdown(md_text, extensions=["fenced_code", "tables"])
+                rendered = markdown.markdown(f.read(), extensions=["fenced_code", "tables"])
         except FileNotFoundError:
             rendered = "<p>whitepaper.md not found.</p>"
-
-        body = f'<div class="wp">{rendered}</div>'
-        return render_template_string(_BASE.format(title="Whitepaper", body=body))
-
-
-    # ---- Stats -----------------------------------------------------------
-
-    @app.route("/api/stats")
-    def api_stats():
-        """Return per-block economics data for charting.
-        One pass over the chain; sampled to at most 500 points so the
-        response stays small regardless of chain length.
-        """
-        chain = node.view.chain
-        if len(chain) <= 1:
-            return jsonify({"points": [], "totals": {
-                "minted": 0, "burned_fees": 0, "burned_remainder": 0,
-                "circulating": 0,
-            }})
-
-        # Emission totals come from the live state (computed incrementally as
-        # blocks are applied), not re-derived from block fields.
-        sv = node.view.state
-
-        # Build per-block series by replaying fee burns per block (cheap: just
-        # sum tx fees). Minted is read from state totals at chain tip; we
-        # distribute it proportionally for the chart series (approximation only).
-        points = []
-        cum_burned_fees = 0
-
-        for blk in chain[1:]:
-            burned_fees = sum(t["fee"] for t in blk.get("transactions", []))
-            cum_burned_fees += burned_fees
-            # Approximate minted at this height proportionally to chain progress.
-            frac = blk["height"] / max(len(chain) - 1, 1)
-            approx_minted = int(sv.total_minted * frac)
-            points.append({
-                "height":      blk["height"],
-                "minted":      approx_minted,
-                "burned_fees": cum_burned_fees,
-                "circulating": approx_minted - cum_burned_fees,
-                "net_emission": burned_fees,
-            })
-
-        # Sample to max 500 points evenly, always include last
-        if len(points) > 500:
-            step = len(points) / 500
-            sampled = [points[int(i * step)] for i in range(500)]
-            if sampled[-1] != points[-1]:
-                sampled[-1] = points[-1]
-            points = sampled
-
-        return jsonify({
-            "points": points,
-            "totals": {
-                "minted":      sv.total_minted,
-                "burned_fees": sv.total_burnt,
-                "circulating": sv.total_minted - sv.total_burnt,
-                "can_mint":    max(0, SUPPLY_CAP - sv.total_minted + sv.total_burnt),
-                "rings_per_ech": RINGS_PER_ECH,
-            },
-        })
+        return render_template("whitepaper.html", title="Whitepaper", rendered=rendered)
 
     @app.route("/stats")
     def stats():
-        body = (
-            "<h2>Economics</h2>"
-            + _STATS_BODY
-        )
-        return render_template_string(_BASE.format(title="Stats", body=body))
+        return render_template("stats.html", title="Stats")
 
     # ---- JSON API --------------------------------------------------------
+
+    @app.route("/api/stats")
+    def api_stats():
+        chain = node.view.chain
+        if len(chain) <= 1:
+            return jsonify({"points": [], "totals": {
+                "minted": 0, "burned_fees": 0, "circulating": 0}})
+        sv = node.view.state
+        points, cum_burned = [], 0
+        for blk in chain[1:]:
+            burned = sum(t["fee"] for t in blk.get("transactions", []))
+            cum_burned += burned
+            frac = blk["height"] / max(len(chain) - 1, 1)
+            approx_minted = int(sv.total_minted * frac)
+            points.append({"height": blk["height"], "minted": approx_minted,
+                           "burned_fees": cum_burned,
+                           "circulating": approx_minted - cum_burned,
+                           "net_emission": burned})
+        if len(points) > 500:
+            step = len(points) / 500
+            points = [points[int(i * step)] for i in range(500)]
+        return jsonify({"points": points, "totals": {
+            "minted":      sv.total_minted,
+            "burned_fees": sv.total_burnt,
+            "circulating": sv.total_minted - sv.total_burnt,
+            "can_mint":    max(0, SUPPLY_CAP - sv.total_minted + sv.total_burnt),
+            "rings_per_ech": RINGS_PER_ECH,
+        }})
 
     @app.route("/api/info")
     def api_info():
@@ -742,18 +371,14 @@ def create_app(node, pool, net_in_q, discovery):
 
     @app.route("/api/chain")
     def api_chain():
-        # Paginated to prevent a single request from serializing the entire
-        # chain (which grows without bound) into memory. Syncing peers call
-        # this in a loop with from_height advancing each time.
         try:
             from_height = int(request.args.get("from", 0))
             to_height   = int(request.args.get("to", from_height + 500))
         except (TypeError, ValueError):
             return jsonify({"error": "from and to must be integers"}), 400
-        to_height = min(to_height, from_height + 500)   # hard page cap
+        to_height = min(to_height, from_height + 500)
         chain = node.view.chain
-        slice_ = [b for b in chain if from_height <= b["height"] <= to_height]
-        return jsonify(slice_)
+        return jsonify([b for b in chain if from_height <= b["height"] <= to_height])
 
     @app.route("/api/chain/tip")
     def api_chain_tip():
@@ -775,7 +400,6 @@ def create_app(node, pool, net_in_q, discovery):
         t = node.mempool.get(tx_hash_val)
         if t:
             return jsonify(t)
-        # Use the tx_index for O(1) lookup instead of scanning the chain.
         height = node.storage.get_tx_height(tx_hash_val)
         if height is not None:
             chain = node.view.chain
@@ -790,39 +414,30 @@ def create_app(node, pool, net_in_q, discovery):
         if not crypto_mod.is_valid_address(addr):
             return jsonify({"error": "invalid address"}), 400
         balance = node.view.state.get_balance(addr)
-        return jsonify({
-            "address":      addr,
-            "balance_rings": balance,
-            "balance_ech":   balance / RINGS_PER_ECH,
-        })
+        return jsonify({"address": addr, "balance_rings": balance,
+                        "balance_ech": balance / RINGS_PER_ECH})
 
     @app.route("/api/address/<addr>/history")
     def api_history(addr):
         if not crypto_mod.is_valid_address(addr):
             return jsonify({"error": "invalid address"}), 400
-        chain   = node.view.chain
+        chain = node.view.chain
         history = []
         for height, h in node.storage.get_tx_heights_for_addr(addr):
             if 0 <= height < len(chain):
                 for t in chain[height]["transactions"]:
                     if tx_mod.tx_hash(t) == h:
-                        history.append({
-                            "height":    height,
-                            "tx_hash":   h,
-                            "direction": "sent" if t["from"] == addr else "received",
-                            "tx":        t,
-                        })
+                        history.append({"height": height, "tx_hash": h,
+                            "direction": "sent" if t["from"] == addr else "received", "tx": t})
                         break
         return jsonify(history)
 
     @app.route("/api/mempool")
     def api_mempool():
         txs = node.mempool.all_txs()
-        return jsonify({
-            "size": len(txs),
-            "transactions": [{"hash": tx_mod.tx_hash(t), "from": t["from"],
-                               "outputs": t["outputs"], "fee": t["fee"]} for t in txs],
-        })
+        return jsonify({"size": len(txs), "transactions": [
+            {"hash": tx_mod.tx_hash(t), "from": t["from"],
+             "outputs": t["outputs"], "fee": t["fee"]} for t in txs]})
 
     @app.route("/api/receive_block", methods=["POST"])
     @_rate_limited(block_limiter)
@@ -831,28 +446,19 @@ def create_app(node, pool, net_in_q, discovery):
         if not data or "block" not in data:
             return jsonify({"ok": False, "error": "missing block"}), 400
         blk = data["block"]
-        # Cheap structural pre-check before any validation work.
-        required_fields = {"height", "previous_hash", "hash", "timestamp",
-                           "transactions", "builder", "fee_rate",
-                           "vdf_output", "vdf_proof"}
-        if not isinstance(blk, dict) or not required_fields.issubset(blk):
+        required = {"height", "previous_hash", "hash", "timestamp",
+                    "transactions", "builder", "fee_rate", "vdf_output", "vdf_proof"}
+        if not isinstance(blk, dict) or not required.issubset(blk):
             return jsonify({"ok": False, "error": "malformed block"}), 400
         if not isinstance(blk["height"], int) or blk["height"] < 0:
             return jsonify({"ok": False, "error": "malformed block"}), 400
-        # Reject blocks whose transactions list contains non-dict entries or
-        # entries missing the fields required for ordering. This prevents an
-        # unauthenticated caller from crashing block.validate() via sort_key()
-        # and DoS-ing the assembler round.
         if not isinstance(blk["transactions"], list):
             return jsonify({"ok": False, "error": "malformed block"}), 400
         for t in blk["transactions"]:
             if not isinstance(t, dict) or not _TX_REQUIRED_FIELDS.issubset(t):
                 _strike_sender(pool, data)
                 return jsonify({"ok": False, "error": "malformed block"}), 400
-        net_in_q.put({
-            "type":  "block",
-            "block": blk,
-        })
+        net_in_q.put({"type": "block", "block": blk})
         _register_sender(discovery, data)
         return jsonify({"ok": True})
 
@@ -866,16 +472,11 @@ def create_app(node, pool, net_in_q, discovery):
         if not isinstance(tx_dict, dict):
             return jsonify({"ok": False, "error": "invalid tx"}), 400
         h = tx_mod.tx_hash(tx_dict)
-        # Dedup at the API boundary so concurrent Flask threads
-        # don't double-enqueue the same tx.
         if node.mark_tx_seen(h):
             return jsonify({"ok": True})
-        net_in_q.put({
-            "type":           "tx",
-            "tx":             tx_dict,
-            "relay_type":     data.get("type", "tx_fluff"),
-            "remaining_hops": data.get("remaining_hops", 0),
-        })
+        net_in_q.put({"type": "tx", "tx": tx_dict,
+                      "relay_type": data.get("type", "tx_fluff"),
+                      "remaining_hops": data.get("remaining_hops", 0)})
         return jsonify({"ok": True})
 
     @app.route("/api/peers")
@@ -885,14 +486,7 @@ def create_app(node, pool, net_in_q, discovery):
 
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():
-        # Node-operator tooling, not part of the gossip/consensus protocol
-        # (peers self-discover via the DHT). Restricted to localhost: it
-        # triggers an outbound HTTP GET to an arbitrary caller-supplied
-        # host:port with no other validation, which is a straightforward
-        # SSRF if reachable remotely -- an unauthenticated caller could use
-        # any publicly reachable node to probe internal-network or
-        # cloud-metadata addresses.
-        if request.remote_addr not in ("127.0.0.1", "::1"):
+        if request.remote_addr not in _LOCALHOST:
             return jsonify({"ok": False, "error": "localhost only"}), 403
         data = request.get_json()
         if data and "host" in data and "port" in data:

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Address Lookup</h2>
+{% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
+<div class="card">
+  <form method="GET">
+    <div class="form-group">
+      <label>Address (twelve dot-separated words)</label>
+      <input name="addr" value="{{ addr }}" placeholder="word1.word2.word3...">
+    </div>
+    <button type="submit">Look up</button>
+  </form>
+</div>
+{% if history is not none %}
+<div class="stats" style="margin-bottom:1rem">
+  <div class="stat"><div class="stat-label">Balance</div><div class="stat-value" style="color:var(--green)">{{ fmt_balance(balance) }}</div></div>
+  <div class="stat"><div class="stat-label">Nonce</div><div class="stat-value">{{ nonce }}</div></div>
+  <div class="stat"><div class="stat-label">Transactions</div><div class="stat-value">{{ history | length }}</div></div>
+</div>
+<div class="card">
+  <div class="card-title">History</div>
+  <table>
+    <thead><tr><th>Height</th><th>Tx hash</th><th>Direction</th><th>Amount</th></tr></thead>
+    <tbody>
+    {% if history %}
+      {% for height, h, direction, t in history | reverse %}
+      <tr>
+        <td>{{ height }}</td>
+        <td><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
+        <td style="color:{{ 'var(--red)' if direction == 'sent' else 'var(--green)' }}">{{ direction }}</td>
+        <td>{{ t.outputs | sum(attribute='amount') }}</td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="4" style="color:var(--muted);text-align:center">No transactions</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+{% endblock %}

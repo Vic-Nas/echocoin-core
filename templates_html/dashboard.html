@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="stats" style="margin-bottom:1rem">
+  <div class="stat"><div class="stat-label">Height</div><div class="stat-value">{{ info.height }}</div></div>
+  <div class="stat"><div class="stat-label">Mempool</div><div class="stat-value">{{ info.mempool_size }}</div></div>
+  <div class="stat"><div class="stat-label">Peers</div><div class="stat-value">{{ info.peer_count }}</div></div>
+  <div class="stat"><div class="stat-label">Fee Rate</div><div class="stat-value">{{ fmt_fee_rate(info.fee_rate) }}</div></div>
+</div>
+<div class="card">
+  <div class="card-title">Your address</div>
+  <div class="hash">{{ info.address }}</div>
+</div>
+<div class="card">
+  <div class="card-title">Tip hash</div>
+  <div class="hash">{{ tip.hash }}</div>
+</div>
+<div class="card">
+  <div class="card-title">Recent blocks</div>
+  <table>
+    <thead><tr><th>Height</th><th>Hash</th><th>Txs</th><th>Builder</th><th>Fee rate</th></tr></thead>
+    <tbody>
+    {% for b in recent_blocks %}
+    <tr>
+      <td><a href="/explorer/block/{{ b.height }}">{{ b.height }}</a></td>
+      <td class="hash-short">{{ b.hash[:20] }}…</td>
+      <td>{{ b.transactions | length }}</td>
+      <td class="hash-short">{{ (b.builder or '')[:20] }}{% if b.builder %}…{% endif %}</td>
+      <td>{{ fmt_fee_rate(b.fee_rate) }}</td>
+    </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

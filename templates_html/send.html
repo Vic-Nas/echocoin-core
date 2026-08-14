@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Send</h2>
+{% if alert_ok %}<div class="alert alert-ok">{{ alert_ok }}</div>{% endif %}
+{% if alert_err %}<div class="alert alert-err">{{ alert_err | safe }}</div>{% endif %}
+<div class="card">
+  <div class="card-title">Your address</div>
+  <div class="hash" style="margin-bottom:.5rem">{{ from_addr }}</div>
+  <div class="stat-label">Balance: <strong style="color:var(--green)">{{ fmt_balance(balance) }}</strong> &nbsp;|&nbsp; Nonce: {{ nonce }} &nbsp;|&nbsp; Fee rate: {{ fmt_fee_rate(fee_rate) }}</div>
+</div>
+<div class="card">
+  <div class="card-title">Outputs — paste CSV (address,amount) or upload file</div>
+  <form method="POST" enctype="multipart/form-data">
+    <div class="form-group">
+      <label>CSV outputs (one per line: address,amount)</label>
+      <textarea name="outputs" rows="6" placeholder="word1.word2...word12,1000&#10;word1.word2...word12,500"></textarea>
+    </div>
+    <div class="form-group">
+      <label>Or upload CSV file</label>
+      <input type="file" name="csv_file" accept=".csv,.txt">
+    </div>
+    <div class="form-group">
+      <label>Your signing passphrase (leave blank if mining loop is active)</label>
+      <input type="password" name="passphrase" placeholder="Your passphrase to sign the transaction">
+    </div>
+    <button type="submit">Sign &amp; Send</button>
+  </form>
+</div>
+{% endblock %}
