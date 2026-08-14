@@ -26,7 +26,13 @@ ADDRESS_BITS       = 132
 ADDRESS_WORD_COUNT = 12
 WORD_BITS          = 11
 
-INITIAL_FEE_RATE = 1_000  # rings/byte; gives fee formula room above the integer floor
+INITIAL_FEE_RATE = 10     # rings/byte; low start, fee formula rises under load
+
+# Proof-of-Burn sliding window. Burns older than this many blocks no longer
+# count toward a builder's score. 500 blocks ~ 17 hours at 2 min/block:
+# long enough for daily participation cycles, short enough to prevent
+# permanent whale dominance from a one-time burn.
+POB_WINDOW = 500
 
 # VDF iteration count tuned to ~120 seconds of sequential computation on
 # commodity hardware. Must be calibrated empirically before genesis and

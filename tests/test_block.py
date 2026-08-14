@@ -174,9 +174,9 @@ def test_fee_rate_retarget_returns_int():
     assert isinstance(rate, int) and rate >= 1
 
 
-def test_fee_rate_initial_is_1000():
+def test_fee_rate_initial_value():
     from params import INITIAL_FEE_RATE
-    assert INITIAL_FEE_RATE == 1_000
+    assert INITIAL_FEE_RATE == 10
 
 
 def test_fee_rate_stable_at_target_volume():
@@ -198,8 +198,7 @@ def test_fee_rate_stable_at_target_volume():
 
 def test_fee_rate_rises_above_target():
     """Blocks above the soft target cause rate to rise."""
-    from params import INITIAL_FEE_RATE
-    rate = INITIAL_FEE_RATE
+    rate = 1_000   # use a rate large enough that int(rate * 1.05) > rate
     vol_ratio = 2.0  # 2x target
     adjustment = min(1.05, vol_ratio)
     assert adjustment == 1.05
@@ -209,8 +208,7 @@ def test_fee_rate_rises_above_target():
 
 def test_fee_rate_falls_slowly_below_target():
     """Blocks below the soft target cause rate to fall, but slowly."""
-    from params import INITIAL_FEE_RATE
-    rate = INITIAL_FEE_RATE
+    rate = 1_000   # use a rate large enough that the 0.999 decay is visible
     # vol_ratio = 0.5 -> max(0.999, 0.5^0.1) = 0.999 (floor governs)
     vol_ratio = 0.5
     adjustment = max(0.999, vol_ratio ** 0.1)

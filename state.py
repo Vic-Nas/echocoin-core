@@ -1,6 +1,7 @@
 """Balance ledger, nonce tracking, and emission accounting. No disk I/O."""
 
 from params import EMISSION_RATE, SUPPLY_CAP
+from pob import BURN_ADDRESS
 
 
 class State:
@@ -42,17 +43,23 @@ class State:
 
     def apply_tx(self, tx_dict):
         """Apply a validated transaction. Debits sender (outputs + fee),
-        credits recipients, advances nonce. Fee is burned: debited from
-        sender but credited to no one, increasing total_burnt."""
+        credits recipients, advances nonce.
+
+        Fee burns and intentional PoB burns (outputs to BURN_ADDRESS) both
+        increase total_burnt, which feeds back into the emission formula.
+        """
         sender    = tx_dict["from"]
         total_out = sum(o["amount"] for o in tx_dict["outputs"])
         fee       = tx_dict["fee"]
 
         self.debit(sender, total_out + fee)
         for out in tx_dict["outputs"]:
-            self.credit(out["to"], out["amount"])
+            if out["to"] == BURN_ADDRESS:
+                self.total_burnt += out["amount"]   # intentional PoB burn
+            else:
+                self.credit(out["to"], out["amount"])
         self.set_nonce(sender, tx_dict["nonce"])
-        self.total_burnt += fee
+        self.total_burnt += fee                     # fee burn
 
     # ------------------------------------------------------------------
     # Emission

@@ -17,7 +17,7 @@ SPEC  = echocoin.spec
 DIST  = dist
 BUILD = build
 
-.PHONY: linux windows icons clean test
+.PHONY: linux windows appimage icons clean test
 
 linux: icons
 	pyinstaller --clean --noconfirm $(SPEC)
@@ -35,6 +35,18 @@ imgs=[Image.open(io.BytesIO(cairosvg.svg2png(url='echocoin.svg',output_width=s,o
 imgs[0].save('favicon.ico',format='ICO',sizes=[(16,16),(32,32),(48,48)],append_images=imgs[1:]); \
 open('echocoin.png','wb').write(cairosvg.svg2png(url='echocoin.svg',output_width=512,output_height=512)); \
 print('icons regenerated')"
+
+appimage: linux
+	@which appimagetool > /dev/null 2>&1 || (echo "appimagetool not found. Download from https://github.com/AppImage/AppImageKit/releases" && exit 1)
+	rm -rf AppDir
+	mkdir -p AppDir/usr/bin
+	cp -r dist/echocoin AppDir/usr/bin/echocoin
+	cp echocoin.png AppDir/echocoin.png
+	printf '[Desktop Entry]\nName=Echocoin\nExec=echocoin\nIcon=echocoin\nType=Application\nCategories=Network;Finance;\n' > AppDir/echocoin.desktop
+	printf '#!/bin/sh\nexec "$APPDIR/usr/bin/echocoin" "$$@"\n' > AppDir/AppRun
+	chmod +x AppDir/AppRun
+	ARCH=x86_64 appimagetool AppDir echocoin-x86_64.AppImage
+	@echo "Built: echocoin-x86_64.AppImage"
 
 test:
 	python3 -m pytest tests/ -q

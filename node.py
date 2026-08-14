@@ -10,6 +10,7 @@ import time
 _rng = _secrets.SystemRandom()
 
 import block as block_mod
+import pob as pob_mod
 import crypto
 import mempool as mempool_mod
 import state as state_mod
@@ -434,6 +435,12 @@ class Node:
         if remote_height > local_height:
             return True
         if remote_height == local_height:
+            # PoB fork choice: lower cumulative score = more economic commitment.
+            # Falls back to hash comparison only if scores are equal (rare).
+            remote_score = pob_mod.cumulative_score(remote_chain)
+            local_score  = pob_mod.cumulative_score(self.chain)
+            if remote_score != local_score:
+                return remote_score < local_score
             return remote_chain[-1]["hash"] < self.chain[-1]["hash"]
         return False
 
