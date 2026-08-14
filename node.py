@@ -30,6 +30,7 @@ import crypto
 import mempool as mempool_mod
 import state as state_mod
 import tx as tx_mod
+import vdf as vdf_mod
 from params import (
     BLOCK_SIZE_LIMIT,
     DB_PATH,
@@ -259,9 +260,6 @@ class Node:
 
     def _run_cycle(self):
         """One block cycle: evaluate VDF, assemble block, collect winner."""
-        import tx as _tx
-        import vdf as vdf_mod
-
         self._cycle_count += 1
         self._drain_queue(timeout=0)
 
@@ -286,7 +284,7 @@ class Node:
         vdf_out, vdf_proof = vdf_mod.evaluate(challenge)
         log.info("[vdf] proof ready  height=%d", tip["height"] + 1)
 
-        sorted_txs = _tx.sort_txs(self.mempool.all_txs())
+        sorted_txs = tx_mod.sort_txs(self.mempool.all_txs())
         candidate  = block_mod.assemble(tip, sorted_txs, self.addr, fee_rate)
         candidate["vdf_output"] = vdf_out
         candidate["vdf_proof"]  = vdf_proof
@@ -298,7 +296,7 @@ class Node:
         peer_blocks += self._drain_queue(timeout=0)
         winner, probe, relay = self._select_winner(candidate, peer_blocks, tip)
         if winner is None:
-            return   # own block failed validation
+            return   # own block failed validation -- should not happen
         self._commit(winner, probe, relay=relay)
 
     def _select_winner(self, candidate, peer_blocks, tip):

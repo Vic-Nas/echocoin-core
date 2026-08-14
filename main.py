@@ -113,7 +113,7 @@ def main():
     for peer in args.peer:
         parts = peer.split(":")
         if len(parts) == 2:
-            discovery._validate_and_add(f"{parts[0]}:{parts[1]}")
+            discovery.add_bootstrap_peer(f"{parts[0]}:{parts[1]}")
 
     threading.Thread(target=discovery.run, daemon=True).start()
 
