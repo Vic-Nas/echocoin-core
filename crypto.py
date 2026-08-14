@@ -1,7 +1,7 @@
 """
 Keys, signing, verification, address derivation, key storage.
 
-Signing: FALCON-512 (NIST PQC standard) via pqcrypto.
+Signing: FALCON-512 (NIST PQC standard) via liboqs-python (Open Quantum Safe).
 Key storage: Argon2id + NaCl secretbox. Passphrase mandatory.
              Secret key decrypted per signing call, reference dropped immediately.
 """
@@ -14,25 +14,7 @@ import os
 import nacl.pwhash
 import nacl.secret
 import nacl.utils
-# TODO: migrate from pqcrypto to liboqs-python (open-quantum-safe/liboqs-python).
-# liboqs tracks the NIST standardisation draft more closely and receives
-# prompt CVE patches. The migration is five lines:
-#
-#   import oqs
-#   def generate_keypair():
-#       sig = oqs.Signature("Falcon-512")
-#       pk = sig.generate_keypair()
-#       return sig.export_secret_key(), pk
-#   def _falcon_sign(sk_bytes, msg): return oqs.Signature("Falcon-512", sk_bytes).sign(msg)
-#   def _falcon_verify(pk, msg, sig): return oqs.Signature("Falcon-512").verify(msg, sig, pk)
-#
-# Blocked on liboqs requiring a full C build (cmake + libssl-dev) which is
-# not bundled in the current release pipeline. Add to CI before switching.
-from pqcrypto.sign.falcon_512 import (
-    generate_keypair as _falcon_keygen,
-    sign as _falcon_sign,
-    verify as _falcon_verify,
-)
+import oqs
 
 from params import ADDRESS_WORD_COUNT, WORD_BITS
 
@@ -56,21 +38,26 @@ _WORDLIST_SET: frozenset[str] = frozenset(_WORDLIST)
 # ---------------------------------------------------------------------------
 
 def generate_keypair():
-    """Returns (secret_key_bytes, public_key_bytes). FALCON-512."""
-    pk, sk = _falcon_keygen()
-    return sk, pk   # our convention: (sk, pk) everywhere
+    """Returns (secret_key_bytes, public_key_bytes). FALCON-512 via liboqs."""
+    sig = oqs.Signature("Falcon-512")
+    pk  = sig.generate_keypair()
+    sk  = sig.export_secret_key()
+    return sk, pk
 
 
 def sign(message_bytes, secret_key_bytes):
     """Sign with FALCON-512. Returns signature bytes (variable length, max ~752 bytes)."""
-    return _falcon_sign(secret_key_bytes, message_bytes)
+    return oqs.Signature("Falcon-512", secret_key_bytes).sign(message_bytes)
 
 
 def verify(message_bytes, signature_bytes, public_key_bytes):
     """Verify FALCON-512 signature. Returns True/False."""
     if isinstance(signature_bytes, str):
         signature_bytes = bytes.fromhex(signature_bytes)
-    return _falcon_verify(public_key_bytes, message_bytes, signature_bytes)
+    try:
+        return oqs.Signature("Falcon-512").verify(message_bytes, signature_bytes, public_key_bytes)
+    except Exception:
+        return False
 
 
 def sha256(data):
