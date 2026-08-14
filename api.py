@@ -1,4 +1,28 @@
-"""HTTP API + node UI. Thin wrapper over node + pool. No HTML here."""
+"""HTTP API + node UI. Thin wrapper over node + pool. No HTML here.
+
+All endpoints are read-only except /api/submit_tx, /api/receive_tx, and
+/api/receive_block. Flask runs in multiple threads; all reads go through
+node.view (a GIL-atomic snapshot) or node.pool (thread-safe). Writes use
+node.submit_tx_from_api() which serialises through the node loop via a queue.
+
+Endpoint map:
+  GET  /                         -- dashboard (HTML)
+  GET  /explorer                 -- block explorer (HTML)
+  GET  /address/<addr>           -- address detail (HTML)
+  GET  /block/<hash_or_height>   -- block detail (HTML)
+  GET  /tx/<tx_hash>             -- tx detail (HTML)
+  GET  /whitepaper               -- whitepaper (HTML)
+  GET  /burn                     -- burn leaderboard + form (HTML)
+  GET  /send                     -- send form (HTML)
+  GET  /stats                    -- stats page (HTML)
+  GET  /api/info                 -- node info JSON (used by peers for genesis check)
+  GET  /api/chain                -- paginated chain JSON
+  GET  /api/peers                -- peer list JSON
+  GET  /api/mempool              -- pending txs JSON
+  POST /api/submit_tx            -- submit a signed tx
+  POST /api/receive_tx           -- inbound tx relay from a peer
+  POST /api/receive_block        -- inbound block from a peer
+"""
 
 import logging
 import os

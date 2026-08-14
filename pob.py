@@ -53,20 +53,21 @@ class BurnWindow:
     """
 
     def __init__(self):
-        # deque of (height, {beneficiary: {contributor: amount}}) per block
+        # deque of (height, {beneficiary: {contributor: amount}}, [history entries]) per block
         self._blocks: "collections.deque" = collections.deque()
         # aggregated: beneficiary -> contributor -> total in window
         self._totals: "dict[str, dict[str, int]]" = {}
-        # flat history list newest-first for UI display
-        self._history: "list[dict]" = []
+        # per-block history deque (newest-first for display); each entry is a list of dicts
+        self._history_blocks: "collections.deque" = collections.deque()
 
     def add_block(self, blk):
         """Add a block to the window, expiring blocks outside POB_WINDOW."""
         height = blk["height"]
 
-        # Expire old blocks
+        # Expire old blocks -- O(1) per block: popleft from both deques together
         while self._blocks and height - self._blocks[0][0] >= POB_WINDOW:
-            _, old_burns, old_history = self._blocks.popleft()
+            _, old_burns, _ = self._blocks.popleft()
+            self._history_blocks.popleft()
             for beneficiary, contribs in old_burns.items():
                 for contributor, amount in contribs.items():
                     self._totals[beneficiary][contributor] -= amount
@@ -74,8 +75,6 @@ class BurnWindow:
                         del self._totals[beneficiary][contributor]
                     if not self._totals[beneficiary]:
                         del self._totals[beneficiary]
-            for entry in old_history:
-                self._history.remove(entry)
 
         # Extract burns from this block
         block_burns: "dict[str, dict[str, int]]" = {}
@@ -98,7 +97,7 @@ class BurnWindow:
                 })
 
         self._blocks.append((height, block_burns, block_history))
-        self._history = block_history + self._history   # newest first
+        self._history_blocks.appendleft(block_history)  # newest first
 
         # Merge into totals
         for beneficiary, contribs in block_burns.items():
@@ -127,7 +126,7 @@ class BurnWindow:
 
     def history(self):
         """Return burn history entries newest-first."""
-        return list(self._history)
+        return [entry for block_entries in self._history_blocks for entry in block_entries]
 
     def builder_burn(self, address):
         """Total burn weight for address as a builder (self + proxy burns)."""

@@ -151,7 +151,7 @@ class Discovery:
                 last_save = now
 
     # ------------------------------------------------------------------
-    # Alert processing
+    # libtorrent alert processing (BEP44 + torrent DHT results arrive here)
     # ------------------------------------------------------------------
 
     def _process_alerts(self, ses):

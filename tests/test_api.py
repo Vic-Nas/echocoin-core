@@ -19,7 +19,7 @@ class FakeGossip:
 
 
 class FakeSyncer:
-    def check_and_sync(self, h, tip_hash, fn): return False
+    def check_and_sync(self, chain, fn): return False
 
 
 class FakePool:

@@ -1,4 +1,19 @@
-"""Block cycle orchestrator. Linear sequence. Persists every block to SQLite."""
+"""Block cycle orchestrator. Linear sequence. Persists every block to SQLite.
+
+Data flow (one cycle):
+  1. _drain_queue()       -- pull inbound txs and peer blocks from net_in_q
+  2. syncer.check_and_sync() -- every N cycles, pull a better chain from a peer
+  3. vdf.evaluate()       -- block for ~120s computing the VDF proof
+  4. assemble + broadcast -- build candidate, send to peers via gossip
+  5. _drain_queue(5s)     -- collect peer blocks that arrive during broadcast
+  6. _select_winner()     -- pick best block by PoB score + censorship check
+  7. _commit()            -- update chain, state, burn window, storage, view
+
+Flask threads read node.view (a NodeView snapshot). The node loop is the
+sole writer; it publishes a new snapshot atomically after every mutation.
+Non-block messages (tx submissions) arrive on net_in_q and are dispatched
+inside _drain_queue() on the node loop thread.
+"""
 
 import logging
 import os
@@ -252,7 +267,7 @@ class Node:
 
         if self._cycle_count % SYNC_EVERY_N_CYCLES == 0:
             self.syncer.check_and_sync(
-                self.chain[-1]["height"],
+                self.chain,
                 lambda chain: self.sync_chain(chain)[0],
             )
 
