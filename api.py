@@ -21,6 +21,19 @@ def fmt_balance(rings):
     rem  = rings % RINGS_PER_ECH
     return f"{ech} ECH {rem:,} rings"
 
+
+def fmt_fee_rate(rings_per_byte):
+    """Format a fee rate (rings/byte) as ECH/byte with appropriate precision.
+
+    At INITIAL_FEE_RATE=1000 rings/byte: 0.00001 ECH/byte -- shown as 1e-05.
+    Switches to fixed notation once the value is >= 0.001 ECH/byte.
+    """
+    ech_per_byte = rings_per_byte / RINGS_PER_ECH
+    if ech_per_byte >= 0.001:
+        return f"{ech_per_byte:.6f} ECH/byte"
+    return f"{ech_per_byte:.2e} ECH/byte"
+
+
 log = logging.getLogger("ec.api")
 
 # ---------------------------------------------------------------------------
@@ -164,7 +177,7 @@ def create_app(node, pool, net_in_q, discovery):
               <td class="hash-short">{b['hash'][:20]}…</td>
               <td>{tx_count}</td>
               <td class="hash-short">{builder[:20] + "…" if builder else ""}</td>
-              <td>{b['fee_rate']}</td>
+              <td>{fmt_fee_rate(b['fee_rate'])}</td>
             </tr>"""
 
         body = f"""
@@ -172,7 +185,7 @@ def create_app(node, pool, net_in_q, discovery):
           <div class="stat"><div class="stat-label">Height</div><div class="stat-value">{info['height']}</div></div>
           <div class="stat"><div class="stat-label">Mempool</div><div class="stat-value">{info['mempool_size']}</div></div>
           <div class="stat"><div class="stat-label">Peers</div><div class="stat-value">{info['peer_count']}</div></div>
-          <div class="stat"><div class="stat-label">Fee Rate</div><div class="stat-value">{info['fee_rate']}</div></div>
+          <div class="stat"><div class="stat-label">Fee Rate</div><div class="stat-value">{fmt_fee_rate(info['fee_rate'])}</div></div>
         </div>
         <div class="card">
           <div class="card-title">Your address</div>
@@ -255,7 +268,7 @@ def create_app(node, pool, net_in_q, discovery):
         <div class="card">
           <div class="card-title">Your address</div>
           <div class="hash" style="margin-bottom:.5rem">{from_addr}</div>
-          <div class="stat-label">Balance: <strong style="color:var(--green)">{fmt_balance(balance)}</strong> &nbsp;|&nbsp; Nonce: {nonce} &nbsp;|&nbsp; Fee rate: {fee_rate}/byte</div>
+          <div class="stat-label">Balance: <strong style="color:var(--green)">{fmt_balance(balance)}</strong> &nbsp;|&nbsp; Nonce: {nonce} &nbsp;|&nbsp; Fee rate: {fmt_fee_rate(fee_rate)}</div>
         </div>
         <div class="card">
           <div class="card-title">Outputs — paste CSV (address,amount) or upload file</div>
@@ -289,7 +302,7 @@ def create_app(node, pool, net_in_q, discovery):
               <td class="hash"><a href="/explorer/block/{b['height']}">{b['hash'][:32]}…</a></td>
               <td>{len(b['transactions'])}</td>
               <td class="hash-short">{(b.get("builder") or "")[:20] + "…" if b.get("builder") else ""}</td>
-              <td>{b['fee_rate']}</td>
+              <td>{fmt_fee_rate(b['fee_rate'])}</td>
             </tr>"""
 
         body = f"""
@@ -336,7 +349,7 @@ def create_app(node, pool, net_in_q, discovery):
             <tr><td style="color:var(--muted)">Height</td><td>{b['height']}</td></tr>
             <tr><td style="color:var(--muted)">Transactions</td><td>{len(b['transactions'])}</td></tr>
             <tr><td style="color:var(--muted)">Builder</td><td class="hash-short">{builder or "(none)"}</td></tr>
-            <tr><td style="color:var(--muted)">Fee rate</td><td>{b['fee_rate']}</td></tr>
+            <tr><td style="color:var(--muted)">Fee rate</td><td>{fmt_fee_rate(b['fee_rate'])}</td></tr>
           </table>
         </div>
         <div class="card">
