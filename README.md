@@ -2,7 +2,7 @@
 
 A peer-to-peer electronic cash system. Every participating node earns the full reward for every block it builds. No pools, no puzzle, no energy waste. Block timing is enforced by a Verifiable Delay Function anchored to real elapsed time. Fees are deterministic and burned. Signatures are quantum-resistant (FALCON-512).
 
-See [whitepaper.md](whitepaper.md) for the protocol specification.
+See [docs/whitepaper.md](docs/whitepaper.md) for the protocol specification and [docs/FLOW.md](docs/FLOW.md) for a walkthrough of the node's internals.
 
 ## Quickstart
 

@@ -329,7 +329,7 @@ def create_app(node, pool, net_in_q, discovery):
     @app.route("/whitepaper")
     def whitepaper():
         base    = getattr(__import__("sys"), "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-        wp_path = os.path.join(base, "whitepaper.md")
+        wp_path = os.path.join(base, "docs", "whitepaper.md")
         try:
             with open(wp_path) as f:
                 rendered = markdown.markdown(f.read(), extensions=["fenced_code", "tables"])
