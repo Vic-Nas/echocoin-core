@@ -14,6 +14,20 @@ import os
 import nacl.pwhash
 import nacl.secret
 import nacl.utils
+# TODO: migrate from pqcrypto to liboqs-python (open-quantum-safe/liboqs-python).
+# liboqs tracks the NIST standardisation draft more closely and receives
+# prompt CVE patches. The migration is five lines:
+#
+#   import oqs
+#   def generate_keypair():
+#       sig = oqs.Signature("Falcon-512")
+#       pk = sig.generate_keypair()
+#       return sig.export_secret_key(), pk
+#   def _falcon_sign(sk_bytes, msg): return oqs.Signature("Falcon-512", sk_bytes).sign(msg)
+#   def _falcon_verify(pk, msg, sig): return oqs.Signature("Falcon-512").verify(msg, sig, pk)
+#
+# Blocked on liboqs requiring a full C build (cmake + libssl-dev) which is
+# not bundled in the current release pipeline. Add to CI before switching.
 from pqcrypto.sign.falcon_512 import (
     generate_keypair as _falcon_keygen,
     sign as _falcon_sign,

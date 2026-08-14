@@ -83,3 +83,105 @@ def make_chain(length, builder_addr=None):
         blk = make_block(chain, builder_addr)
         chain.append(blk)
     return chain
+
+
+# ---------------------------------------------------------------------------
+# Flow-test infrastructure
+# ---------------------------------------------------------------------------
+
+import pob as pob_mod
+import storage as storage_mod
+import queue
+import tempfile
+import threading
+
+
+class FakeGossip:
+    """Records broadcasts and relays without doing any I/O."""
+    def __init__(self):
+        self.relayed_txs      = []
+        self.broadcast_blocks = []
+    def relay_tx(self, t):           self.relayed_txs.append(t)
+    def broadcast_block(self, b):    self.broadcast_blocks.append(b)
+    def dandelion_send(self, tx, h): pass
+    def mark_seen(self, h):          return False
+
+
+class FakeSyncer:
+    def check_and_sync(self, chain, fn): return False
+
+
+class FakePool:
+    def count(self):  return 0
+    def random(self): return None
+    def get_all(self):return []
+
+
+def make_node(extra_chain=None):
+    """Return (node, sk, pk, pk_hex, addr, gossip, dbfile, keyfile).
+
+    Creates a fully wired Node backed by temp files. The caller is
+    responsible for calling node.storage.close() and unlinking the files.
+    If extra_chain is provided, the node's chain is replaced with it after
+    startup (used to bootstrap multi-block scenarios without running VDF).
+    """
+    from node import Node
+
+    sk, pk, pk_hex, addr = make_keypair()
+    gossip   = FakeGossip()
+    syncer   = FakeSyncer()
+    pool     = FakePool()
+    net_in_q = queue.Queue()
+
+    kf = tempfile.NamedTemporaryFile(suffix=".json", delete=False)
+    kf.close()
+    df = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
+    df.close()
+
+    crypto.save_key(kf.name, sk, pk, "testpass")
+    n = Node(kf.name, pk, gossip, syncer, pool, net_in_q, db_path=df.name)
+    n._loop_thread = threading.current_thread()
+
+    if extra_chain:
+        n.chain = extra_chain
+        n._rebuild_burn_window()
+
+    return n, sk, pk, pk_hex, addr, gossip, df.name, kf.name
+
+
+def teardown_node(n, dbfile, keyfile):
+    n.storage.close()
+    os.unlink(dbfile)
+    os.unlink(keyfile)
+
+
+def make_burn_tx(sk, pk_hex, from_addr, amount, nonce, fee_height,
+                 fee_rate=1, beneficiary=None):
+    """Build a signed intentional burn transaction."""
+    out = {"to": pob_mod.BURN_ADDRESS, "amount": amount}
+    if beneficiary:
+        out["beneficiary"] = beneficiary
+    outputs = [out]
+    fee = tx_mod.compute_fee(from_addr, pk_hex, outputs, nonce, fee_height, fee_rate)
+    return tx_mod.create(from_addr, pk_hex, outputs, nonce, fee_height, fee, sk)
+
+
+def commit_block(n, blk):
+    """Commit a pre-built block to node state (bypasses VDF + validation)."""
+    import pob as pob_mod
+    n._burn_window.add_block(blk)
+    new_state = n.state.snapshot()
+    for t in blk.get("transactions", []):
+        new_state.apply_tx(t)
+    builder = blk.get("builder")
+    if builder:
+        reward = new_state.compute_block_reward()
+        dist = n._burn_window.reward_distribution(builder, reward)
+        new_state.apply_reward_distribution(dist)
+        from pob import _tip_hash_int
+        n._cumulative_score += n._burn_window.score(_tip_hash_int(n.chain), builder)
+    n.state = new_state
+    n.chain.append(blk)
+    n.storage.save_block(blk)
+    n.storage.save_state(new_state)
+    n._publish_view()
