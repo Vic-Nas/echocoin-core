@@ -213,6 +213,10 @@ def compute_expected_fee_rate(chain):
 
     Hard minimum: 1 ring/byte (technical floor, not a pricing floor).
     No hardcoded ceiling: fee pressure is the only cap on block fullness.
+
+    Volume is read from blk["tx_bytes"] if present (set by node._commit),
+    falling back to recomputing via tx_size() for blocks that pre-date this
+    field (e.g. blocks loaded from an old database).
     """
     if not chain:
         return INITIAL_FEE_RATE
@@ -220,7 +224,8 @@ def compute_expected_fee_rate(chain):
     current_rate = chain[-1].get("fee_rate", INITIAL_FEE_RATE)
     window       = chain[-FEE_RATE_WINDOW:]
     byte_volumes = [
-        sum(tx_mod.tx_size(t) for t in b.get("transactions", []))
+        b["tx_bytes"] if "tx_bytes" in b
+        else sum(tx_mod.tx_size(t) for t in b.get("transactions", []))
         for b in window
     ]
     median_vol = statistics.median(byte_volumes) if byte_volumes else 0
@@ -247,25 +252,38 @@ def assemble(tip, txs, builder_addr, fee_rate, deadline=None):
 
     txs: pre-sorted list from tx.sort_txs()
     deadline: float unix time; stop packing if exceeded
+
+    Size tracking: builds a skeleton block once to measure the fixed overhead
+    (header fields), then adds tx_size(t) incrementally -- no full
+    re-serialization per tx.
     """
     import time as _t
 
-    def _candidate(included):
-        return create(
-            height=tip["height"] + 1,
-            previous_hash=tip["hash"],
-            transactions=included,
-            builder=builder_addr,
-            fee_rate=fee_rate,
-        )
+    # Measure fixed overhead: empty block minus the transactions field value.
+    # tx_size() is computed at fee time so it's already available on each tx dict.
+    skeleton = create(
+        height=tip["height"] + 1,
+        previous_hash=tip["hash"],
+        transactions=[],
+        builder=builder_addr,
+        fee_rate=fee_rate,
+    )
+    # "[" + "]" = 2 bytes for empty list; we'll add ", ".join(tx_jsons) inside
+    base_size   = block_size(skeleton)
+    running     = base_size
+    valid_txs   = []
 
-    valid_txs = []
     for t in txs:
         if deadline is not None and _t.time() >= deadline:
             break
-        candidate = _candidate(valid_txs + [t])
-        if block_size(candidate) > BLOCK_SIZE_LIMIT:
+        # Size of this tx as it would appear serialized inside the block.
+        # We add 1 for the "," separator between txs (except the first).
+        t_size = tx_mod.tx_size_in_block(t, position=len(valid_txs))
+        if running + t_size > BLOCK_SIZE_LIMIT:
             continue
         valid_txs.append(t)
+        running += t_size
 
-    return _candidate(valid_txs)
+    skeleton["transactions"] = valid_txs
+    skeleton["hash"] = block_hash(skeleton)
+    return skeleton

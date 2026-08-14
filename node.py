@@ -44,7 +44,8 @@ class NodeView:
     Flask reads node.view -- one attribute swap, GIL-atomic, no lock.
     chain is a frozen copy so Flask iteration can never race with
     node-loop appends."""
-    __slots__ = ("chain", "cumulative_score", "genesis_hash", "height", "state", "tip")
+    __slots__ = ("chain", "cumulative_score", "genesis_hash", "height",
+                 "state", "tip", "stats_points")
 
     def __init__(self, chain, state, cumulative_score=0):
         self.chain            = list(chain)
@@ -53,6 +54,31 @@ class NodeView:
         self.state            = state.snapshot()
         self.height           = chain[-1]["height"]
         self.cumulative_score = cumulative_score
+        self.stats_points     = self._build_stats_points(self.chain, self.state)
+
+    @staticmethod
+    def _build_stats_points(chain, state):
+        """Build the chart data points for /api/stats. Called once per block."""
+        if len(chain) <= 1:
+            return []
+        points, cum_burned = [], 0
+        total_minted = state.total_minted
+        max_height   = max(len(chain) - 1, 1)
+        for blk in chain[1:]:
+            cum_burned += sum(t["fee"] for t in blk.get("transactions", []))
+            frac         = blk["height"] / max_height
+            approx_minted = int(total_minted * frac)
+            points.append({
+                "height":       blk["height"],
+                "minted":       approx_minted,
+                "burned_fees":  cum_burned,
+                "circulating":  approx_minted - cum_burned,
+                "net_emission": sum(t["fee"] for t in blk.get("transactions", [])),
+            })
+        if len(points) > 500:
+            step = len(points) / 500
+            points = [points[int(i * step)] for i in range(500)]
+        return points
 
 
 log = logging.getLogger("ec.node")
@@ -118,6 +144,12 @@ class Node:
         stored = self.storage.load_all_blocks()
         if stored:
             self.chain = stored
+            # Backfill tx_bytes for blocks loaded from an older database.
+            for blk in self.chain:
+                if "tx_bytes" not in blk:
+                    blk["tx_bytes"] = sum(
+                        tx_mod.tx_size(t) for t in blk.get("transactions", [])
+                    )
             if self.storage.state_exists():
                 balances, nonces, total_minted, total_burnt = self.storage.load_state()
                 self.state._balances    = balances
@@ -435,6 +467,12 @@ class Node:
 
     def _commit(self, new_block, new_state, relay=False):
         self._update_exclusion_ages(new_block)
+        # Cache tx byte volume for fee rate computation (avoids re-serializing
+        # all txs in the 100-block window on every cycle).
+        if "tx_bytes" not in new_block:
+            new_block["tx_bytes"] = sum(
+                tx_mod.tx_size(t) for t in new_block.get("transactions", [])
+            )
         # Update burn window with the new block before computing distribution
         # and score, so the new block's burns count immediately.
         self._burn_window.add_block(new_block)

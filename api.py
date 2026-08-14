@@ -24,6 +24,7 @@ Endpoint map:
   POST /api/receive_block        -- inbound block from a peer
 """
 
+import functools
 import logging
 import os
 import threading
@@ -103,11 +104,11 @@ class RateLimiter:
 
 def _rate_limited(limiter):
     def decorator(fn):
+        @functools.wraps(fn)
         def wrapped(*args, **kwargs):
             if not limiter.allow(request.remote_addr or "unknown"):
                 return jsonify({"ok": False, "error": "rate limited"}), 429
             return fn(*args, **kwargs)
-        wrapped.__name__ = fn.__name__
         return wrapped
     return decorator
 
@@ -345,25 +346,9 @@ def create_app(node, pool, net_in_q, discovery):
 
     @app.route("/api/stats")
     def api_stats():
-        chain = node.view.chain
-        if len(chain) <= 1:
-            return jsonify({"points": [], "totals": {
-                "minted": 0, "burned_fees": 0, "circulating": 0}})
-        sv = node.view.state
-        points, cum_burned = [], 0
-        for blk in chain[1:]:
-            burned = sum(t["fee"] for t in blk.get("transactions", []))
-            cum_burned += burned
-            frac = blk["height"] / max(len(chain) - 1, 1)
-            approx_minted = int(sv.total_minted * frac)
-            points.append({"height": blk["height"], "minted": approx_minted,
-                           "burned_fees": cum_burned,
-                           "circulating": approx_minted - cum_burned,
-                           "net_emission": burned})
-        if len(points) > 500:
-            step = len(points) / 500
-            points = [points[int(i * step)] for i in range(500)]
-        return jsonify({"points": points, "totals": {
+        v  = node.view
+        sv = v.state
+        return jsonify({"points": v.stats_points, "totals": {
             "minted":      sv.total_minted,
             "burned_fees": sv.total_burnt,
             "circulating": sv.total_minted - sv.total_burnt,

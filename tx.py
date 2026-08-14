@@ -36,6 +36,17 @@ def tx_size(tx_dict):
     return len(json.dumps(fields, sort_keys=True, separators=(",", ":")).encode())
 
 
+def tx_size_in_block(tx_dict, position=0):
+    """Size of tx_dict as it appears serialized inside a block's JSON array.
+    Position 0 = first element (no leading comma). Position > 0 adds 1 byte
+    for the comma separator between elements.
+    Used by block.assemble() to track running block size without re-serializing
+    the entire block on every candidate tx.
+    """
+    size = len(json.dumps(tx_dict, sort_keys=True, separators=(",", ":")).encode())
+    return size + (1 if position > 0 else 0)
+
+
 def compute_fee(from_addr, pubkey_hex, outputs, nonce, fee_height, fee_rate):
     """Compute fee = body_size * fee_rate.
 
