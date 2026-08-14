@@ -195,12 +195,20 @@ def cumulative_score(chain):
 
     Used as the fork-choice weight: lower cumulative score = heavier chain.
     Genesis (height 0, no builder) contributes 0.
+
+    Uses a single rolling BurnWindow walked forward so cost is
+    O(chain * avg_burn_txs_per_block) not O(chain^2).
     """
-    total = 0
-    for i, blk in enumerate(chain):
+    total  = 0
+    window = BurnWindow()
+    for blk in chain:
+        window.add_block(blk)
         builder = blk.get("builder")
-        if builder and i > 0:
-            total += score(chain[:i], builder)
+        if builder and blk["height"] > 0:
+            # _tip_hash_int reads vdf_output or hash from the tip block directly.
+            vdf_out = blk.get("vdf_output") or blk["hash"]
+            tip_hash_int = int(vdf_out[:64], 16)
+            total += window.score(tip_hash_int, builder)
     return total
 
 

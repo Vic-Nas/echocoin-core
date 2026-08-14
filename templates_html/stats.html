@@ -36,7 +36,8 @@ function axisLabels(svg, W, H, PAD, maxX, maxY) {
   for (let i = 0; i <= 4; i++) {
     const y = H - PAD - (i / 4) * (H - PAD * 2);
     const val = (i / 4) * maxY / RINGS_PER_ECH;
-    svg.innerHTML += `<text x="${PAD - 4}" y="${y + 4}" fill="#5a6070" font-size="10" text-anchor="end">${val.toFixed(1)}K</text>`;
+    const label = val >= 1 ? val.toFixed(1) + ' ECH' : (val * 1000).toFixed(1) + ' mECH';
+    svg.innerHTML += `<text x="${PAD - 4}" y="${y + 4}" fill="#5a6070" font-size="10" text-anchor="end">${label}</text>`;
   }
   for (let i = 1; i <= 3; i++) {
     const y = H - PAD - (i / 4) * (H - PAD * 2);

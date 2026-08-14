@@ -56,6 +56,8 @@ GENESIS_TIMESTAMP = 1786641845
 # Number of BEP44 DHT slots used for peer discovery.
 BEP44_SLOT_COUNT = 256
 
-# Set by build_config.py at build time. True = testnet, False = production.
+# TESTNET = True: GitHub Actions updates GENESIS_TIMESTAMP on every release,
+# letting the chain restart fresh. Set to False for mainnet -- at that point
+# GENESIS_TIMESTAMP is fixed manually once and the workflow never touches it.
 TESTNET      = True
 NETWORK_NAME = "Echocoin Testnet" if TESTNET else "Echocoin"
