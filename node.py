@@ -46,20 +46,24 @@ SYNC_EVERY_N_CYCLES = 3
 
 def _replay_blocks(blocks, state):
     """Replay a slice of blocks onto state in place.
-    Applies transactions then block reward for each block.
-    Used by both _rebuild_state and _apply_chain to avoid duplication
-    and ensure the tx-then-reward order is correct everywhere.
+    Applies transactions then pool-aware reward distribution for each block.
+    chain_so_far is built incrementally so reward_distribution scans
+    the correct window at each block height.
     blocks: iterable of block dicts, skipping genesis (height > 0).
     """
+    chain_so_far = []
     for blk in blocks:
         if blk["height"] == 0:
+            chain_so_far.append(blk)
             continue
         for t in blk["transactions"]:
             state.apply_tx(t)
         builder = blk.get("builder")
         if builder:
             reward = state.compute_block_reward()
-            state.apply_reward(builder, reward)
+            dist = pob_mod.reward_distribution(chain_so_far, builder, reward)
+            state.apply_reward_distribution(dist)
+        chain_so_far.append(blk)
 
 
 class Node:
@@ -413,9 +417,9 @@ class Node:
         builder = new_block.get("builder")
         if builder:
             reward = new_state.compute_block_reward()
-            new_state.apply_reward(builder, reward)
-            # Incrementally update cumulative PoB score. score() only scans
-            # the last POB_WINDOW blocks so this is O(window), not O(chain).
+            dist = pob_mod.reward_distribution(self.chain, builder, reward)
+            new_state.apply_reward_distribution(dist)
+            # Incrementally update cumulative PoB score.
             self._cumulative_score += pob_mod.score(self.chain, builder)
         self.state = new_state
         self.chain.append(new_block)
@@ -490,7 +494,8 @@ class Node:
             builder = blk.get("builder")
             if builder:
                 reward = probe.compute_block_reward()
-                probe.apply_reward(builder, reward)
+                dist = pob_mod.reward_distribution(validated, builder, reward)
+                probe.apply_reward_distribution(dist)
             new_state = probe
             validated.append(blk)
 

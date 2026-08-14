@@ -80,11 +80,25 @@ class State:
         return int(can_mint * (1 - EMISSION_RATE))
 
     def apply_reward(self, builder_addr, reward):
-        """Credit block reward to the builder. Increments total_minted."""
+        """Credit block reward to the builder. Increments total_minted.
+        Use apply_reward_distribution for pool-aware reward splitting."""
         if reward <= 0:
             return
         self.credit(builder_addr, reward)
         self.total_minted += reward
+
+    def apply_reward_distribution(self, distribution):
+        """Credit a pre-computed reward distribution from pob.reward_distribution().
+
+        distribution: list of (address, amount) pairs.
+        Each amount is credited independently. total_minted is incremented
+        by the sum actually distributed (may be slightly less than the full
+        reward due to integer rounding -- remainder stays in can_mint).
+        """
+        for addr, amount in distribution:
+            if amount >= 1:
+                self.credit(addr, amount)
+                self.total_minted += amount
 
     # ------------------------------------------------------------------
     # Snapshot / restore

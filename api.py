@@ -121,22 +121,29 @@ def _strike_sender(pool, data):
 
 
 def _burn_window_data(chain, from_addr):
-    """Compute burn totals and history over the last POB_WINDOW blocks."""
+    """Compute burn totals, pool leaderboard, and history over the last POB_WINDOW blocks."""
     window = chain[-POB_WINDOW:] if len(chain) > POB_WINDOW else chain
-    burn_totals = {}
-    burn_history = []
+    burn_totals    = {}   # sender -> total self+proxy burns (for leaderboard by sender)
+    pool_totals    = {}   # beneficiary -> total tagged burns (pool leaderboard)
+    burn_history   = []
     for blk in reversed(window):
         for tx in blk.get("transactions", []):
-            tx_burns = sum(
-                o["amount"] for o in tx.get("outputs", [])
-                if o.get("to") == BURN_ADDRESS
-            )
-            if tx_burns:
-                addr = tx.get("from", "")
-                burn_totals[addr] = burn_totals.get(addr, 0) + tx_burns
-                burn_history.append({"height": blk["height"], "addr": addr, "amount": tx_burns})
-    scores = {addr: pob_mod.score(chain, addr) for addr in burn_totals}
-    return burn_totals, burn_history, scores
+            sender = tx.get("from", "")
+            for o in tx.get("outputs", []):
+                if o.get("to") != BURN_ADDRESS:
+                    continue
+                amt         = o["amount"]
+                beneficiary = o.get("beneficiary") or sender
+                burn_totals[sender]      = burn_totals.get(sender, 0) + amt
+                pool_totals[beneficiary] = pool_totals.get(beneficiary, 0) + amt
+                burn_history.append({
+                    "height":      blk["height"],
+                    "addr":        sender,
+                    "beneficiary": beneficiary,
+                    "amount":      amt,
+                })
+    scores = {addr: pob_mod.score(chain, addr) for addr in pool_totals}
+    return burn_totals, pool_totals, burn_history, scores
 
 # ---------------------------------------------------------------------------
 # App factory
@@ -212,12 +219,13 @@ def create_app(node, pool, net_in_q, discovery):
         v = node.view
         chain = v.chain
         balance = v.state.get_balance(node.addr)
-        burn_totals, burn_history, scores = _burn_window_data(chain, node.addr)
+        burn_totals, pool_totals, burn_history, scores = _burn_window_data(chain, node.addr)
         ctx = dict(title="Burn", from_addr=node.addr, balance=balance,
                    my_burn=burn_totals.get(node.addr, 0),
                    my_score=pob_mod.score(chain, node.addr),
-                   total_burn=sum(burn_totals.values()),
+                   total_burn=sum(pool_totals.values()),
                    sorted_burners=sorted(burn_totals.items(), key=lambda x: -x[1]),
+                   sorted_pools=sorted(pool_totals.items(), key=lambda x: -x[1]),
                    burn_history=burn_history, scores=scores,
                    pob_window=POB_WINDOW, alert_ok="", alert_err="")
         if request.method == "POST":
@@ -236,8 +244,13 @@ def create_app(node, pool, net_in_q, discovery):
                     ctx["alert_err"] = "Insufficient balance."
                 else:
                     try:
-                        t, _fee = node.build_and_sign_tx(
-                            [{"to": BURN_ADDRESS, "amount": burn_rings}], passphrase or None)
+                        beneficiary = request.form.get("beneficiary", "").strip() or node.addr
+                        if not crypto_mod.is_valid_address(beneficiary):
+                            beneficiary = node.addr
+                        burn_out = {"to": BURN_ADDRESS, "amount": burn_rings}
+                        if beneficiary != node.addr:
+                            burn_out["beneficiary"] = beneficiary
+                        t, _fee = node.build_and_sign_tx([burn_out], passphrase or None)
                         ok, result = node.submit_tx_from_api(t)
                         if ok:
                             ctx["alert_ok"] = f'Burn submitted. tx: <span class="hash">{result}</span>'

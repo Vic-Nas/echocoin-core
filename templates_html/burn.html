@@ -9,17 +9,26 @@
   <div class="stat"><div class="stat-label">Your PoB score</div><div class="stat-value" style="font-size:1rem;font-family:var(--mono)">{{ "{:,}".format(my_score) }}</div></div>
   <div class="stat"><div class="stat-label">Network burns (last {{ pob_window }} blocks)</div><div class="stat-value" style="font-size:1rem">{{ fmt_balance(total_burn) }}</div></div>
 </div>
+
 <div class="card">
-  <div class="card-title">Burn coins to earn block-building priority</div>
+  <div class="card-title">Burn coins</div>
   <p style="color:var(--muted);font-size:.85rem;margin-bottom:.75rem">
     Burned coins are permanently destroyed and recycled into the emission pool.
-    Larger recent burns give you a lower (better) PoB score and higher chance
-    of winning each block slot. Burns count for the last {{ pob_window }} blocks (~{{ pob_window * 2 // 60 }}h).
+    Tag a pool (beneficiary) to contribute your burn weight to that pool's score.
+    When the pool wins a block, rewards are split among contributors proportionally.
+    Default beneficiary is yourself (solo burn).
   </p>
   <form method="POST">
     <div class="form-group">
       <label>Amount to burn (rings)</label>
       <input type="number" name="amount" min="1" max="{{ balance }}" placeholder="e.g. 1000000 rings = 0.01 ECH">
+    </div>
+    <div class="form-group">
+      <label>Beneficiary address (leave blank to burn for yourself)</label>
+      <input type="text" name="beneficiary" placeholder="{{ from_addr }}" style="font-size:.75rem">
+    </div>
+    <div class="form-group">
+      <label>Or click a pool below to select it</label>
     </div>
     <div class="form-group">
       <label>Your signing passphrase (leave blank if mining loop is active)</label>
@@ -28,30 +37,55 @@
     <button type="submit" style="background:var(--red)">Burn</button>
   </form>
 </div>
+
 <div class="card">
-  <div class="card-title">Burn leaderboard (last {{ pob_window }} blocks)</div>
+  <div class="card-title">Pool leaderboard — click to select beneficiary</div>
   <table>
-    <thead><tr><th>#</th><th>Address</th><th>Total burned</th><th>Current score</th></tr></thead>
+    <thead><tr><th>#</th><th>Pool address</th><th>Total tagged burns</th><th>PoB score</th></tr></thead>
     <tbody>
-    {% if sorted_burners %}
-      {% for addr, amount in sorted_burners[:20] %}
-      <tr>
+    {% if sorted_pools %}
+      {% for addr, amount in sorted_pools[:20] %}
+      <tr style="cursor:pointer" onclick="document.querySelector('[name=beneficiary]').value='{{ addr }}'">
         <td>{{ loop.index }}</td>
         <td class="hash-short"{% if addr == from_addr %} style="color:var(--green)"{% endif %}>{{ addr }}</td>
         <td>{{ fmt_balance(amount) }}</td>
-        <td>{{ fmt_balance(scores[addr]) }}</td>
+        <td style="font-family:var(--mono);font-size:.75rem">{{ "{:,}".format(scores.get(addr, 0)) }}</td>
       </tr>
       {% endfor %}
     {% else %}
-      <tr><td colspan="4" style="color:var(--muted);text-align:center">No burns in the last {{ pob_window }} blocks.</td></tr>
+      <tr><td colspan="4" style="color:var(--muted);text-align:center">No pools yet in the last {{ pob_window }} blocks.</td></tr>
     {% endif %}
     </tbody>
   </table>
 </div>
+
 <div class="card">
-  <div class="card-title">Recent burns</div>
+  <div class="card-title">Your burn activity (last {{ pob_window }} blocks)</div>
   <table>
-    <thead><tr><th>Block</th><th>Address</th><th>Amount</th></tr></thead>
+    <thead><tr><th>Block</th><th>Amount</th><th>Beneficiary</th></tr></thead>
+    <tbody>
+    {% set my_burns = burn_history | selectattr("addr", "equalto", from_addr) | list %}
+    {% if my_burns %}
+      {% for entry in my_burns[:20] %}
+      <tr>
+        <td><a href="/explorer/block/{{ entry.height }}">{{ entry.height }}</a></td>
+        <td>{{ fmt_balance(entry.amount) }}</td>
+        <td class="hash-short"{% if entry.beneficiary == from_addr %} style="color:var(--muted)"{% endif %}>
+          {{ entry.beneficiary }}{% if entry.beneficiary == from_addr %} (self){% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="3" style="color:var(--muted);text-align:center">No burns yet.</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <div class="card-title">Recent burns (all participants)</div>
+  <table>
+    <thead><tr><th>Block</th><th>From</th><th>Amount</th><th>Beneficiary</th></tr></thead>
     <tbody>
     {% if burn_history %}
       {% for entry in burn_history[:30] %}
@@ -59,10 +93,13 @@
         <td><a href="/explorer/block/{{ entry.height }}">{{ entry.height }}</a></td>
         <td class="hash-short"{% if entry.addr == from_addr %} style="color:var(--green)"{% endif %}>{{ entry.addr }}</td>
         <td>{{ fmt_balance(entry.amount) }}</td>
+        <td class="hash-short"{% if entry.beneficiary == entry.addr %} style="color:var(--muted)"{% endif %}>
+          {{ entry.beneficiary }}{% if entry.beneficiary == entry.addr %} (self){% endif %}
+        </td>
       </tr>
       {% endfor %}
     {% else %}
-      <tr><td colspan="3" style="color:var(--muted);text-align:center">None yet.</td></tr>
+      <tr><td colspan="4" style="color:var(--muted);text-align:center">None yet.</td></tr>
     {% endif %}
     </tbody>
   </table>
