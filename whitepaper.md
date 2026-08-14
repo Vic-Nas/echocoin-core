@@ -4,13 +4,15 @@
 
 ## Abstract
 
-Bitcoin proved that trust between strangers can be replaced by cryptographic proof on a public ledger. Its proof-of-work mechanism, however, wastes energy to solve an artificial puzzle whose only purpose is to make history rewriting expensive. Echocoin replaces proof-of-work with a Verifiable Delay Function that anchors the chain to real elapsed time without burning energy. Block production is open to every node. The full reward goes to whoever builds the accepted block. Pooling offers no structural advantage because the work being rewarded is network service itself.
+Bitcoin proved that trust between strangers can be replaced by cryptographic proof on a public ledger. Its proof-of-work mechanism, however, wastes energy to solve an artificial puzzle whose only purpose is to make history rewriting expensive. Echocoin replaces proof-of-work with two complementary mechanisms: a Verifiable Delay Function (VDF) that anchors the chain to real elapsed time, and Proof-of-Burn (PoB) that anchors block-building rights to real economic commitment. Block production is open to every node. The full reward goes to whoever builds the accepted block. Pooling offers no structural advantage because the work being rewarded is network service itself, and burn weight is non-transferable.
 
 ## 1. The Problem with Bitcoin Mining
 
 When the full block reward goes to whoever solves a puzzle first, variance drives small miners into pools. Pool operators gain control over transaction inclusion. The "one CPU, one vote" principle became fictional within a few years of launch.
 
 This is not fixable by changing the puzzle. ASIC-resistant algorithms slow the hardware race but cannot stop it, because the problem is structural: proof-of-work rewards hardware investment, not network contribution. The work itself is intentionally wasteful, consuming energy without producing anything of value to the network.
+
+A subtler problem is the botnet attack: proof-of-work with a weak puzzle, or a VDF alone without economic weight, can be overwhelmed by an adversary who spins up thousands of parallel instances at near-zero marginal cost. Echocoin closes this gap with Proof-of-Burn. A botnet that refuses to destroy real coins cannot produce competitive block scores, regardless of instance count.
 
 ## 2. Transactions
 
@@ -39,6 +41,8 @@ where `vol_ratio = median_vol / BLOCK_SIZE_TARGET`. The soft target is 200 KB. T
 
 All fees are burned, reducing circulating supply. Burnt fees are added back into the mintable pool, so high network usage both deters spam and sustains block rewards indefinitely.
 
+**Burn transactions.** Any output with recipient `burn` is an intentional Proof-of-Burn output. The rings are permanently destroyed and credited to the same mintable pool as fee burns. Unlike fees, intentional burns are recorded per-sender in the chain history and count toward the sender's block-building score (Section 3). A single transaction may contain any mix of normal outputs and burn outputs.
+
 ## 3. Block Production and Timing
 
 Every node continuously assembles candidate blocks from its local mempool and broadcasts them to peers. There is no designated assembler and no artificial barrier to participation.
@@ -47,9 +51,30 @@ Every node continuously assembles candidate blocks from its local mempool and br
 
 When a node completes the VDF for the current slot, it assembles its best candidate block, attaches the VDF proof, and broadcasts immediately. Other nodes verify the proof in milliseconds -- verification is fast even though computation is slow -- and accept the block if valid.
 
-**Fork resolution.** Two nodes may complete the VDF at roughly the same time and broadcast competing blocks for the same slot. When this happens, both blocks are valid. Nodes keep whichever has the lower block hash, which is deterministic and locally computable without coordination. The fork resolves naturally when the next slot's VDF is computed over one of the two competing hashes: whoever builds on top first determines which branch extends, and the other dies.
+**Proof-of-Burn block score.** Every builder has a score derived from their recent burn history:
 
-**History rewriting.** An attacker wishing to rewrite block N must recompute the VDF sequentially for every block from N to the present. Since VDF evaluation cannot be parallelized or accelerated by hardware, this takes exactly as long as the honest network took to produce those blocks in real time. An active honest network is always ahead. History rewriting is not merely expensive -- it is impossible faster than real elapsed time.
+```
+numerator   = Hash(VDF_output_of_tip XOR builder_address_hash)
+denominator = max(1, sum of intentional burns by builder in last N blocks)
+
+score(builder) = numerator / denominator
+```
+
+Lower score means more economic commitment and higher block-building priority. The numerator is deterministic and unguessable before the VDF completes, so builders cannot pre-select outputs to manipulate their score. The denominator counts only burns within the last N = 500 blocks (~17 hours at 2 min/block), so older burns decay out of influence and no single early burn confers permanent dominance.
+
+A builder who has never burned any coins receives `denominator = 1`, making their score equal to the raw hash -- large and uncompetitive against active burners, but not zero. New participants can join and start building immediately; they just score poorly until they commit coins.
+
+**Fork resolution.** Two nodes may complete the VDF at roughly the same time and broadcast competing blocks for the same slot. Both blocks may be structurally valid. Nodes select the block whose builder has the lower PoB score. This is deterministic and locally computable without coordination. If scores are equal (hash coincidence), the lower block hash breaks the tie.
+
+When two valid chains of equal height compete, nodes adopt the one with the lower **cumulative score** -- the sum of all block scores from genesis:
+
+```
+cumulative_score(chain) = sum of score(builder_i) for all blocks i > 0
+```
+
+A chain built by nodes with real burn commitments will always have a lower cumulative score than one built by a botnet whose denominator stays at 1. The attacker's chain is objectively and locally rejectable, with no voting or peer trust required.
+
+**History rewriting.** An attacker wishing to rewrite block N must recompute the VDF sequentially for every block from N to the present -- that takes as long in real time as the honest network took. They must also produce competitive PoB scores for each rewritten block, which requires burning real coins proportional to the honest network's burn history. Both constraints must be overcome simultaneously.
 
 Every valid block received from a peer is immediately rebroadcast to all other peers. This ensures that nodes behind NAT or with limited connectivity participate in propagation through well-connected peers.
 
@@ -67,7 +92,7 @@ block_score = min(score(T) for all missing transactions T)
 node accepts block with probability = block_score
 ```
 
-If no transactions are missing, block_score is 1.0 and the block is always accepted. Age 0 is treated as a special case (score 1.0) because a transaction can miss one block due to propagation timing alone; the formula only activates after repeated exclusion. The formula is lenient by design: missing a transaction across five non-full blocks is a strong signal of censorship (score 0.2). Effective age only increments on non-full blocks, so congestion does not incorrectly penalize honest builders.
+If no transactions are missing, block_score is 1.0 and the block is always accepted. Age 0 is treated as a special case (score 1.0) because a transaction can miss one block due to propagation timing alone; the formula only activates after repeated exclusion. Effective age only increments on non-full blocks, so congestion does not incorrectly penalize honest builders.
 
 A node that probabilistically rejects a block the rest of the network accepted will sync unconditionally when it receives a longer chain. One block lag at most. No permanent fork.
 
@@ -84,9 +109,9 @@ can_mint          = SUPPLY_CAP - total_minted + total_burnt
 reward(block)     = int(can_mint * (1 - EMISSION_RATE))
 ```
 
-`can_mint` starts at the full supply cap and decreases as coins are minted. Burnt fees are added back into `can_mint`, so high network usage replenishes the mintable pool and sustains block rewards indefinitely. At low usage, emission decays smoothly toward zero. At high usage, burns partially offset emission, keeping net supply stable.
+`can_mint` starts at the full supply cap and decreases as coins are minted. Both fee burns and intentional PoB burns are added back into `can_mint`, so network activity -- whether transactional or burn-based -- replenishes the mintable pool and sustains block rewards indefinitely. At low usage, emission decays smoothly toward zero. At high usage, burns partially offset emission, keeping net supply stable.
 
-The full block reward goes to the node that built the accepted block. Because the work being rewarded is network service rather than computation, running more nodes genuinely increases contribution and is rewarded proportionally. If nodes leave, each remaining node wins blocks more frequently. Lower prices attract new entrants. The network stabilizes without any parameter adjustment.
+The full block reward goes to the node that built the accepted block. Because block-building priority is determined by burn history rather than hardware, running more nodes does not increase a participant's share. Burn weight is personal and non-transferable: a pool operator cannot aggregate the burn scores of contributing members. The pooling incentive that centralized Bitcoin mining does not exist here.
 
 ## 6. Privacy and Security
 
@@ -106,19 +131,23 @@ When a candidate peer is found, the connecting node fetches its `/api/info` and 
 
 The full block history is stored permanently. Balance state is always recoverable by replaying from genesis. The genesis block hash is hardcoded, so any chain with a different block 0 is rejected outright.
 
-## 8. Security Comparison with Bitcoin
+## 8. Security Analysis
 
-Echocoin and Bitcoin share the same unsolved problem: a new node syncing from scratch cannot cryptographically distinguish the legitimate chain from an attacker's alternative. Both rely ultimately on the attacker having no economic incentive to destroy the coin's value.
+**Competing chain against an active network.** A botnet that attempts to build an alternative chain without burning real coins produces blocks with `denominator = 1` and therefore very large scores. The honest network, whose participants have accumulated burn weight over 500-block windows, produces blocks with far lower scores. The honest chain's cumulative score is always lower, and every node independently rejects the botnet's chain without coordination.
 
-**Competing chain against an active network.** Bitcoin is vulnerable above 51% hashpower. Echocoin is not vulnerable by speed: VDF sequentiality means a majority of nodes produce blocks at the same rate as a single honest node. The fork persists but never overtakes.
+**Majority VDF attack.** VDF sequentiality means a majority of nodes produce blocks at the same rate as a single honest node. Acquiring a majority of sequential compute does not help an attacker rewrite history faster. Combined with PoB, any rewritten chain also requires proportional real burns, making the attack doubly costly.
 
-**Transaction censorship.** Bitcoin above 51% hashpower can exclude transactions indefinitely. In Echocoin, even a majority of nodes only wins roughly that fraction of slots by hash lottery. The honest minority wins the remaining slots and includes censored transactions.
+**Transaction censorship.** Even a majority of burners only wins roughly that fraction of slots by score lottery. The honest minority wins the remaining slots and includes censored transactions. The probabilistic acceptance mechanism further penalizes repeated exclusion.
 
-**Deep history rewriting with the honest network offline.** This is where Bitcoin is stronger. Accumulated proof-of-work makes old Bitcoin blocks progressively harder to rewrite. In Echocoin, VDF makes all history equally costly to rewrite: exactly one sequential VDF computation per block, regardless of age.
+**Deep history rewriting offline.** VDF makes all history equally costly to rewrite per block. An attacker working offline against an old fork point must recompute one VDF per block sequentially, plus produce competitive burns for each rewritten block -- an insurmountable cost for any chain of meaningful length.
+
+**Whale dominance and the decay window.** A participant who burns a large amount early cannot hold a permanent advantage. Burns older than 500 blocks (~17 hours) fall out of the scoring window. Sustained block-building priority requires sustained burning, aligning incentives with ongoing network participation rather than one-time capital expenditure.
+
+**Comparison with Bitcoin.** Echocoin and Bitcoin share the same unsolved problem: a new node syncing from scratch cannot cryptographically distinguish the legitimate chain from an attacker's alternative. Both rely ultimately on the attacker having no economic incentive to destroy the coin's value. Bitcoin is additionally vulnerable to majority hashpower and ASIC centralization. Echocoin eliminates the hardware arms race but introduces a different capital commitment: coins must be continuously burned to maintain block-building priority. This is a feature, not a cost: the burned coins return to the mintable pool and sustain future rewards.
 
 ## 9. Conclusion
 
-Echocoin inherits Bitcoin's guarantee: no trust required, everything verifiable, no authority can reverse a transaction. It replaces proof-of-work with a Verifiable Delay Function that anchors the chain to real elapsed time without burning energy. Supply is bounded by a 21 million ECH cap with smooth exponential decay over a 20-year half-life, sustained indefinitely by fee burns recycled into future emission. No halvings, no fee manipulation incentive, no energy waste, no pool advantage.
+Echocoin inherits Bitcoin's guarantee: no trust required, everything verifiable, no authority can reverse a transaction. It replaces proof-of-work with a Verifiable Delay Function that anchors the chain to real elapsed time and Proof-of-Burn that anchors block-building rights to real economic commitment. Supply is bounded by a 21 million ECH cap with smooth exponential decay over a 20-year half-life, sustained indefinitely by fee and intentional burns recycled into future emission. No halvings, no fee manipulation incentive, no energy waste, no pool advantage, no botnet vulnerability.
 
 ## References
 
@@ -127,3 +156,4 @@ Echocoin inherits Bitcoin's guarantee: no trust required, everything verifiable,
 3. G. Fanti et al., "Dandelion: Redesigning the Bitcoin Network for Anonymity," 2018.
 4. A. Loewenstern et al., "BEP 44: Storing arbitrary data in the DHT," 2014.
 5. D. Boneh et al., "Verifiable Delay Functions," 2018.
+6. I. Stewart, "Proof of Burn," 2012. https://en.bitcoin.it/wiki/Proof_of_burn
