@@ -47,23 +47,22 @@ SYNC_EVERY_N_CYCLES = 3
 def _replay_blocks(blocks, state):
     """Replay a slice of blocks onto state in place.
     Applies transactions then pool-aware reward distribution for each block.
-    chain_so_far is built incrementally so reward_distribution scans
-    the correct window at each block height.
+    Uses BurnWindow for O(1) per-block distribution lookup during replay
+    instead of O(window * txs) chain rescans.
     blocks: iterable of block dicts, skipping genesis (height > 0).
     """
-    chain_so_far = []
+    window = pob_mod.BurnWindow()
     for blk in blocks:
+        window.add_block(blk)
         if blk["height"] == 0:
-            chain_so_far.append(blk)
             continue
         for t in blk["transactions"]:
             state.apply_tx(t)
         builder = blk.get("builder")
         if builder:
             reward = state.compute_block_reward()
-            dist = pob_mod.reward_distribution(chain_so_far, builder, reward)
+            dist = window.reward_distribution(builder, reward)
             state.apply_reward_distribution(dist)
-        chain_so_far.append(blk)
 
 
 class Node:
@@ -85,13 +84,15 @@ class Node:
         self.storage    = Storage(db_path or DB_PATH)
         self._cycle_count     = 0
         self._cumulative_score = 0   # running PoB sum, updated in _commit
+        self._burn_window      = pob_mod.BurnWindow()  # rolling burn index
 
         # tx_hash -> number of non-full blocks since first appearance that
         # excluded it. Used for the transaction censorship score.
         self._tx_exclusion_age = {}
 
         self._load_or_init_chain()
-        self.view = NodeView(self.chain, self.state)
+        self._rebuild_burn_window()
+        self.view = NodeView(self.chain, self.state, self._cumulative_score)
 
     # ------------------------------------------------------------------
     # Startup
@@ -123,6 +124,13 @@ class Node:
         self.state = state_mod.State()
         _replay_blocks(self.chain, self.state)
         log.info("[startup] state rebuilt  blocks=%d", len(self.chain))
+
+    def _rebuild_burn_window(self):
+        """Build the rolling BurnWindow from the current chain.
+        O(chain length * avg burn txs per block) -- runs once at startup."""
+        self._burn_window = pob_mod.BurnWindow()
+        for blk in self.chain:
+            self._burn_window.add_block(blk)
 
     def _publish_view(self):
         """Publish a consistent snapshot for Flask threads. Single ref swap."""
@@ -414,13 +422,16 @@ class Node:
 
     def _commit(self, new_block, new_state, relay=False):
         self._update_exclusion_ages(new_block)
+        # Update burn window with the new block before computing distribution
+        # and score, so the new block's burns count immediately.
+        self._burn_window.add_block(new_block)
         builder = new_block.get("builder")
         if builder:
             reward = new_state.compute_block_reward()
-            dist = pob_mod.reward_distribution(self.chain, builder, reward)
+            dist = self._burn_window.reward_distribution(builder, reward)
             new_state.apply_reward_distribution(dist)
-            # Incrementally update cumulative PoB score.
-            self._cumulative_score += pob_mod.score(self.chain, builder)
+            tip_hash_int = pob_mod._tip_hash_int(self.chain)
+            self._cumulative_score += self._burn_window.score(tip_hash_int, builder)
         self.state = new_state
         self.chain.append(new_block)
         self.storage.save_block(new_block)
@@ -486,7 +497,11 @@ class Node:
         validated = list(candidate_chain[:fork_point])
 
         # Validate and apply the new tail.
+        tail_window = pob_mod.BurnWindow()
+        for blk in candidate_chain[:fork_point]:
+            tail_window.add_block(blk)
         for blk in candidate_chain[fork_point:]:
+            tail_window.add_block(blk)
             probe = new_state.snapshot()
             ok, err = block_mod.validate(blk, probe, validated, fee_rate_at)
             if not ok:
@@ -494,7 +509,7 @@ class Node:
             builder = blk.get("builder")
             if builder:
                 reward = probe.compute_block_reward()
-                dist = pob_mod.reward_distribution(validated, builder, reward)
+                dist = tail_window.reward_distribution(builder, reward)
                 probe.apply_reward_distribution(dist)
             new_state = probe
             validated.append(blk)
@@ -519,6 +534,7 @@ class Node:
         self.chain = list(candidate_chain)
         self.state = new_state
         self._cumulative_score = pob_mod.cumulative_score(self.chain)
+        self._rebuild_burn_window()
         self.storage.save_state(new_state)
         self._publish_view()
         if label == "reorg":
