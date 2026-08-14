@@ -64,6 +64,20 @@ Lower score means more economic commitment and higher block-building priority. T
 
 A builder who has never burned any coins receives `denominator = 1`, making their score equal to the raw hash -- large and uncompetitive against active burners, but not zero. New participants can join and start building immediately; they just score poorly until they commit coins.
 
+**Burn pool tagging.** A burn output may optionally name a beneficiary address:
+
+```
+{ "to": "burn", "amount": N, "beneficiary": <address> }
+```
+
+When omitted, the beneficiary defaults to the sender. Burns tagged to a beneficiary accumulate that beneficiary's block-building weight and entitle every contributor to a proportional share of the block reward when that beneficiary wins a slot:
+
+```
+contributor_share = reward * contributor_burns / total_burns_to_beneficiary
+```
+
+This enables voluntary burn pools without any protocol-level pooling mechanism: contributors choose a beneficiary they trust to run a well-connected node, burn on their behalf, and receive rewards proportional to their contribution when that node wins. Crucially, burn weight is address-specific and non-transferable -- a pool operator cannot aggregate the scores of members or redirect burn weight to another address. The block reward is split among actual contributors, not concentrated at the operator. A participant who distrusts the operator can stop tagging burns at any time; their weight expires out of the 500-block window within ~17 hours.
+
 **Fork resolution.** Two nodes may complete the VDF at roughly the same time and broadcast competing blocks for the same slot. Both blocks may be structurally valid. Nodes select the block whose builder has the lower PoB score. This is deterministic and locally computable without coordination. If scores are equal (hash coincidence), the lower block hash breaks the tie.
 
 When two valid chains of equal height compete, nodes adopt the one with the lower **cumulative score** -- the sum of all block scores from genesis:

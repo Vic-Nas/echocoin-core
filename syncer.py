@@ -65,21 +65,27 @@ class Syncer:
         return apply_fn(full_chain)
 
     def _find_fork_point(self, peer_addr, local_chain):
-        """Return the height at which our chain and the peer's diverge.
+        """Return the height of the first block to fetch from the peer.
 
-        Walks back from the local tip one step at a time -- this is fast in
-        the common case (peer is just a few blocks ahead) and bounded by the
-        chain length in the worst case (a full reorg from genesis).
-        Returns the height of the first block to fetch (the fork point + 1),
-        or 0 if genesis is the common ancestor.
+        Binary-searches for the common ancestor: the highest height where
+        both chains share the same block hash. Returns that height + 1
+        (the first block we need from the peer), or 0 if genesis diverges.
         Returns None on network error.
+
+        Cost: O(log n) round trips instead of O(n) for a deep reorg.
+        For a node that is just a few blocks behind, the first probe at
+        the local tip usually hits and costs exactly one round trip.
         """
-        for height in range(len(local_chain) - 1, -1, -1):
-            local_hash = local_chain[height]["hash"]
+        lo, hi = 0, len(local_chain) - 1
+        result = None   # highest confirmed common height
+
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            local_hash = local_chain[mid]["hash"]
             try:
                 r = requests.get(
                     f"http://{peer_addr}/api/chain",
-                    params={"from": height, "to": height},
+                    params={"from": mid, "to": mid},
                     timeout=10,
                 )
                 if r.status_code != 200:
@@ -87,11 +93,17 @@ class Syncer:
                 page = r.json()
                 if not isinstance(page, list) or not page:
                     return None
-                if page[0].get("hash") == local_hash:
-                    return height + 1   # diverges at the next block
             except Exception:
                 return None
-        return 0
+
+            if page[0].get("hash") == local_hash:
+                result = mid   # this height is shared; look higher
+                lo = mid + 1
+            else:
+                hi = mid - 1   # diverged at or before mid; look lower
+
+        # result is the highest shared height, or None if genesis diverges.
+        return (result + 1) if result is not None else 0
 
     def _fetch_chain(self, peer_addr, from_h=0):
         """Paginated chain fetch starting from from_h. Returns list of block dicts or None."""
