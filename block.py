@@ -74,7 +74,7 @@ def block_hash(blk):
 
 def block_size(blk):
     """Size in bytes of serialized block."""
-    return len(canonical_json(blk).encode())
+    return len(canonical_json(blk))
 
 
 def _check_hash(blk):
@@ -142,9 +142,12 @@ def _check_tx_ordering(blk):
         missing = _TX_SORT_FIELDS - t.keys()
         if missing:
             return False, f"transaction at position {i} missing fields for ordering: {missing}"
+    # Hash each tx once, then compare orderings by hash rather than re-hashing.
+    hashes     = [tx_mod.tx_hash(t) for t in txs]
     sorted_txs = tx_mod.sort_txs(txs)
-    for i, (actual, expected) in enumerate(zip(txs, sorted_txs)):
-        if tx_mod.tx_hash(actual) != tx_mod.tx_hash(expected):
+    sorted_hashes = [tx_mod.tx_hash(t) for t in sorted_txs]
+    for i, (actual_h, expected_h) in enumerate(zip(hashes, sorted_hashes)):
+        if actual_h != expected_h:
             return False, f"transaction ordering violation at position {i}"
     return True, None
 

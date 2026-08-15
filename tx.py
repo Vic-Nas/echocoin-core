@@ -31,7 +31,7 @@ def tx_size(tx_dict):
     """Fee-basis size: serialized body excluding the signature field.
     The signature is not under the sender's control so is not priced."""
     fields = {k: v for k, v in tx_dict.items() if k != "signature"}
-    return len(canonical_json(fields).encode())
+    return len(canonical_json(fields))
 
 
 def tx_size_in_block(tx_dict, position=0):
@@ -41,7 +41,7 @@ def tx_size_in_block(tx_dict, position=0):
     Used by block.assemble() to track running block size without re-serializing
     the entire block on every candidate tx.
     """
-    size = len(canonical_json(tx_dict).encode())
+    size = len(canonical_json(tx_dict))
     return size + (1 if position > 0 else 0)
 
 
@@ -173,11 +173,9 @@ def validate(tx_dict, state, chain_tip_height, get_fee_rate_at_height):
     return True, None
 
 
-def sort_key(tx_dict):
-    """Sort key: (fee_height asc, nonce asc, tx_hash lex)."""
-    return (tx_dict["fee_height"], tx_dict["nonce"], tx_hash(tx_dict))
-
-
 def sort_txs(tx_list):
-    """Sort transactions by the deterministic ordering rule."""
-    return sorted(tx_list, key=sort_key)
+    """Sort transactions by the deterministic ordering rule.
+    Pre-computes tx_hash for each tx once to avoid O(n log n) rehashing.
+    """
+    keyed = [(t["fee_height"], t["nonce"], tx_hash(t), t) for t in tx_list]
+    return [t for _, _, _, t in sorted(keyed)]

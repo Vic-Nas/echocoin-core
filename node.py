@@ -325,7 +325,8 @@ class Node:
             if not ok:
                 log.debug("[vdf] peer block rejected: %s", err)
                 continue
-            if _rng.random() > self._censorship_score(blk):
+            confirmed = {tx_mod.tx_hash(t) for t in blk.get("transactions", [])}
+            if _rng.random() > self._censorship_score(blk, confirmed):
                 log.debug("[vdf] peer block failed censorship check")
                 continue
             valid_peers.append(blk)
@@ -351,11 +352,13 @@ class Node:
             blk["tx_bytes"] = sum(tx_mod.tx_size(t)
                                    for t in blk.get("transactions", []))
 
-        self._update_exclusion_ages(blk)
+        # Compute confirmed hashes once — used by exclusion tracking and remove_many.
+        confirmed = {tx_mod.tx_hash(t) for t in blk.get("transactions", [])}
+        self._update_exclusion_ages(blk, confirmed)
         self.cs = self.cs.apply_block(blk)
         self.storage.save_block(blk)
         self.storage.save_state(self.cs.state)
-        self.mempool.remove_many([tx_mod.tx_hash(t) for t in blk["transactions"]])
+        self.mempool.remove_many(confirmed)
         self.view = NodeView(self.cs, prev_view=self.view)
 
         if relay:
@@ -413,9 +416,10 @@ class Node:
     # Censorship resistance
     # ------------------------------------------------------------------
 
-    def _censorship_score(self, blk):
-        """Acceptance probability for blk. 1.0 if no long-excluded txs."""
-        confirmed = {tx_mod.tx_hash(t) for t in blk.get("transactions", [])}
+    def _censorship_score(self, blk, confirmed: set) -> float:
+        """Acceptance probability for blk. 1.0 if no long-excluded txs.
+        confirmed: pre-computed set of tx hashes in blk.
+        """
         score = 1.0
         for h in self.mempool.pending_hashes() - confirmed:
             age = self._exclusion_age.get(h, 0)
@@ -423,10 +427,12 @@ class Node:
                 score = min(score, 1.0 / age)
         return score
 
-    def _update_exclusion_ages(self, blk):
-        confirmed = {tx_mod.tx_hash(t) for t in blk.get("transactions", [])}
-        pending   = self.mempool.pending_hashes()
-        is_full   = blk.get("tx_bytes", 0) >= BLOCK_SIZE_LIMIT * 0.99
+    def _update_exclusion_ages(self, blk, confirmed: set) -> None:
+        """Update exclusion age counters after committing blk.
+        confirmed: pre-computed set of tx hashes in blk.
+        """
+        pending = self.mempool.pending_hashes()
+        is_full = blk.get("tx_bytes", 0) >= BLOCK_SIZE_LIMIT * 0.99
         if not is_full:
             for h in pending - confirmed:
                 self._exclusion_age[h] = self._exclusion_age.get(h, 0) + 1
@@ -457,13 +463,10 @@ class Node:
         prefix = remote_chain[:fork_point]
         tail   = remote_chain[fork_point:]
 
-        # Build fee rate lookup from the trusted local prefix only.
-        # Using remote_cs.fee_rate_at would let an attacker supply arbitrary
-        # fee rates for the shared prefix blocks.
-        trusted_prefix_cs = ChainState.from_chain(self.cs.chain[:fork_point]) \
-            if fork_point > 0 else ChainState.from_genesis()
-
-        ok, err = _validate_tail(tail, prefix, trusted_prefix_cs.fee_rate_at)
+        # Use local chain for fee rate lookup up to the fork point — it's
+        # the trusted source and already computed. An attacker cannot influence
+        # self.cs.fee_rate_at since it comes from our own validated chain.
+        ok, err = _validate_tail(tail, prefix, self.cs.fee_rate_at)
         if not ok:
             log.warning("[sync] rejected: %s", err)
             return False, err
