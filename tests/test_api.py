@@ -6,6 +6,7 @@ import threading
 
 import pytest
 from helpers import *
+from node import NodeView
 
 
 class FakeGossip:
@@ -50,8 +51,8 @@ def client():
         dbfile = f.name
     crypto.save_key(keyfile, sk, pk, "testpass")
     n = Node(keyfile, pk, gossip, syncer, pool, net_in_q, db_path=dbfile)
-    n.state.credit(addr, 100_000_000)
-    n._publish_view()
+    n.cs.state.credit(addr, 100_000_000)
+    n.view = NodeView(n.cs)
     discovery = FakeDiscovery()
     app = create_app(n, pool, net_in_q, discovery)
     app.config["TESTING"] = True
@@ -137,7 +138,7 @@ def test_balance_endpoint(client):
 def test_send_valid_tx(client):
     c, n, sk, pk_hex, addr = client
     _, _, _, to_addr = make_keypair()
-    rate = n.chain[-1]["fee_rate"]
+    rate = n.cs.chain[-1]["fee_rate"]
     t = make_valid_tx(sk, pk_hex, addr, to_addr, 100, 1, 0, rate)
     r = c.post("/api/tx/send", json=t)
     assert r.status_code == 200
@@ -156,7 +157,7 @@ def test_send_invalid_tx_returns_400(client):
 def test_mempool_size_after_tx(client):
     c, n, sk, pk_hex, addr = client
     _, _, _, to_addr = make_keypair()
-    rate = n.chain[-1]["fee_rate"]
+    rate = n.cs.chain[-1]["fee_rate"]
     t = make_valid_tx(sk, pk_hex, addr, to_addr, 100, 1, 0, rate)
     c.post("/api/tx/send", json=t)
     assert c.get("/api/mempool").get_json()["size"] == 1

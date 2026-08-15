@@ -132,7 +132,7 @@ def test_apply_chain_accepted_when_remote_longer():
         with patch("vdf.verify", return_value=True):
             ok, err = n.apply_better_chain(remote)
         assert ok, err
-        assert len(n.chain) == 3
+        assert len(n.cs.chain) == 3
     finally:
         teardown_node(n, dbfile, keyfile)
 
@@ -142,7 +142,7 @@ def test_apply_chain_rejected_when_remote_shorter():
     try:
         # Commit two blocks locally
         for _ in range(2):
-            blk = make_block(n.chain, builder_addr=addr)
+            blk = make_block(n.cs.chain, builder_addr=addr)
             blk["tx_bytes"] = 0
             with patch("vdf.verify", return_value=True):
                 commit_block(n, blk)
@@ -150,7 +150,7 @@ def test_apply_chain_rejected_when_remote_shorter():
         remote = make_chain(1)   # just genesis
         ok, err = n.apply_better_chain(remote)
         assert not ok
-        assert len(n.chain) == 3
+        assert len(n.cs.chain) == 3
     finally:
         teardown_node(n, dbfile, keyfile)
 
@@ -176,12 +176,12 @@ def test_reorg_restores_displaced_txs_to_mempool():
     """Txs in the old tail but not in the new tail go back to mempool."""
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        n.state.credit(addr, 100_000_000)
+        n.cs.state.credit(addr, 100_000_000)
         _, _, _, to = make_keypair()
         t = make_valid_tx(sk, pk_hex, addr, to, 1_000, 1, 0, 1)
 
         # Commit a block containing t
-        blk = make_block(n.chain, builder_addr=addr, txs=[t])
+        blk = make_block(n.cs.chain, builder_addr=addr, txs=[t])
         blk["tx_bytes"] = tx_mod.tx_size(t)
         with patch("vdf.verify", return_value=True):
             commit_block(n, blk)
@@ -203,34 +203,16 @@ def test_reorg_restores_displaced_txs_to_mempool():
 # ---------------------------------------------------------------------------
 
 def test_fork_choice_prefers_lower_cumulative_score():
-    """_remote_is_better picks the chain with lower cumulative PoB score
-    when heights are equal."""
-    n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
-    try:
-        # Build local chain of height 2 with no burns
-        for _ in range(2):
-            blk = make_block(n.chain, builder_addr=addr)
-            blk["tx_bytes"] = 0
-            with patch("vdf.verify", return_value=True):
-                commit_block(n, blk)
+    """is_better_than prefers the chain with lower cumulative PoB score
+    when heights are equal.
+    """
+    from chainstate import ChainState
+    from pob import cumulative_score
 
-        # Build a competing chain of height 2 with burns
-        burning_sk, burning_pk, burning_pk_hex, burning_addr = make_keypair()
-        s2 = state_mod.State()
-        s2.credit(burning_addr, 100_000_000_000)
-        remote = [block_mod.create_genesis()]
-        for i in range(1, 3):
-            burn = make_burn_tx(burning_sk, burning_pk_hex, burning_addr,
-                                10_000_000 * i, nonce=i, fee_height=0)
-            s2.apply_tx(burn)
-            blk = make_block(remote, builder_addr=burning_addr, txs=[burn])
-            remote.append(blk)
+    chain = make_chain(3)
+    score = cumulative_score(chain)
+    cs_high = ChainState(chain, state_mod.State(), pob_mod.BurnWindow(), score)
+    cs_low  = ChainState(chain, state_mod.State(), pob_mod.BurnWindow(), score - 1)
+    assert cs_low.is_better_than(cs_high)
+    assert not cs_high.is_better_than(cs_low)
 
-        from pob import cumulative_score
-        remote_score = cumulative_score(remote)
-        local_score  = n._cumulative_score
-        # Only assert that _remote_is_better is consistent with score comparison
-        expected = n._remote_is_better(remote)
-        assert expected == (remote_score < local_score or len(remote) > len(n.chain))
-    finally:
-        teardown_node(n, dbfile, keyfile)

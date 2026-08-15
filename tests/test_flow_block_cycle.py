@@ -74,10 +74,10 @@ def test_tx_bytes_stamped_on_committed_block():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
         with patch("vdf.verify", return_value=True):
-            blk = make_block(n.chain, builder_addr=addr)
+            blk = make_block(n.cs.chain, builder_addr=addr)
             blk["tx_bytes"] = 0
             commit_block(n, blk)
-        assert "tx_bytes" in n.chain[-1]
+        assert "tx_bytes" in n.cs.chain[-1]
     finally:
         teardown_node(n, dbfile, keyfile)
 
@@ -89,10 +89,10 @@ def test_tx_bytes_stamped_on_committed_block():
 def test_own_block_wins_when_no_peers():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        g = n.chain[-1]
-        candidate = make_block(n.chain, builder_addr=addr)
+        g = n.cs.chain[-1]
+        candidate = make_block(n.cs.chain, builder_addr=addr)
         with patch("vdf.verify", return_value=True):
-            winner, relay = n._select_winner(candidate, [], g)
+            winner, relay = n._pick_winner(candidate, [])
         assert winner["hash"] == candidate["hash"]
         assert relay is False
     finally:
@@ -103,17 +103,17 @@ def test_peer_block_with_lower_hash_wins():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
         _, _, _, other_addr = make_keypair()
-        g = n.chain[-1]
-        candidate = make_block(n.chain, builder_addr=addr)
+        g = n.cs.chain[-1]
+        candidate = make_block(n.cs.chain, builder_addr=addr)
 
         # Build a peer block with artificially lower hash
-        peer_blk = make_block(n.chain, builder_addr=other_addr)
+        peer_blk = make_block(n.cs.chain, builder_addr=other_addr)
         # Force peer_blk hash to be lower than candidate
         if peer_blk["hash"] >= candidate["hash"]:
             peer_blk, candidate = candidate, peer_blk
 
         with patch("vdf.verify", return_value=True):
-            winner, relay = n._select_winner(candidate, [peer_blk], g)
+            winner, relay = n._pick_winner(candidate, [peer_blk])
 
         assert winner["hash"] == peer_blk["hash"]
         assert relay is True
@@ -125,9 +125,9 @@ def test_peer_block_with_invalid_vdf_rejected():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
         _, _, _, other = make_keypair()
-        g = n.chain[-1]
-        candidate = make_block(n.chain, builder_addr=addr)
-        peer_blk  = make_block(n.chain, builder_addr=other)
+        g = n.cs.chain[-1]
+        candidate = make_block(n.cs.chain, builder_addr=addr)
+        peer_blk  = make_block(n.cs.chain, builder_addr=other)
 
         # Give each block a distinct vdf_output so fake_verify can tell them apart
         candidate["vdf_output"] = "aa" * 100
@@ -148,7 +148,7 @@ def test_peer_block_with_invalid_vdf_rejected():
             return output == valid_output
 
         with patch("vdf.verify", side_effect=fake_verify):
-            winner, relay = n._select_winner(candidate, [peer_blk], g)
+            winner, relay = n._pick_winner(candidate, [peer_blk])
 
         assert winner["hash"] == candidate["hash"]
     finally:
@@ -158,14 +158,14 @@ def test_peer_block_with_invalid_vdf_rejected():
 def test_peer_block_wrong_height_ignored():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        g = n.chain[-1]
-        candidate = make_block(n.chain, builder_addr=addr)
-        peer_blk  = make_block(n.chain, builder_addr=addr)
+        g = n.cs.chain[-1]
+        candidate = make_block(n.cs.chain, builder_addr=addr)
+        peer_blk  = make_block(n.cs.chain, builder_addr=addr)
         peer_blk["height"] = 999   # wrong height
         peer_blk["hash"]   = "aa" * 32  # lower hash won't help
 
         with patch("vdf.verify", return_value=True):
-            winner, relay = n._select_winner(candidate, [peer_blk], g)
+            winner, relay = n._pick_winner(candidate, [peer_blk])
 
         assert winner["hash"] == candidate["hash"]
     finally:
@@ -179,12 +179,12 @@ def test_peer_block_wrong_height_ignored():
 def test_commit_appends_to_chain():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        blk = make_block(n.chain, builder_addr=addr)
+        blk = make_block(n.cs.chain, builder_addr=addr)
         blk["tx_bytes"] = 0
         with patch("vdf.verify", return_value=True):
             commit_block(n, blk)
-        assert len(n.chain) == 2
-        assert n.chain[-1]["height"] == 1
+        assert len(n.cs.chain) == 2
+        assert n.cs.chain[-1]["height"] == 1
     finally:
         teardown_node(n, dbfile, keyfile)
 
@@ -192,7 +192,7 @@ def test_commit_appends_to_chain():
 def test_commit_persists_block_to_storage():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        blk = make_block(n.chain, builder_addr=addr)
+        blk = make_block(n.cs.chain, builder_addr=addr)
         blk["tx_bytes"] = 0
         with patch("vdf.verify", return_value=True):
             commit_block(n, blk)
@@ -205,12 +205,12 @@ def test_commit_persists_block_to_storage():
 def test_commit_applies_block_reward():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        blk = make_block(n.chain, builder_addr=addr)
+        blk = make_block(n.cs.chain, builder_addr=addr)
         blk["tx_bytes"] = 0
         with patch("vdf.verify", return_value=True):
             commit_block(n, blk)
-        assert n.state.total_minted > 0
-        assert n.state.get_balance(addr) > 0
+        assert n.cs.state.total_minted > 0
+        assert n.cs.state.get_balance(addr) > 0
     finally:
         teardown_node(n, dbfile, keyfile)
 
@@ -219,7 +219,7 @@ def test_commit_publishes_updated_view():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
         v_before = n.view
-        blk = make_block(n.chain, builder_addr=addr)
+        blk = make_block(n.cs.chain, builder_addr=addr)
         blk["tx_bytes"] = 0
         with patch("vdf.verify", return_value=True):
             commit_block(n, blk)
@@ -232,13 +232,13 @@ def test_commit_publishes_updated_view():
 def test_commit_removes_confirmed_txs_from_mempool():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        n.state.credit(addr, 100_000_000)
+        n.cs.state.credit(addr, 100_000_000)
         _, _, _, to = make_keypair()
         t = make_valid_tx(sk, pk_hex, addr, to, 1_000, 1, 0, 1)
         n.mempool.add(t)
         assert n.mempool.size() == 1
 
-        blk = make_block(n.chain, builder_addr=addr, txs=[t])
+        blk = make_block(n.cs.chain, builder_addr=addr, txs=[t])
         # Use the real _commit so mempool cleanup runs
         with patch("vdf.verify", return_value=True):
             n._commit(blk, relay=False)

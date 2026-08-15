@@ -22,16 +22,16 @@ def test_shorter_chain_rejected_on_sync():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
         for _ in range(3):
-            blk = make_block(n.chain, builder_addr=addr)
+            blk = make_block(n.cs.chain, builder_addr=addr)
             blk["tx_bytes"] = 0
             with patch("vdf.verify", return_value=True):
                 commit_block(n, blk)
-        assert len(n.chain) == 4
+        assert len(n.cs.chain) == 4
 
         shorter = make_chain(2)
         ok, err = n.apply_better_chain(shorter)
         assert not ok
-        assert len(n.chain) == 4
+        assert len(n.cs.chain) == 4
     finally:
         teardown_node(n, dbfile, keyfile)
 
@@ -40,10 +40,10 @@ def test_reorg_replays_from_fork_point():
     """Reorg to a longer chain correctly rebuilds balances from fork_point."""
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        n.state.credit(addr, 100_000_000)
+        n.cs.state.credit(addr, 100_000_000)
         _, _, _, to = make_keypair()
 
-        blk1 = make_block(n.chain, builder_addr=addr)
+        blk1 = make_block(n.cs.chain, builder_addr=addr)
         blk1["tx_bytes"] = 0
         with patch("vdf.verify", return_value=True):
             commit_block(n, blk1)
@@ -53,7 +53,7 @@ def test_reorg_replays_from_fork_point():
         with patch("vdf.verify", return_value=True):
             ok, err = n.apply_better_chain(remote)
         assert ok, err
-        assert len(n.chain) == 4
+        assert len(n.cs.chain) == 4
     finally:
         teardown_node(n, dbfile, keyfile)
 
@@ -90,11 +90,11 @@ def test_botnet_chain_has_higher_cumulative_score():
 def test_replayed_tx_rejected_by_nonce():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        n.state.credit(addr, 100_000_000)
+        n.cs.state.credit(addr, 100_000_000)
         _, _, _, to = make_keypair()
         t = make_valid_tx(sk, pk_hex, addr, to, 1_000, 1, 0, 1)
 
-        n.state.apply_tx(t)   # advance nonce to 1
+        n.cs.state.apply_tx(t)   # advance nonce to 1
 
         ok, err = n.submit_tx(t)
         assert not ok
@@ -106,7 +106,7 @@ def test_replayed_tx_rejected_by_nonce():
 def test_nonce_gap_rejected():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        n.state.credit(addr, 100_000_000)
+        n.cs.state.credit(addr, 100_000_000)
         _, _, _, to = make_keypair()
         # nonce 2 when current is 0 (expected 1)
         outputs = [{"to": to, "amount": 1_000}]
@@ -126,7 +126,7 @@ def test_nonce_gap_rejected():
 def test_wrong_fee_rejected():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        n.state.credit(addr, 100_000_000)
+        n.cs.state.credit(addr, 100_000_000)
         _, _, _, to = make_keypair()
         outputs = [{"to": to, "amount": 1_000}]
         fee = tx_mod.compute_fee(addr, pk_hex, outputs, 1, 0, 1)
@@ -142,7 +142,7 @@ def test_wrong_fee_height_rejected():
     from params import FEE_HEIGHT_MAX_AGE
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        n.state.credit(addr, 100_000_000)
+        n.cs.state.credit(addr, 100_000_000)
         _, _, _, to = make_keypair()
         # fee_height in the future
         outputs = [{"to": to, "amount": 1_000}]
@@ -230,9 +230,9 @@ def test_missing_vdf_fields_rejected():
 def test_output_exceeding_balance_rejected():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        n.state.credit(addr, 1_000)
+        n.cs.state.credit(addr, 1_000)
         _, _, _, to = make_keypair()
-        rate = n.chain[0]["fee_rate"]
+        rate = n.cs.chain[0]["fee_rate"]
         outputs = [{"to": to, "amount": 999_999_999}]
         fee = tx_mod.compute_fee(addr, pk_hex, outputs, 1, 0, rate)
         t = tx_mod.create(addr, pk_hex, outputs, 1, 0, fee, sk)
@@ -267,7 +267,7 @@ def test_balance_never_negative_after_apply():
 def test_censorship_score_one_for_block_with_no_missing_txs():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        blk = make_block(n.chain, builder_addr=addr)
+        blk = make_block(n.cs.chain, builder_addr=addr)
         score = n._censorship_score(blk)
         assert score == 1.0
     finally:
@@ -277,16 +277,16 @@ def test_censorship_score_one_for_block_with_no_missing_txs():
 def test_censorship_score_decreases_with_repeated_exclusion():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        n.state.credit(addr, 100_000_000)
+        n.cs.state.credit(addr, 100_000_000)
         _, _, _, to = make_keypair()
         t = make_valid_tx(sk, pk_hex, addr, to, 1_000, 1, 0, 1)
         n.mempool.add(t)
         h = tx_mod.tx_hash(t)
 
         # Simulate repeated exclusion -- increment exclusion age
-        n._tx_exclusion_age[h] = 5
+        n._exclusion_age[h] = 5
 
-        blk = make_block(n.chain, builder_addr=addr, txs=[])
+        blk = make_block(n.cs.chain, builder_addr=addr, txs=[])
         score = n._censorship_score(blk)
         assert score <= 0.2   # 1/5
     finally:
@@ -297,13 +297,13 @@ def test_first_exclusion_does_not_penalise():
     """Age 0 (first miss) scores 1.0 -- timing noise tolerance."""
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
-        n.state.credit(addr, 100_000_000)
+        n.cs.state.credit(addr, 100_000_000)
         _, _, _, to = make_keypair()
         t = make_valid_tx(sk, pk_hex, addr, to, 1_000, 1, 0, 1)
         n.mempool.add(t)
         # No exclusion age set -- defaults to 0
 
-        blk = make_block(n.chain, builder_addr=addr, txs=[])
+        blk = make_block(n.cs.chain, builder_addr=addr, txs=[])
         score = n._censorship_score(blk)
         assert score == 1.0
     finally:

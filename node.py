@@ -1,277 +1,216 @@
-"""Block cycle orchestrator. Linear sequence. Persists every block to SQLite.
+"""Block cycle orchestrator.
 
-Data flow (one cycle):
-  1. _drain_queue()       -- pull inbound txs and peer blocks from net_in_q
-  2. syncer.check_and_sync() -- every N cycles, pull a better chain from a peer
-  3. vdf.evaluate()       -- block for ~120s computing the VDF proof
-  4. assemble + broadcast -- build candidate, send to peers via gossip
-  5. _drain_queue(5s)     -- collect peer blocks that arrive during broadcast
-  6. _select_winner()     -- pick best block by PoB score + censorship check
-  7. _commit()            -- update chain, state, burn window, storage, view
+One cycle:
+  1. drain queue          -- inbound txs and blocks from net_in_q
+  2. sync (every 3)      -- pull a better chain from a random peer
+  3. vdf.evaluate()      -- blocks ~120s
+  4. assemble + broadcast
+  5. drain queue (5s)    -- collect peer blocks
+  6. pick winner         -- lowest hash among valid blocks
+  7. commit              -- swap ChainState, persist, publish view
 
 Flask threads read node.view (a NodeView snapshot). The node loop is the
-sole writer; it publishes a new snapshot atomically after every mutation.
-Non-block messages (tx submissions) arrive on net_in_q and are dispatched
-inside _drain_queue() on the node loop thread.
+sole writer; every mutation publishes a new snapshot atomically.
 """
 
 import logging
-import os
 import queue
 import secrets as _secrets
 import threading
 import time
 
-_rng = _secrets.SystemRandom()
-
 import block as block_mod
-import pob as pob_mod
 import crypto
 import mempool as mempool_mod
-import state as state_mod
+import pob as pob_mod
 import tx as tx_mod
 import vdf as vdf_mod
-from params import (
-    BLOCK_SIZE_LIMIT,
-    DB_PATH,
-)
+from chainstate import ChainState
+from params import BLOCK_SIZE_LIMIT, DB_PATH
 from storage import Storage
 
-
-class NodeView:
-    """Read-only snapshot of node state for Flask threads.
-    Published by the node loop after every chain/state mutation.
-    Flask reads node.view -- one attribute swap, GIL-atomic, no lock.
-    chain is a frozen copy so Flask iteration can never race with
-    node-loop appends."""
-    __slots__ = ("chain", "cumulative_score", "genesis_hash", "height",
-                 "state", "tip", "stats_points", "_cum_burned")
-
-    def __init__(self, chain, state, cumulative_score=0, prev_view=None):
-        self.chain            = list(chain)
-        self.tip              = chain[-1]
-        self.genesis_hash     = chain[0]["hash"]
-        self.state            = state.snapshot()
-        self.height           = chain[-1]["height"]
-        self.cumulative_score = cumulative_score
-        prev_points    = getattr(prev_view, "stats_points",    None)
-        prev_cum       = getattr(prev_view, "_cum_burned",     0)
-        self.stats_points, self._cum_burned = self._build_stats_points(
-            self.chain, self.state, prev_points, prev_cum
-        )
-
-    @staticmethod
-    def _build_stats_points(chain, state, prev_points=None, prev_cum_burned=0):
-        """Build chart data points for /api/stats.
-
-        Normal path (chain grew by one block): reuse prev_points as a read-only
-        base and build a new list with one appended point. No mutation of the
-        previous view's list -- Flask threads may still be reading it.
-
-        Falls back to a full rebuild on reorg or when downsampling kicks in
-        (chain > 500 blocks, at which point we rebuild the full downsampled set).
-
-        Returns (points, cum_burned) so the caller can carry cum_burned forward.
-        """
-        if len(chain) <= 1:
-            return [], 0
-
-        total_minted = state.total_minted
-        max_height   = max(len(chain) - 1, 1)
-
-        # Fast path: chain grew by exactly one block and we're below the 500-point cap.
-        if (prev_points is not None
-                and len(prev_points) < 500
-                and len(chain) == len(prev_points) + 2):   # +2: genesis not in points
-            blk       = chain[-1]
-            block_fee = sum(t["fee"] for t in blk.get("transactions", []))
-            cum       = prev_cum_burned + block_fee
-            minted    = int(total_minted * blk["height"] / max_height)
-            new_point = {
-                "height":       blk["height"],
-                "minted":       minted,
-                "burned_fees":  cum,
-                "circulating":  minted - cum,
-                "net_emission": block_fee,
-            }
-            return prev_points + [new_point], cum   # new list, not mutation
-
-        # Full rebuild (startup, reorg, or post-500 downsample).
-        points, cum = [], 0
-        for blk in chain[1:]:
-            block_fee  = sum(t["fee"] for t in blk.get("transactions", []))
-            cum       += block_fee
-            minted     = int(total_minted * blk["height"] / max_height)
-            points.append({
-                "height":       blk["height"],
-                "minted":       minted,
-                "burned_fees":  cum,
-                "circulating":  minted - cum,
-                "net_emission": block_fee,
-            })
-
-        if len(points) > 500:
-            step   = len(points) / 500
-            points = [points[int(i * step)] for i in range(500)]
-
-        return points, cum
-
-
 log = logging.getLogger("ec.node")
+_rng = _secrets.SystemRandom()
 
 SYNC_EVERY_N_CYCLES = 3
 
 
-def _replay(chain, state, window):
-    """Apply a trusted chain slice onto state and window in place.
-
-    Used as a shared primitive by both _build_state_from_chain (startup /
-    sync) and _validate_tail (probe state before committing a new tail).
-    Genesis (height 0) contributes to the window but has no txs or reward.
-    """
-    for blk in chain:
-        window.add_block(blk)
-        if blk["height"] == 0:
-            continue
-        for t in blk["transactions"]:
-            state.apply_tx(t)
-        builder = blk.get("builder")
-        if builder:
-            state.apply_reward_distribution(
-                window.reward_distribution(builder, state.compute_block_reward())
-            )
-
-
-def _build_state_from_chain(chain):
-    """Replay a fully trusted chain, return (State, BurnWindow).
-
-    Called at startup and after a sync/reorg. Every block is applied
-    without re-checking proofs or signatures.
-    """
-    state, window = state_mod.State(), pob_mod.BurnWindow()
-    _replay(chain, state, window)
-    return state, window
-
+# ---------------------------------------------------------------------------
+# Tail validation (pure -- no node state touched)
+# ---------------------------------------------------------------------------
 
 def _validate_tail(tail, prefix, fee_rate_at):
-    """Check whether tail is valid when appended after prefix.
+    """Validate new blocks against a trusted prefix. Pure: nothing is mutated.
 
-    Pure check: builds a throw-away state from prefix then validates
-    each block in tail against it. Returns (True, None) or (False, error).
-    No permanent state is mutated -- on failure everything is discarded.
-
-    fee_rate_at: callable(height) -> fee_rate from the candidate chain.
+    Builds a throw-away ChainState from the prefix, then checks each block
+    in tail. Returns (True, None) or (False, error_string).
     """
-    state, window = state_mod.State(), pob_mod.BurnWindow()
-    _replay(prefix, state, window)
+    cs = ChainState.from_chain(prefix) if prefix else ChainState.from_genesis()
     validated = list(prefix)
     for blk in tail:
-        window.add_block(blk)
-        probe = state.snapshot()
+        probe = cs.state.snapshot()
         ok, err = block_mod.validate(blk, probe, validated, fee_rate_at)
         if not ok:
             return False, f"invalid block at {blk['height']}: {err}"
+        # Apply to throw-away state so subsequent blocks see correct balances.
         builder = blk.get("builder")
+        window  = cs.burn_window
+        window.add_block(blk)
         if builder:
             probe.apply_reward_distribution(
                 window.reward_distribution(builder, probe.compute_block_reward())
             )
-        state = probe
+        cs = ChainState(validated + [blk], probe, window, cs.cumulative_score)
         validated.append(blk)
     return True, None
 
 
+# ---------------------------------------------------------------------------
+# NodeView: read-only snapshot for Flask threads
+# ---------------------------------------------------------------------------
+
+class NodeView:
+    """Immutable snapshot of node state. Published after every block commit.
+    Flask reads node.view -- one reference swap, GIL-atomic, no lock needed.
+    """
+    __slots__ = ("chain", "height", "tip", "genesis_hash", "cumulative_score",
+                 "state", "stats_points", "_cum_burned")
+
+    def __init__(self, cs, prev_view=None):
+        self.chain            = cs.chain
+        self.tip              = cs.tip
+        self.height           = cs.height
+        self.genesis_hash     = cs.genesis_hash
+        self.cumulative_score = cs.cumulative_score
+        self.state            = cs.state.snapshot()
+        prev_points = getattr(prev_view, "stats_points", None)
+        prev_cum    = getattr(prev_view, "_cum_burned",  0)
+        self.stats_points, self._cum_burned = self._build_stats(
+            cs.chain, self.state, prev_points, prev_cum
+        )
+
+    @staticmethod
+    def _build_stats(chain, state, prev_points=None, prev_cum=0):
+        """Chart data for /api/stats. Incremental when chain grew by one block."""
+        if len(chain) <= 1:
+            return [], 0
+        total_minted = state.total_minted
+        max_height   = max(len(chain) - 1, 1)
+
+        if prev_points is not None and len(prev_points) < 500 \
+                and len(chain) == len(prev_points) + 2:
+            blk       = chain[-1]
+            fee       = sum(t["fee"] for t in blk.get("transactions", []))
+            cum       = prev_cum + fee
+            minted    = int(total_minted * blk["height"] / max_height)
+            return prev_points + [{"height": blk["height"], "minted": minted,
+                                    "burned_fees": cum, "circulating": minted - cum,
+                                    "net_emission": fee}], cum
+
+        points, cum = [], 0
+        for blk in chain[1:]:
+            fee    = sum(t["fee"] for t in blk.get("transactions", []))
+            cum   += fee
+            minted = int(total_minted * blk["height"] / max_height)
+            points.append({"height": blk["height"], "minted": minted,
+                            "burned_fees": cum, "circulating": minted - cum,
+                            "net_emission": fee})
+        if len(points) > 500:
+            step   = len(points) / 500
+            points = [points[int(i * step)] for i in range(500)]
+        return points, cum
+
+
+# ---------------------------------------------------------------------------
+# Node
+# ---------------------------------------------------------------------------
+
 class Node:
-    def __init__(self, keyfile, public_key, gossip, syncer, pool, net_in_q, db_path=None):
-        self.keyfile    = keyfile
-        self.pk         = public_key
-        self.pk_hex     = public_key.hex()
-        self.addr       = crypto.public_key_to_address(public_key)
-        self.gossip     = gossip
-        self.syncer     = syncer
-        self.pool       = pool
-        self.net_in_q   = net_in_q
-        self.state      = state_mod.State()
-        self.mempool    = mempool_mod.Mempool()
-        self.chain      = []
-        self.running    = False
-        self._kek       = None
+
+    def __init__(self, keyfile, public_key, gossip, syncer, pool, net_in_q,
+                 db_path=None):
+        self.keyfile      = keyfile
+        self.pk           = public_key
+        self.pk_hex       = public_key.hex()
+        self.addr         = crypto.public_key_to_address(public_key)
+        self.gossip       = gossip
+        self.syncer       = syncer
+        self.pool         = pool
+        self.net_in_q     = net_in_q
+        self.mempool      = mempool_mod.Mempool()
+        self.storage      = Storage(db_path or DB_PATH)
+        self.running      = False
+        self._kek         = None
         self._loop_thread = None
-        self.storage    = Storage(db_path or DB_PATH)
-        self._cycle_count     = 0
-        self._cumulative_score = 0   # running PoB sum, updated in _commit
-        self._burn_window      = pob_mod.BurnWindow()  # rolling burn index
+        self._cycle_count = 0
 
-        # tx_hash -> number of non-full blocks since first appearance that
-        # excluded it. Used for the transaction censorship score.
-        self._tx_exclusion_age = {}
+        # tx_hash -> consecutive non-full blocks that excluded it.
+        self._exclusion_age = {}
 
-        self._load_or_init_chain()
-        self.view = NodeView(self.chain, self.state, self._cumulative_score)
+        self.cs   = self._load_cs()
+        self.view = NodeView(self.cs)
 
     # ------------------------------------------------------------------
     # Startup
     # ------------------------------------------------------------------
 
-    def _load_or_init_chain(self):
+    def _load_cs(self):
+        """Load or create ChainState from storage."""
         stored = self.storage.load_all_blocks()
-        if stored:
-            self.chain = stored
-            # Backfill tx_bytes for blocks loaded from an older database.
-            for blk in self.chain:
-                if "tx_bytes" not in blk:
-                    blk["tx_bytes"] = sum(
-                        tx_mod.tx_size(t) for t in blk.get("transactions", [])
-                    )
-            if self.storage.state_exists():
-                balances, nonces, total_minted, total_burnt = self.storage.load_state()
-                self.state._balances    = balances
-                self.state._nonces      = nonces
-                self.state.total_minted = total_minted
-                self.state.total_burnt  = total_burnt
-                # Rebuild burn window from chain (not included in state snapshot).
-                self._burn_window = pob_mod.BurnWindow()
-                for blk in self.chain:
-                    self._burn_window.add_block(blk)
-            else:
-                self._rebuild_from_chain()
-            log.info("[startup] chain loaded  height=%d  tip=%s",
-                     self.chain[-1]["height"], self.chain[-1]["hash"][:12])
-        else:
-            genesis = block_mod.create_genesis()
-            self.chain.append(genesis)
-            self.storage.save_block(genesis)
+        if not stored:
+            cs = ChainState.from_genesis()
+            self.storage.save_block(cs.chain[0])
             log.info("[startup] genesis created")
+            return cs
 
-    def _rebuild_from_chain(self):
-        """Rebuild state and burn window from the current chain. Used at startup
-        when no state snapshot exists and after a reorg completes."""
-        self.state, self._burn_window = _build_state_from_chain(self.chain)
-        log.info("[startup] state rebuilt  blocks=%d", len(self.chain))
+        # Backfill tx_bytes for blocks from older databases.
+        for blk in stored:
+            if "tx_bytes" not in blk:
+                blk["tx_bytes"] = sum(tx_mod.tx_size(t)
+                                       for t in blk.get("transactions", []))
 
-    def _publish_view(self):
-        """Publish a consistent snapshot for Flask threads. Single ref swap."""
-        self.view = NodeView(self.chain, self.state, self._cumulative_score,
-                             prev_view=self.view)
+        if self.storage.state_exists():
+            balances, nonces, total_minted, total_burnt = self.storage.load_state()
+            import state as state_mod
+            s = state_mod.State()
+            s._balances    = balances
+            s._nonces      = nonces
+            s.total_minted = total_minted
+            s.total_burnt  = total_burnt
+            cs = ChainState.from_storage(stored, s)
+        else:
+            cs = ChainState.from_chain(stored)
+
+        log.info("[startup] chain loaded  height=%d  tip=%s",
+                 cs.height, cs.tip["hash"][:12])
+        return cs
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
     def is_signing_active(self):
-        """True when the node loop is running and the KEK is loaded.
-        API layer uses this instead of reaching into _kek directly."""
         return self._kek is not None
 
     def mark_tx_seen(self, tx_hash):
-        """Thread-safe dedup check for inbound tx. Returns True if already seen.
-        Exposes gossip._seen_tx check so api.py doesn't reach into gossip internals."""
         return self.gossip.mark_seen(tx_hash)
 
+    def get_info(self):
+        v = self.view
+        return {
+            "height":       v.height,
+            "tip_hash":     v.tip["hash"],
+            "genesis_hash": v.genesis_hash,
+            "fee_rate":     v.tip["fee_rate"],
+            "mempool_size": self.mempool.size(),
+            "address":      self.addr,
+            "peer_count":   self.pool.count(),
+            "total_minted": v.state.total_minted,
+            "total_burnt":  v.state.total_burnt,
+            "can_mint":     v.state.compute_block_reward(),
+        }
 
     def start(self, kek):
-        """Start the block loop. kek must be derived via crypto.derive_kek()
-        before calling; main.py handles passphrase prompting."""
         self._kek         = kek
         self.running      = True
         self._loop_thread = threading.current_thread()
@@ -290,11 +229,10 @@ class Node:
         self.running = False
 
     def submit_tx(self, tx_dict):
-        """Validate and add a tx. Called ONLY from the node loop thread."""
-        assert threading.current_thread() is self._loop_thread, \
-            "submit_tx must be called from the node loop thread"
-        tip = self.chain[-1]
-        ok, err = tx_mod.validate(tx_dict, self.state, tip["height"], self._fee_rate_at)
+        """Validate and add a tx. Node loop thread only."""
+        assert threading.current_thread() is self._loop_thread
+        ok, err = tx_mod.validate(tx_dict, self.cs.state,
+                                   self.cs.height, self.cs.fee_rate_at)
         if not ok:
             log.debug("[tx] rejected  reason=%s  from=%s",
                       err, tx_dict.get("from", "?")[:24])
@@ -303,13 +241,13 @@ class Node:
         if not ok:
             return False, h
         self.gossip.relay_tx(tx_dict)
-        self._publish_view()
-        log.info("[tx] accepted  hash=%s  from=%s  fee=%s",
-                 h[:12], tx_dict.get("from", "?")[:24], tx_dict.get("fee"))
+        self.view = NodeView(self.cs, prev_view=self.view)
+        log.info("[tx] accepted  hash=%s  from=%s", h[:12],
+                 tx_dict.get("from", "?")[:24])
         return True, h
 
     def submit_tx_from_api(self, tx_dict, timeout=5):
-        """Thread-safe entry point for Flask. Puts on queue, blocks on reply."""
+        """Thread-safe bridge: enqueue tx, block until the loop replies."""
         reply = queue.Queue(maxsize=1)
         self.net_in_q.put({"type": "submit_tx", "tx": tx_dict, "reply": reply})
         try:
@@ -319,377 +257,232 @@ class Node:
 
     def build_and_sign_tx(self, to_outputs, passphrase=None):
         if self._kek is not None:
-            kek     = self._kek
-            own_kek = False
+            kek, own_kek = self._kek, False
         elif passphrase:
-            kek     = crypto.derive_kek(self.keyfile, passphrase)
-            own_kek = True
+            kek, own_kek = crypto.derive_kek(self.keyfile, passphrase), True
         else:
             raise RuntimeError("node not running and no passphrase provided")
-
         v          = self.view
         nonce      = v.state.get_nonce(self.addr) + 1
-        fee_rate   = v.tip["fee_rate"]
         fee_height = v.height
-
-        fee = tx_mod.compute_fee(self.addr, self.pk_hex, to_outputs, nonce, fee_height, fee_rate)
-        sk  = crypto.decrypt_secret_key(self.keyfile, kek=kek)
-        t   = tx_mod.create(self.addr, self.pk_hex, to_outputs, nonce, fee_height, fee, sk)
+        fee        = tx_mod.compute_fee(self.addr, self.pk_hex, to_outputs,
+                                         nonce, fee_height, v.tip["fee_rate"])
+        sk = crypto.decrypt_secret_key(self.keyfile, kek=kek)
+        t  = tx_mod.create(self.addr, self.pk_hex, to_outputs,
+                            nonce, fee_height, fee, sk)
         del sk
         if own_kek:
             del kek
         return t, fee
-
-    def get_info(self):
-        """Read from published view so Flask threads get consistent data."""
-        v = self.view
-        return {
-            "height":        v.height,
-            "tip_hash":      v.tip["hash"],
-            "genesis_hash":  v.genesis_hash,
-            "fee_rate":      v.tip["fee_rate"],
-            "mempool_size":  self.mempool.size(),
-            "address":       self.addr,
-            "peer_count":    self.pool.count(),
-            "total_minted":  v.state.total_minted,
-            "total_burnt":   v.state.total_burnt,
-            "can_mint":      v.state.compute_block_reward(),
-        }
 
     # ------------------------------------------------------------------
     # Block cycle
     # ------------------------------------------------------------------
 
     def _run_cycle(self):
-        """One block cycle: evaluate VDF, assemble block, collect winner."""
         self._cycle_count += 1
-        self._drain_queue(timeout=0)
+        self._drain_queue()
 
         if self._cycle_count % SYNC_EVERY_N_CYCLES == 0:
             self.syncer.check_and_sync(
-                self.chain,
+                self.cs.chain,
                 lambda chain: self.apply_better_chain(chain)[0],
             )
 
-        tip      = self.chain[-1]
-        fee_rate = block_mod.compute_expected_fee_rate(self.chain)
+        cs = self.cs   # local alias -- can change under sync
         log.info("[vdf] starting height=%d  tip=%s  peers=%d  mempool=%d",
-                 tip["height"] + 1, tip["hash"][:12],
+                 cs.height + 1, cs.tip["hash"][:12],
                  self.pool.count(), self.mempool.size())
 
-        pruned = self.mempool.prune_stale(tip["height"], self.state)
+        pruned = self.mempool.prune_stale(cs.height, cs.state)
         if pruned:
-            log.info("[vdf] mempool pruned  dropped=%d  remaining=%d",
-                     len(pruned), self.mempool.size())
+            log.info("[vdf] mempool pruned  dropped=%d", len(pruned))
 
-        challenge          = bytes.fromhex(tip["hash"])
-        vdf_out, vdf_proof = vdf_mod.evaluate(challenge)
-        log.info("[vdf] proof ready  height=%d", tip["height"] + 1)
+        vdf_out, vdf_proof = vdf_mod.evaluate(bytes.fromhex(cs.tip["hash"]))
+        log.info("[vdf] proof ready  height=%d", cs.height + 1)
 
+        fee_rate   = block_mod.compute_expected_fee_rate(cs.chain)
         sorted_txs = tx_mod.sort_txs(self.mempool.all_txs())
-        candidate  = block_mod.assemble(tip, sorted_txs, self.addr, fee_rate)
+        candidate  = block_mod.assemble(cs.tip, sorted_txs, self.addr, fee_rate)
         candidate["vdf_output"] = vdf_out
         candidate["vdf_proof"]  = vdf_proof
         candidate["hash"]       = block_mod.block_hash(candidate)
         self.gossip.broadcast_block(candidate)
 
-        COLLECTION_WINDOW = 5
-        peer_blocks  = self._drain_queue(timeout=COLLECTION_WINDOW)
-        peer_blocks += self._drain_queue(timeout=0)
-        winner, relay = self._select_winner(candidate, peer_blocks, tip)
+        peer_blocks = self._drain_queue(timeout=5) + self._drain_queue()
+        winner, relay = self._pick_winner(candidate, peer_blocks)
         if winner is None:
-            return   # own block failed validation -- should not happen
+            return
         self._commit(winner, relay=relay)
 
-    def _select_winner(self, candidate, peer_blocks, tip):
-        """Pick the best valid block from candidate and peer blocks.
-
-        Returns (block, relay) where relay=True means the winner came from
-        a peer and should be forwarded. Returns (None, False) only if our
-        own candidate fails validation, which should never happen.
-
-        Selection: lowest hash among blocks that pass full validation and
-        the censorship check. Validation is a gate -- we never commit a
-        block without checking it, but we don't carry the probe state out
-        of this function. _commit builds fresh state from the winner.
+    def _pick_winner(self, candidate, peer_blocks):
+        """Return (best_block, relay). relay=True means it came from a peer.
+        Returns (None, False) only if our own candidate is invalid -- shouldn't happen.
         """
-        candidates = []
+        cs = self.cs
+        tip = cs.tip
+
+        valid_peers = []
         for blk in peer_blocks:
             if blk.get("height") != tip["height"] + 1:
                 continue
             if blk.get("previous_hash") != tip["hash"]:
                 continue
-            probe = self.state.snapshot()
-            ok, err = block_mod.validate(blk, probe, self.chain, self._fee_rate_at)
+            probe = cs.state.snapshot()
+            ok, err = block_mod.validate(blk, probe, cs.chain, cs.fee_rate_at)
             if not ok:
-                log.debug("[vdf] rejected peer block  reason=%s", err)
+                log.debug("[vdf] peer block rejected: %s", err)
                 continue
             if _rng.random() >= self._censorship_score(blk):
-                log.debug("[vdf] censorship check rejected peer block")
+                log.debug("[vdf] peer block failed censorship check")
                 continue
-            candidates.append(blk)
+            valid_peers.append(blk)
 
-        # Validate our own candidate too (should always pass)
-        own_probe = self.state.snapshot()
-        ok, err   = block_mod.validate(candidate, own_probe, self.chain, self._fee_rate_at)
+        probe = cs.state.snapshot()
+        ok, err = block_mod.validate(candidate, probe, cs.chain, cs.fee_rate_at)
         if not ok:
             log.error("[vdf] own block invalid: %s", err)
             return None, False
 
-        candidates.append(candidate)
-        winner = min(candidates, key=lambda b: b["hash"])
+        all_valid = valid_peers + [candidate]
+        winner    = min(all_valid, key=lambda b: b["hash"])
         return winner, winner is not candidate
 
-    # ------------------------------------------------------------------
-    # Queue handling
-    # ------------------------------------------------------------------
+    def _commit(self, blk, relay=False):
+        """Append a validated block: update ChainState, persist, publish view."""
+        if "tx_bytes" not in blk:
+            blk["tx_bytes"] = sum(tx_mod.tx_size(t)
+                                   for t in blk.get("transactions", []))
 
+        self._update_exclusion_ages(blk)
+        self.cs = self.cs.apply_block(blk)
+        self.storage.save_block(blk)
+        self.storage.save_state(self.cs.state)
+        self.mempool.remove_many([tx_mod.tx_hash(t) for t in blk["transactions"]])
+        self.view = NodeView(self.cs, prev_view=self.view)
+
+        if relay:
+            try:
+                self.gossip.broadcast_block(blk)
+            except Exception:
+                log.exception("[commit] relay broadcast failed height=%d", blk["height"])
+
+        log.info("[commit] height=%d  hash=%s  tx=%d  builder=%s",
+                 blk["height"], blk["hash"][:12], len(blk["transactions"]),
+                 (blk.get("builder") or "")[:24])
+
+    # ------------------------------------------------------------------
+    # Queue
+    # ------------------------------------------------------------------
 
     def _drain_queue(self, timeout=0):
-        """Drain all pending messages from net_in_q."""
-        assert threading.current_thread() is self._loop_thread, \
-            "_drain_queue must be called from the node loop thread"
-        block_msgs = []
-        # First message: block up to timeout seconds.
+        """Drain net_in_q. Returns list of inbound block dicts."""
+        assert threading.current_thread() is self._loop_thread
+        blocks = []
         try:
             msg = self.net_in_q.get(block=timeout > 0, timeout=timeout or None)
-            self._dispatch_message(msg, block_msgs)
+            self._handle(msg, blocks)
         except queue.Empty:
-            return block_msgs
-        # Drain the rest non-blocking.
+            return blocks
         while True:
             try:
-                msg = self.net_in_q.get_nowait()
-                self._dispatch_message(msg, block_msgs)
+                self._handle(self.net_in_q.get_nowait(), blocks)
             except queue.Empty:
                 break
-        return block_msgs
+        return blocks
 
-    def _dispatch_message(self, msg, block_msgs):
-        """Route one message. block-type messages go into block_msgs list."""
-        mtype = msg.get("type")
-        if mtype == "block":
-            block_msgs.append(msg["block"])
-        else:
-            self._handle_message(msg)
+    def _handle(self, msg, block_out):
+        """Dispatch one queue message."""
+        t = msg.get("type")
+        if t == "block":
+            block_out.append(msg["block"])
+        elif t == "submit_tx":
+            msg["reply"].put(self.submit_tx(msg["tx"]))
+        elif t == "tx":
+            self._handle_inbound_tx(msg)
 
-    def _handle_message(self, msg):
-        """Single dispatch for non-block messages."""
-        mtype = msg.get("type")
-        if mtype == "submit_tx":
-            result = self.submit_tx(msg["tx"])
-            msg["reply"].put(result)
-        elif mtype == "tx":
-            self._handle_tx_message(msg)
-
-    def _handle_tx_message(self, msg):
-        tx_dict    = msg["tx"]
-        relay_type = msg.get("relay_type", "tx_fluff")
-        remaining  = msg.get("remaining_hops", 0)
-        if relay_type == "tx_stem" and remaining > 0:
+    def _handle_inbound_tx(self, msg):
+        tx_dict   = msg["tx"]
+        remaining = msg.get("remaining_hops", 0)
+        if msg.get("relay_type") == "tx_stem" and remaining > 0:
             self.gossip.dandelion_send(tx_dict, remaining)
-        else:
-            tip = self.chain[-1]
-            ok, _ = tx_mod.validate(tx_dict, self.state, tip["height"], self._fee_rate_at)
-            if ok:
-                added, _ = self.mempool.add(tx_dict)
-                if added:
-                    # Use relay_tx so the dedup check in gossip._seen_tx fires
-                    # and the same tx isn't re-broadcast to all peers twice.
-                    self.gossip.relay_tx(tx_dict)
+            return
+        ok, _ = tx_mod.validate(tx_dict, self.cs.state,
+                                  self.cs.height, self.cs.fee_rate_at)
+        if ok and self.mempool.add(tx_dict)[0]:
+            self.gossip.relay_tx(tx_dict)
 
     # ------------------------------------------------------------------
     # Censorship resistance
     # ------------------------------------------------------------------
 
     def _censorship_score(self, blk):
-        """Compute the censorship acceptance probability for blk.
-
-        score = min over all missing T of: 1 / effective_age(T)
-        Age 0 (first miss): score 1.0.  Age 2: 0.5.  Age 5: 0.2.
-        Pure read -- does not update _tx_exclusion_age.
-        """
+        """Acceptance probability for blk. 1.0 if no long-excluded txs."""
         confirmed = {tx_mod.tx_hash(t) for t in blk.get("transactions", [])}
-        pending   = self.mempool.pending_hashes()
-        missing   = pending - confirmed
-        score     = 1.0
-        for h in missing:
-            age = self._tx_exclusion_age.get(h, 0)
+        score = 1.0
+        for h in self.mempool.pending_hashes() - confirmed:
+            age = self._exclusion_age.get(h, 0)
             if age > 0:
                 score = min(score, 1.0 / age)
         return score
 
-    def _update_exclusion_ages(self, accepted_blk):
-        """Update _tx_exclusion_age after a block is accepted."""
-        confirmed = {tx_mod.tx_hash(t) for t in accepted_blk.get("transactions", [])}
+    def _update_exclusion_ages(self, blk):
+        confirmed = {tx_mod.tx_hash(t) for t in blk.get("transactions", [])}
         pending   = self.mempool.pending_hashes()
-        missing   = pending - confirmed
-        is_full   = accepted_blk.get("tx_bytes", 0) >= BLOCK_SIZE_LIMIT * 0.99
-
+        is_full   = blk.get("tx_bytes", 0) >= BLOCK_SIZE_LIMIT * 0.99
         if not is_full:
-            for h in missing:
-                self._tx_exclusion_age[h] = self._tx_exclusion_age.get(h, 0) + 1
-
-        for h in [k for k in self._tx_exclusion_age if k not in pending]:
-            del self._tx_exclusion_age[h]
-
-    # ------------------------------------------------------------------
-    # Commit
-    # ------------------------------------------------------------------
-
-    def _commit(self, new_block, relay=False):
-        """Apply a validated winning block to the node.
-
-        Builds the new state directly from the current state + this block's
-        transactions and reward. No probe is passed in -- _select_winner
-        validated the block; _commit just applies it.
-        """
-        self._update_exclusion_ages(new_block)
-
-        if "tx_bytes" not in new_block:
-            new_block["tx_bytes"] = sum(
-                tx_mod.tx_size(t) for t in new_block.get("transactions", [])
-            )
-
-        # Apply txs and block reward to a fresh state copy.
-        new_state = self.state.snapshot()
-        for t in new_block.get("transactions", []):
-            new_state.apply_tx(t)
-
-        self._burn_window.add_block(new_block)
-        builder = new_block.get("builder")
-        if builder:
-            reward = new_state.compute_block_reward()
-            dist   = self._burn_window.reward_distribution(builder, reward)
-            new_state.apply_reward_distribution(dist)
-            self._cumulative_score += self._burn_window.score(
-                pob_mod._tip_hash_int(self.chain), builder
-            )
-
-        self.state = new_state
-        self.chain.append(new_block)
-        self.storage.save_block(new_block)
-        self.storage.save_state(new_state)
-        self.mempool.remove_many([tx_mod.tx_hash(t) for t in new_block["transactions"]])
-        self._publish_view()
-        if relay:
-            try:
-                self.gossip.broadcast_block(new_block)
-            except Exception:
-                log.exception("[commit] broadcast failed for block=%d, peers may miss it",
-                              new_block["height"])
-        log.info("[commit] block=%d  hash=%s  tx=%d  builder=%s",
-                 new_block["height"], new_block["hash"][:12],
-                 len(new_block["transactions"]),
-                 (new_block.get("builder") or "")[:24])
-
-    def _fee_rate_at(self, height):
-        if 0 <= height < len(self.chain):
-            return self.chain[height]["fee_rate"]
-        return None
+            for h in pending - confirmed:
+                self._exclusion_age[h] = self._exclusion_age.get(h, 0) + 1
+        self._exclusion_age = {h: v for h, v in self._exclusion_age.items()
+                                if h in pending}
 
     # ------------------------------------------------------------------
     # Chain sync / reorg
     # ------------------------------------------------------------------
 
-    def _remote_is_better(self, remote_chain):
-        remote_height = len(remote_chain) - 1
-        local_height  = len(self.chain) - 1
-        if remote_height > local_height:
-            return True
-        if remote_height == local_height:
-            # PoB fork choice: lower cumulative score = more economic commitment.
-            # Local score is cached (_cumulative_score). Remote is computed once
-            # (O(chain * window) only for sync candidates, not every block).
-            # Falls back to hash comparison only if scores are equal (rare).
-            remote_score = pob_mod.cumulative_score(remote_chain)
-            local_score  = self._cumulative_score
-            if remote_score != local_score:
-                return remote_score < local_score
-            return remote_chain[-1]["hash"] < self.chain[-1]["hash"]
-        return False
+    def apply_better_chain(self, remote_chain):
+        """Accept remote_chain if it is better than local. Used by syncer."""
+        remote_cs = ChainState.from_chain(remote_chain)
+        if not remote_cs.is_better_than(self.cs):
+            return False, "remote chain not better"
 
-    def _apply_chain(self, candidate_chain):
-        """Replace local chain with candidate_chain in three phases.
-
-        Phase 1 -- Check: genesis match, find fork point, validate new tail.
-          Pure. Nothing is mutated. On failure returns (False, reason).
-
-        Phase 2 -- Build: replay the full accepted chain into a new State.
-          Trusted replay -- no re-validation of the shared prefix.
-
-        Phase 3 -- Swap: atomically update chain, state, burn window,
-          mempool, storage, and view.
-        """
-        # Phase 1: check
-        if not candidate_chain or candidate_chain[0]["hash"] != block_mod.create_genesis()["hash"]:
+        genesis_hash = ChainState.from_genesis().tip["hash"]
+        if not remote_chain or remote_chain[0]["hash"] != genesis_hash:
             return False, "genesis mismatch"
 
         fork_point = next(
-            (i for i, (a, b) in enumerate(zip(self.chain, candidate_chain))
+            (i for i, (a, b) in enumerate(zip(self.cs.chain, remote_chain))
              if a["hash"] != b["hash"]),
-            min(len(self.chain), len(candidate_chain))
+            min(len(self.cs.chain), len(remote_chain))
         )
-        prefix = candidate_chain[:fork_point]
-        tail   = candidate_chain[fork_point:]
+        prefix = remote_chain[:fork_point]
+        tail   = remote_chain[fork_point:]
 
-        def fee_rate_at(h):
-            return candidate_chain[h]["fee_rate"] if 0 <= h < len(candidate_chain) else None
-
-        ok, err = _validate_tail(tail, prefix, fee_rate_at)
+        ok, err = _validate_tail(tail, prefix, remote_cs.fee_rate_at)
         if not ok:
+            log.warning("[sync] rejected: %s", err)
             return False, err
 
-        # Phase 2: build new state from the full accepted chain (trusted replay)
-        new_state, new_window = _build_state_from_chain(candidate_chain)
-        new_score = pob_mod.cumulative_score(candidate_chain)
-
-        # Phase 3: swap everything in
-        self._reorg_mempool(fork_point, candidate_chain)
+        self._reorg_mempool(fork_point, remote_chain)
         self.storage.replace_chain(fork_point, tail)
-        self.storage.save_state(new_state)
-        self.chain             = list(candidate_chain)
-        self.state             = new_state
-        self._burn_window      = new_window
-        self._cumulative_score = new_score
-        self._publish_view()
+        self.storage.save_state(remote_cs.state)
+        self.cs   = remote_cs
+        self.view = NodeView(self.cs)
 
-        if fork_point < len(self.chain) - 1:
-            log.warning("[reorg] applied  height=%d  fork_point=%d",
-                        len(self.chain) - 1, fork_point)
+        if fork_point < self.cs.height:
+            log.warning("[reorg] height=%d  fork_point=%d", self.cs.height, fork_point)
         else:
-            log.info("[sync] applied  height=%d  fork_point=%d",
-                     len(self.chain) - 1, fork_point)
+            log.info("[sync] height=%d  fork_point=%d", self.cs.height, fork_point)
         return True, None
 
     def _reorg_mempool(self, fork_point, new_chain):
-        """Restore txs from the old tail that aren't in the new tail."""
-        old_txs = {
-            tx_mod.tx_hash(t): t
-            for blk in self.chain[fork_point:]
-            for t in blk.get("transactions", [])
-        }
-        new_confirmed = {
-            tx_mod.tx_hash(t)
-            for blk in new_chain[fork_point:]
-            for t in blk.get("transactions", [])
-        }
+        old_txs = {tx_mod.tx_hash(t): t
+                   for blk in self.cs.chain[fork_point:]
+                   for t in blk.get("transactions", [])}
+        new_confirmed = {tx_mod.tx_hash(t)
+                         for blk in new_chain[fork_point:]
+                         for t in blk.get("transactions", [])}
         self.mempool.remove_many(new_confirmed)
         for h, t in old_txs.items():
             if h not in new_confirmed:
                 self.mempool.add(t)
-
-    def apply_better_chain(self, remote_chain):
-        """Accept a remote chain if it is better than the local one.
-
-        Used by both periodic sync (syncer.check_and_sync) and inbound
-        peer blocks that arrive during _select_winner. A reorg (fork_point
-        below local tip) is logged at WARNING; a simple extension at INFO.
-        Returns (True, None) on success or (False, reason) on rejection.
-        """
-        if not self._remote_is_better(remote_chain):
-            return False, "remote chain not longer or heavier"
-        ok, err = self._apply_chain(remote_chain)
-        if not ok:
-            log.warning("[sync] rejected  reason=%s", err)
-        return ok, err

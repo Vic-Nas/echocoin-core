@@ -220,7 +220,7 @@ def create_app(node, pool, net_in_q, discovery):
         v = node.view
         chain = v.chain
         balance = v.state.get_balance(node.addr)
-        bw          = node._burn_window
+        bw          = node.cs.burn_window
         pool_totals = bw.pool_totals()
         burn_totals = bw.sender_totals()
         burn_history = bw.history()

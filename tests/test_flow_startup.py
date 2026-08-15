@@ -21,9 +21,9 @@ from helpers import *
 def test_fresh_node_has_genesis():
     n, *_, dbfile, keyfile = make_node()
     try:
-        assert len(n.chain) == 1
-        assert n.chain[0]["height"] == 0
-        assert n.chain[0]["hash"] == block_mod.create_genesis()["hash"]
+        assert len(n.cs.chain) == 1
+        assert n.cs.chain[0]["height"] == 0
+        assert n.cs.chain[0]["hash"] == block_mod.create_genesis()["hash"]
     finally:
         teardown_node(n, dbfile, keyfile)
 
@@ -40,7 +40,7 @@ def test_genesis_persisted_to_storage():
 def test_genesis_has_no_vdf_or_builder():
     n, *_, dbfile, keyfile = make_node()
     try:
-        g = n.chain[0]
+        g = n.cs.chain[0]
         assert g["builder"] is None
         assert g["vdf_output"] is None
         assert g["vdf_proof"] is None
@@ -51,7 +51,7 @@ def test_genesis_has_no_vdf_or_builder():
 def test_genesis_contains_echocoin_message():
     n, *_, dbfile, keyfile = make_node()
     try:
-        assert "Echocoin" in n.chain[0]["message"]
+        assert "Echocoin" in n.cs.chain[0]["message"]
     finally:
         teardown_node(n, dbfile, keyfile)
 
@@ -66,11 +66,11 @@ def test_node_loads_existing_chain():
     import queue
 
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
-    genesis_hash = n.chain[0]["hash"]
+    genesis_hash = n.cs.chain[0]["hash"]
 
     # Commit a block without running VDF
     with patch("vdf.verify", return_value=True):
-        blk = make_block(n.chain, builder_addr=addr)
+        blk = make_block(n.cs.chain, builder_addr=addr)
         blk["tx_bytes"] = 0
         commit_block(n, blk)
     n.storage.close()
@@ -79,9 +79,9 @@ def test_node_loads_existing_chain():
     n2 = Node(keyfile, pk, FakeGossip(), FakeSyncer(), FakePool(),
               queue.Queue(), db_path=dbfile)
     try:
-        assert len(n2.chain) == 2
-        assert n2.chain[0]["hash"] == genesis_hash
-        assert n2.chain[1]["height"] == 1
+        assert len(n2.cs.chain) == 2
+        assert n2.cs.chain[0]["hash"] == genesis_hash
+        assert n2.cs.chain[1]["height"] == 1
     finally:
         n2.storage.close()
         os.unlink(dbfile)
@@ -97,11 +97,11 @@ def test_state_rebuilt_from_chain_when_snapshot_missing():
 
     # Give addr some balance via a block reward
     with patch("vdf.verify", return_value=True):
-        blk = make_block(n.chain, builder_addr=addr)
+        blk = make_block(n.cs.chain, builder_addr=addr)
         blk["tx_bytes"] = 0
         commit_block(n, blk)
 
-    minted_before = n.state.total_minted
+    minted_before = n.cs.state.total_minted
     n.storage.close()
 
     # Wipe the state table to force replay
@@ -115,8 +115,8 @@ def test_state_rebuilt_from_chain_when_snapshot_missing():
     n2 = Node(keyfile, pk, FakeGossip(), FakeSyncer(), FakePool(),
               queue.Queue(), db_path=dbfile)
     try:
-        assert n2.state.total_minted == minted_before
-        assert n2.state.get_balance(addr) > 0
+        assert n2.cs.state.total_minted == minted_before
+        assert n2.cs.state.get_balance(addr) > 0
     finally:
         n2.storage.close()
         os.unlink(dbfile)
@@ -133,12 +133,12 @@ def test_burn_window_rebuilt_from_chain():
     import queue
 
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
-    s = n.state
+    s = n.cs.state
     s.credit(addr, 100_000_000)
 
     burn_tx = make_burn_tx(sk, pk_hex, addr, 50_000, nonce=1, fee_height=0)
     with patch("vdf.verify", return_value=True):
-        blk = make_block(n.chain, builder_addr=addr, txs=[burn_tx])
+        blk = make_block(n.cs.chain, builder_addr=addr, txs=[burn_tx])
         blk["tx_bytes"] = sum(tx_mod.tx_size(t) for t in blk["transactions"])
         commit_block(n, blk)
     n.storage.close()
@@ -146,7 +146,7 @@ def test_burn_window_rebuilt_from_chain():
     n2 = Node(keyfile, pk, FakeGossip(), FakeSyncer(), FakePool(),
               queue.Queue(), db_path=dbfile)
     try:
-        assert n2._burn_window.builder_burn(addr) > 0
+        assert n2.cs.burn_window.builder_burn(addr) > 0
     finally:
         n2.storage.close()
         os.unlink(dbfile)
@@ -191,7 +191,7 @@ def test_tx_bytes_backfilled_for_old_blocks():
 
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     with patch("vdf.verify", return_value=True):
-        blk = make_block(n.chain, builder_addr=addr)
+        blk = make_block(n.cs.chain, builder_addr=addr)
         blk["tx_bytes"] = 0
         commit_block(n, blk)
     n.storage.close()
@@ -210,7 +210,7 @@ def test_tx_bytes_backfilled_for_old_blocks():
     n2 = Node(keyfile, pk, FakeGossip(), FakeSyncer(), FakePool(),
               queue.Queue(), db_path=dbfile)
     try:
-        for blk in n2.chain:
+        for blk in n2.cs.chain:
             assert "tx_bytes" in blk
     finally:
         n2.storage.close()

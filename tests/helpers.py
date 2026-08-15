@@ -143,8 +143,8 @@ def make_node(extra_chain=None):
     n._loop_thread = threading.current_thread()
 
     if extra_chain:
-        n.chain = extra_chain
-        n._rebuild_burn_window()
+        from chainstate import ChainState
+        n.cs = ChainState.from_chain(extra_chain)
 
     return n, sk, pk, pk_hex, addr, gossip, df.name, kf.name
 
