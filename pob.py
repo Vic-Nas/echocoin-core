@@ -1,31 +1,25 @@
 """Proof-of-Burn score engine.
 
-Public interface:
+Public interface (all via BurnWindow):
 
-  score(chain, address)             -> int        (lower = more committed)
-  cumulative_score(chain)           -> int        (sum of all block scores)
-  best_builder(chain, addrs)        -> str        (address with lowest score)
-  reward_distribution(chain, builder, reward) -> list[(addr, amount)]
+  BurnWindow.score(tip_hash_int, address)         -> int   (lower = more committed)
+  BurnWindow.reward_distribution(beneficiary, reward) -> list[(addr, amount)]
+  BurnWindow.builder_burn(address)                -> int
+  BurnWindow.pool_totals()                        -> dict
+  BurnWindow.sender_totals()                      -> dict
+  BurnWindow.history()                            -> list
+
+Internal helpers used by chainstate.py:
+
+  _tip_hash_int(chain)   -- integer seed from the tip's VDF output
+  _addr_int(address)     -- deterministic int from address string
 
 The score formula for a builder at a given chain tip:
 
-  numerator   = Hash(vdf_output_of_tip + builder_pubkey_address)  [as int]
-  denominator = max(1, sum of intentional burns by builder
-                       in the last POB_WINDOW blocks)
+  numerator   = Hash(VDF_output_of_tip XOR builder_address_hash)  [as int]
+  denominator = max(1, sum of intentional burns by builder in last POB_WINDOW blocks)
 
 Lower score = more burns = more block-building priority.
-
-Fork choice: when two valid chains of equal height compete, the one
-with the lower cumulative_score wins. Honest burners always beat
-unburnished botnets whose denominator stays at the floor of 1.
-
-Intentional burns are tx outputs with {"to": BURN_ADDRESS, "amount": N,
-  "beneficiary": <address>}. The beneficiary defaults to the sender if absent.
-  Burns tagged to a beneficiary accumulate that beneficiary's pool score and
-  entitle the contributor to a proportional share of rewards when that
-  beneficiary wins a block.
-
-Fee burns are NOT counted -- they flow into emission but not PoB weight.
 """
 
 import collections
@@ -167,14 +161,6 @@ def _tip_hash_int(chain):
     tip = chain[-1]
     vdf_out = tip.get("vdf_output") or tip["hash"]
     return int(vdf_out[:64], 16)      # 256-bit int from first 32 bytes of hex
-
-
-def _make_window(chain):
-    """Build a BurnWindow from a chain slice. Used by one-off callers."""
-    w = BurnWindow()
-    for blk in chain:
-        w.add_block(blk)
-    return w
 
 
 def _addr_int(address):

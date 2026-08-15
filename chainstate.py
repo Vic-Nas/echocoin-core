@@ -51,6 +51,22 @@ class ChainState:
     # ------------------------------------------------------------------
 
     @classmethod
+    def _build_window_and_score(cls, chain):
+        """Build BurnWindow and cumulative score by replaying chain headers.
+        Shared by from_chain and from_storage — neither applies tx state here.
+        """
+        window = pob_mod.BurnWindow()
+        score  = 0
+        for blk in chain:
+            window.add_block(blk)
+            h = blk["height"]
+            builder = blk.get("builder")
+            if builder and h > 0:
+                parent_hash_int = pob_mod._tip_hash_int([chain[h - 1]])
+                score += window.score(parent_hash_int, builder)
+        return window, score
+
+    @classmethod
     def from_genesis(cls):
         """Bootstrap a ChainState from the genesis block only."""
         genesis = block_mod.create_genesis()
@@ -68,7 +84,8 @@ class ChainState:
         score  = 0
         for blk in chain:
             window.add_block(blk)
-            if blk["height"] == 0:
+            h = blk["height"]
+            if h == 0:
                 continue
             for t in blk["transactions"]:
                 state.apply_tx(t)
@@ -77,11 +94,8 @@ class ChainState:
                 state.apply_reward_distribution(
                     window.reward_distribution(builder, state.compute_block_reward())
                 )
-                # Score uses the previous tip's hash (before this block was added).
-                # chain[:blk["height"]] is the prefix ending at the parent block.
-                score += window.score(
-                    pob_mod._tip_hash_int(chain[:blk["height"]]), builder
-                )
+                parent_hash_int = pob_mod._tip_hash_int([chain[h - 1]])
+                score += window.score(parent_hash_int, builder)
         return cls(list(chain), state, window, score)
 
     @classmethod
@@ -91,15 +105,7 @@ class ChainState:
         burn window and cumulative score from the chain since those aren't
         persisted.
         """
-        window = pob_mod.BurnWindow()
-        score  = 0
-        for blk in chain:
-            window.add_block(blk)
-            builder = blk.get("builder")
-            if builder and blk["height"] > 0:
-                score += window.score(
-                    pob_mod._tip_hash_int(chain[:blk["height"]]), builder
-                )
+        window, score = cls._build_window_and_score(chain)
         return cls(list(chain), stored_state, window, score)
 
     # ------------------------------------------------------------------
