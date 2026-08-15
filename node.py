@@ -122,18 +122,14 @@ log = logging.getLogger("ec.node")
 SYNC_EVERY_N_CYCLES = 3
 
 
-def _replay_blocks(blocks, state, window=None):
-    """Replay blocks onto state, return the BurnWindow used.
+def _replay(chain, state, window):
+    """Apply a trusted chain slice onto state and window in place.
 
-    Accepts an existing window so callers can continue from the shared
-    prefix into the new tail without rebuilding it from scratch.
-    Creates a fresh window if none is provided.
-    Skips genesis (height 0) for tx/reward application but still adds
-    it to the window so expiry math is correct.
+    Used as a shared primitive by both _build_state_from_chain (startup /
+    sync) and _validate_tail (probe state before committing a new tail).
+    Genesis (height 0) contributes to the window but has no txs or reward.
     """
-    if window is None:
-        window = pob_mod.BurnWindow()
-    for blk in blocks:
+    for blk in chain:
         window.add_block(blk)
         if blk["height"] == 0:
             continue
@@ -141,10 +137,48 @@ def _replay_blocks(blocks, state, window=None):
             state.apply_tx(t)
         builder = blk.get("builder")
         if builder:
-            reward = state.compute_block_reward()
-            dist = window.reward_distribution(builder, reward)
-            state.apply_reward_distribution(dist)
-    return window
+            state.apply_reward_distribution(
+                window.reward_distribution(builder, state.compute_block_reward())
+            )
+
+
+def _build_state_from_chain(chain):
+    """Replay a fully trusted chain, return (State, BurnWindow).
+
+    Called at startup and after a sync/reorg. Every block is applied
+    without re-checking proofs or signatures.
+    """
+    state, window = state_mod.State(), pob_mod.BurnWindow()
+    _replay(chain, state, window)
+    return state, window
+
+
+def _validate_tail(tail, prefix, fee_rate_at):
+    """Check whether tail is valid when appended after prefix.
+
+    Pure check: builds a throw-away state from prefix then validates
+    each block in tail against it. Returns (True, None) or (False, error).
+    No permanent state is mutated -- on failure everything is discarded.
+
+    fee_rate_at: callable(height) -> fee_rate from the candidate chain.
+    """
+    state, window = state_mod.State(), pob_mod.BurnWindow()
+    _replay(prefix, state, window)
+    validated = list(prefix)
+    for blk in tail:
+        window.add_block(blk)
+        probe = state.snapshot()
+        ok, err = block_mod.validate(blk, probe, validated, fee_rate_at)
+        if not ok:
+            return False, f"invalid block at {blk['height']}: {err}"
+        builder = blk.get("builder")
+        if builder:
+            probe.apply_reward_distribution(
+                window.reward_distribution(builder, probe.compute_block_reward())
+            )
+        state = probe
+        validated.append(blk)
+    return True, None
 
 
 class Node:
@@ -173,7 +207,6 @@ class Node:
         self._tx_exclusion_age = {}
 
         self._load_or_init_chain()
-        self._rebuild_burn_window()
         self.view = NodeView(self.chain, self.state, self._cumulative_score)
 
     # ------------------------------------------------------------------
@@ -196,8 +229,12 @@ class Node:
                 self.state._nonces      = nonces
                 self.state.total_minted = total_minted
                 self.state.total_burnt  = total_burnt
+                # Rebuild burn window from chain (not included in state snapshot).
+                self._burn_window = pob_mod.BurnWindow()
+                for blk in self.chain:
+                    self._burn_window.add_block(blk)
             else:
-                self._rebuild_state()
+                self._rebuild_from_chain()
             log.info("[startup] chain loaded  height=%d  tip=%s",
                      self.chain[-1]["height"], self.chain[-1]["hash"][:12])
         else:
@@ -206,19 +243,11 @@ class Node:
             self.storage.save_block(genesis)
             log.info("[startup] genesis created")
 
-    def _rebuild_state(self):
-        """Replay chain from genesis to reconstruct balance/nonce state.
-        Uses _replay_blocks so the tx-then-reward order matches _commit."""
-        self.state = state_mod.State()
-        _replay_blocks(self.chain, self.state)
+    def _rebuild_from_chain(self):
+        """Rebuild state and burn window from the current chain. Used at startup
+        when no state snapshot exists and after a reorg completes."""
+        self.state, self._burn_window = _build_state_from_chain(self.chain)
         log.info("[startup] state rebuilt  blocks=%d", len(self.chain))
-
-    def _rebuild_burn_window(self):
-        """Build the rolling BurnWindow from the current chain.
-        O(chain length * avg burn txs per block) -- runs once at startup."""
-        self._burn_window = pob_mod.BurnWindow()
-        for blk in self.chain:
-            self._burn_window.add_block(blk)
 
     def _publish_view(self):
         """Publish a consistent snapshot for Flask threads. Single ref swap."""
@@ -367,26 +396,28 @@ class Node:
         COLLECTION_WINDOW = 5
         peer_blocks  = self._drain_queue(timeout=COLLECTION_WINDOW)
         peer_blocks += self._drain_queue(timeout=0)
-        winner, probe, relay = self._select_winner(candidate, peer_blocks, tip)
+        winner, relay = self._select_winner(candidate, peer_blocks, tip)
         if winner is None:
             return   # own block failed validation -- should not happen
-        self._commit(winner, probe, relay=relay)
+        self._commit(winner, relay=relay)
 
     def _select_winner(self, candidate, peer_blocks, tip):
-        """Pick the best block from our candidate and received peer blocks.
+        """Pick the best valid block from candidate and peer blocks.
 
-        Returns (block, state_probe, relay) or (None, None, False) if our
-        own block failed validation (should not happen in normal operation).
+        Returns (block, relay) where relay=True means the winner came from
+        a peer and should be forwarded. Returns (None, False) only if our
+        own candidate fails validation, which should never happen.
+
+        Selection: lowest hash among blocks that pass full validation and
+        the censorship check. Validation is a gate -- we never commit a
+        block without checking it, but we don't carry the probe state out
+        of this function. _commit builds fresh state from the winner.
         """
-        best_block = candidate
-        best_probe = None
-
+        candidates = []
         for blk in peer_blocks:
             if blk.get("height") != tip["height"] + 1:
                 continue
             if blk.get("previous_hash") != tip["hash"]:
-                continue
-            if blk.get("hash", "") >= best_block["hash"]:
                 continue
             probe = self.state.snapshot()
             ok, err = block_mod.validate(blk, probe, self.chain, self._fee_rate_at)
@@ -396,18 +427,18 @@ class Node:
             if _rng.random() >= self._censorship_score(blk):
                 log.debug("[vdf] censorship check rejected peer block")
                 continue
-            best_block = blk
-            best_probe = probe
+            candidates.append(blk)
 
-        if best_block is candidate:
-            probe = self.state.snapshot()
-            ok, err = block_mod.validate(candidate, probe, self.chain, self._fee_rate_at)
-            if not ok:
-                log.error("[vdf] own block invalid: %s", err)
-                return None, None, False
-            return candidate, probe, False
+        # Validate our own candidate too (should always pass)
+        own_probe = self.state.snapshot()
+        ok, err   = block_mod.validate(candidate, own_probe, self.chain, self._fee_rate_at)
+        if not ok:
+            log.error("[vdf] own block invalid: %s", err)
+            return None, False
 
-        return best_block, best_probe, True
+        candidates.append(candidate)
+        winner = min(candidates, key=lambda b: b["hash"])
+        return winner, winner is not candidate
 
     # ------------------------------------------------------------------
     # Queue handling
@@ -506,24 +537,35 @@ class Node:
     # Commit
     # ------------------------------------------------------------------
 
-    def _commit(self, new_block, new_state, relay=False):
+    def _commit(self, new_block, relay=False):
+        """Apply a validated winning block to the node.
+
+        Builds the new state directly from the current state + this block's
+        transactions and reward. No probe is passed in -- _select_winner
+        validated the block; _commit just applies it.
+        """
         self._update_exclusion_ages(new_block)
-        # Cache tx byte volume for fee rate computation (avoids re-serializing
-        # all txs in the 100-block window on every cycle).
+
         if "tx_bytes" not in new_block:
             new_block["tx_bytes"] = sum(
                 tx_mod.tx_size(t) for t in new_block.get("transactions", [])
             )
-        # Update burn window with the new block before computing distribution
-        # and score, so the new block's burns count immediately.
+
+        # Apply txs and block reward to a fresh state copy.
+        new_state = self.state.snapshot()
+        for t in new_block.get("transactions", []):
+            new_state.apply_tx(t)
+
         self._burn_window.add_block(new_block)
         builder = new_block.get("builder")
         if builder:
             reward = new_state.compute_block_reward()
-            dist = self._burn_window.reward_distribution(builder, reward)
+            dist   = self._burn_window.reward_distribution(builder, reward)
             new_state.apply_reward_distribution(dist)
-            tip_hash_int = pob_mod._tip_hash_int(self.chain)
-            self._cumulative_score += self._burn_window.score(tip_hash_int, builder)
+            self._cumulative_score += self._burn_window.score(
+                pob_mod._tip_hash_int(self.chain), builder
+            )
+
         self.state = new_state
         self.chain.append(new_block)
         self.storage.save_block(new_block)
@@ -568,8 +610,19 @@ class Node:
         return False
 
     def _apply_chain(self, candidate_chain):
-        genesis = block_mod.create_genesis()
-        if not candidate_chain or candidate_chain[0]["hash"] != genesis["hash"]:
+        """Replace local chain with candidate_chain in three phases.
+
+        Phase 1 -- Check: genesis match, find fork point, validate new tail.
+          Pure. Nothing is mutated. On failure returns (False, reason).
+
+        Phase 2 -- Build: replay the full accepted chain into a new State.
+          Trusted replay -- no re-validation of the shared prefix.
+
+        Phase 3 -- Swap: atomically update chain, state, burn window,
+          mempool, storage, and view.
+        """
+        # Phase 1: check
+        if not candidate_chain or candidate_chain[0]["hash"] != block_mod.create_genesis()["hash"]:
             return False, "genesis mismatch"
 
         fork_point = next(
@@ -577,55 +630,30 @@ class Node:
              if a["hash"] != b["hash"]),
             min(len(self.chain), len(candidate_chain))
         )
-
-        new_state = state_mod.State()
+        prefix = candidate_chain[:fork_point]
+        tail   = candidate_chain[fork_point:]
 
         def fee_rate_at(h):
             return candidate_chain[h]["fee_rate"] if 0 <= h < len(candidate_chain) else None
 
-        # Replay the shared prefix (trusted), get the window it built in one pass.
-        prefix    = candidate_chain[:fork_point]
-        window    = _replay_blocks(prefix, new_state)
-        validated = list(prefix)
+        ok, err = _validate_tail(tail, prefix, fee_rate_at)
+        if not ok:
+            return False, err
 
-        # Validate and apply the new tail, continuing from the prefix window.
-        for blk in candidate_chain[fork_point:]:
-            window.add_block(blk)
-            probe = new_state.snapshot()
-            ok, err = block_mod.validate(blk, probe, validated, fee_rate_at)
-            if not ok:
-                return False, f"invalid block at {blk['height']}: {err}"
-            builder = blk.get("builder")
-            if builder:
-                reward = probe.compute_block_reward()
-                dist = window.reward_distribution(builder, reward)
-                probe.apply_reward_distribution(dist)
-            new_state = probe
-            validated.append(blk)
+        # Phase 2: build new state from the full accepted chain (trusted replay)
+        new_state, new_window = _build_state_from_chain(candidate_chain)
+        new_score = pob_mod.cumulative_score(candidate_chain)
 
-        # Reorg mempool: restore txs from the old tail that aren't in the new tail.
-        old_tx_by_hash = {
-            tx_mod.tx_hash(t): t
-            for blk in self.chain[fork_point:]
-            for t in blk.get("transactions", [])
-        }
-        new_confirmed = {
-            tx_mod.tx_hash(t)
-            for blk in candidate_chain[fork_point:]
-            for t in blk.get("transactions", [])
-        }
-        self.mempool.remove_many(new_confirmed)
-        for h, t in old_tx_by_hash.items():
-            if h not in new_confirmed:
-                self.mempool.add(t)
-
-        self.storage.replace_chain(fork_point, candidate_chain[fork_point:])
-        self.chain = list(candidate_chain)
-        self.state = new_state
-        self._cumulative_score = pob_mod.cumulative_score(self.chain)
-        self._rebuild_burn_window()
+        # Phase 3: swap everything in
+        self._reorg_mempool(fork_point, candidate_chain)
+        self.storage.replace_chain(fork_point, tail)
         self.storage.save_state(new_state)
+        self.chain             = list(candidate_chain)
+        self.state             = new_state
+        self._burn_window      = new_window
+        self._cumulative_score = new_score
         self._publish_view()
+
         if fork_point < len(self.chain) - 1:
             log.warning("[reorg] applied  height=%d  fork_point=%d",
                         len(self.chain) - 1, fork_point)
@@ -633,6 +661,23 @@ class Node:
             log.info("[sync] applied  height=%d  fork_point=%d",
                      len(self.chain) - 1, fork_point)
         return True, None
+
+    def _reorg_mempool(self, fork_point, new_chain):
+        """Restore txs from the old tail that aren't in the new tail."""
+        old_txs = {
+            tx_mod.tx_hash(t): t
+            for blk in self.chain[fork_point:]
+            for t in blk.get("transactions", [])
+        }
+        new_confirmed = {
+            tx_mod.tx_hash(t)
+            for blk in new_chain[fork_point:]
+            for t in blk.get("transactions", [])
+        }
+        self.mempool.remove_many(new_confirmed)
+        for h, t in old_txs.items():
+            if h not in new_confirmed:
+                self.mempool.add(t)
 
     def apply_better_chain(self, remote_chain):
         """Accept a remote chain if it is better than the local one.

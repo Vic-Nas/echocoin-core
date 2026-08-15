@@ -167,21 +167,7 @@ def make_burn_tx(sk, pk_hex, from_addr, amount, nonce, fee_height,
 
 
 def commit_block(n, blk):
-    """Commit a pre-built block to node state (bypasses VDF + validation)."""
-    import pob as pob_mod
-    n._burn_window.add_block(blk)
-    new_state = n.state.snapshot()
-    for t in blk.get("transactions", []):
-        new_state.apply_tx(t)
-    builder = blk.get("builder")
-    if builder:
-        reward = new_state.compute_block_reward()
-        dist = n._burn_window.reward_distribution(builder, reward)
-        new_state.apply_reward_distribution(dist)
-        from pob import _tip_hash_int
-        n._cumulative_score += n._burn_window.score(_tip_hash_int(n.chain), builder)
-    n.state = new_state
-    n.chain.append(blk)
-    n.storage.save_block(blk)
-    n.storage.save_state(new_state)
-    n._publish_view()
+    """Commit a pre-built block to node state (bypasses VDF + validation).
+    Delegates to n._commit so test state stays in sync with production logic.
+    """
+    n._commit(blk)

@@ -113,7 +113,7 @@ def test_rebuild_state_credits_block_reward(node_setup):
     n, _, _, _, addr, _ = node_setup
     blk = make_block(n.chain, builder_addr=addr)
     n.chain.append(blk)
-    n._rebuild_state()
+    n._rebuild_from_chain()
     assert n.state.get_balance(addr) > 0
     assert n.state.total_minted > 0
 
@@ -131,9 +131,8 @@ def test_node_view_stats_points_populated_after_block(node_setup):
     n, _, _, _, addr, _ = node_setup
     blk = make_block(n.chain, builder_addr=addr)
     blk["tx_bytes"] = 0
-    new_state = n.state.snapshot()
     with patch("vdf.verify", return_value=True):
-        n._commit(blk, new_state)
+        n._commit(blk)
     assert len(n.view.stats_points) > 0
 
 

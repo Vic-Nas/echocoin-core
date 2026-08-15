@@ -92,7 +92,7 @@ def test_own_block_wins_when_no_peers():
         g = n.chain[-1]
         candidate = make_block(n.chain, builder_addr=addr)
         with patch("vdf.verify", return_value=True):
-            winner, probe, relay = n._select_winner(candidate, [], g)
+            winner, relay = n._select_winner(candidate, [], g)
         assert winner["hash"] == candidate["hash"]
         assert relay is False
     finally:
@@ -113,7 +113,7 @@ def test_peer_block_with_lower_hash_wins():
             peer_blk, candidate = candidate, peer_blk
 
         with patch("vdf.verify", return_value=True):
-            winner, probe, relay = n._select_winner(candidate, [peer_blk], g)
+            winner, relay = n._select_winner(candidate, [peer_blk], g)
 
         assert winner["hash"] == peer_blk["hash"]
         assert relay is True
@@ -148,7 +148,7 @@ def test_peer_block_with_invalid_vdf_rejected():
             return output == valid_output
 
         with patch("vdf.verify", side_effect=fake_verify):
-            winner, probe, relay = n._select_winner(candidate, [peer_blk], g)
+            winner, relay = n._select_winner(candidate, [peer_blk], g)
 
         assert winner["hash"] == candidate["hash"]
     finally:
@@ -165,7 +165,7 @@ def test_peer_block_wrong_height_ignored():
         peer_blk["hash"]   = "aa" * 32  # lower hash won't help
 
         with patch("vdf.verify", return_value=True):
-            winner, probe, relay = n._select_winner(candidate, [peer_blk], g)
+            winner, relay = n._select_winner(candidate, [peer_blk], g)
 
         assert winner["hash"] == candidate["hash"]
     finally:
@@ -239,11 +239,9 @@ def test_commit_removes_confirmed_txs_from_mempool():
         assert n.mempool.size() == 1
 
         blk = make_block(n.chain, builder_addr=addr, txs=[t])
-        new_state = n.state.snapshot()
-        new_state.apply_tx(t)
         # Use the real _commit so mempool cleanup runs
         with patch("vdf.verify", return_value=True):
-            n._commit(blk, new_state, relay=False)
+            n._commit(blk, relay=False)
         assert n.mempool.size() == 0
     finally:
         teardown_node(n, dbfile, keyfile)
