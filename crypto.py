@@ -102,10 +102,15 @@ def is_valid_address(addr):
     return all(w in _WORDLIST_SET for w in words)
 
 
+def canonical_json(obj):
+    """Deterministic JSON string: sorted keys, no whitespace."""
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
+
+
 def serialize_for_signing(tx_dict):
     """Canonical deterministic serialization excluding 'signature'."""
     fields = {k: v for k, v in tx_dict.items() if k != "signature"}
-    return json.dumps(fields, sort_keys=True, separators=(",", ":")).encode()
+    return canonical_json(fields).encode()
 
 
 # ---------------------------------------------------------------------------

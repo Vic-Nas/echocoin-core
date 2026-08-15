@@ -1,10 +1,10 @@
 """Block creation, validation, serialization. Pure functions on dicts."""
 
-import json
 import statistics
 import time as _time
 
 import crypto
+from crypto import canonical_json
 import tx as tx_mod
 import vdf as vdf_mod
 from params import (
@@ -69,13 +69,12 @@ def create(height, previous_hash, transactions, builder,
 def block_hash(blk):
     """Deterministic hash of block (excludes 'hash' field itself)."""
     fields = {k: v for k, v in blk.items() if k != "hash"}
-    canonical = json.dumps(fields, sort_keys=True, separators=(",", ":"))
-    return crypto.sha256_hex(canonical)
+    return crypto.sha256_hex(canonical_json(fields))
 
 
 def block_size(blk):
     """Size in bytes of serialized block."""
-    return len(json.dumps(blk, sort_keys=True, separators=(",", ":")).encode())
+    return len(canonical_json(blk).encode())
 
 
 def _check_hash(blk):

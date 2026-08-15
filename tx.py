@@ -1,8 +1,7 @@
 """Transaction creation, serialization, validation. Pure functions on dicts."""
 
-import json
-
 import crypto
+from crypto import canonical_json
 from pob import BURN_ADDRESS
 from params import FEE_HEIGHT_MAX_AGE
 
@@ -25,15 +24,14 @@ def create(from_addr, pubkey_hex, outputs, nonce, fee_height, fee, secret_key_by
 
 def tx_hash(tx_dict):
     """Deterministic hash of the full tx including signature."""
-    canonical = json.dumps(tx_dict, sort_keys=True, separators=(",", ":"))
-    return crypto.sha256_hex(canonical)
+    return crypto.sha256_hex(canonical_json(tx_dict))
 
 
 def tx_size(tx_dict):
     """Fee-basis size: serialized body excluding the signature field.
     The signature is not under the sender's control so is not priced."""
     fields = {k: v for k, v in tx_dict.items() if k != "signature"}
-    return len(json.dumps(fields, sort_keys=True, separators=(",", ":")).encode())
+    return len(canonical_json(fields).encode())
 
 
 def tx_size_in_block(tx_dict, position=0):
@@ -43,7 +41,7 @@ def tx_size_in_block(tx_dict, position=0):
     Used by block.assemble() to track running block size without re-serializing
     the entire block on every candidate tx.
     """
-    size = len(json.dumps(tx_dict, sort_keys=True, separators=(",", ":")).encode())
+    size = len(canonical_json(tx_dict).encode())
     return size + (1 if position > 0 else 0)
 
 

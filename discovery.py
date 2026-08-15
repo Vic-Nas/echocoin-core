@@ -40,6 +40,9 @@ GET_INTERVAL         = 60
 CRAWL_INTERVAL       = 600
 STAGE_FLUSH_INTERVAL = 15
 
+# Per-node stagger before first DHT announcement.
+PUT_DELAY_LOCAL      = 30
+
 _PUBLIC_IP_SERVICES = (
     "https://api.ipify.org",
     "https://icanhazip.com",
@@ -281,6 +284,3 @@ class Discovery:
             log.debug("[peer] cache save failed", exc_info=True)
 
 
-# PUT_DELAY_LOCAL is the per-node stagger before first announcement.
-# Kept here (not in params) because it's a discovery-internal timing detail.
-PUT_DELAY_LOCAL = 30

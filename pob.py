@@ -212,10 +212,8 @@ def cumulative_score(chain):
         window.add_block(blk)
         builder = blk.get("builder")
         if builder and blk["height"] > 0:
-            # _tip_hash_int reads vdf_output or hash from the tip block directly.
-            vdf_out = blk.get("vdf_output") or blk["hash"]
-            tip_hash_int = int(vdf_out[:64], 16)
-            total += window.score(tip_hash_int, builder)
+            # Use the parent tip's hash, matching ChainState.from_chain().
+            total += window.score(_tip_hash_int(chain[:blk["height"]]), builder)
     return total
 
 

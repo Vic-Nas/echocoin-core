@@ -106,12 +106,6 @@ class State:
         s.total_burnt  = self.total_burnt
         return s
 
-    def restore(self, snapshot):
-        self._balances    = snapshot._balances.copy()
-        self._nonces      = snapshot._nonces.copy()
-        self.total_minted = snapshot.total_minted
-        self.total_burnt  = snapshot.total_burnt
-
     # ------------------------------------------------------------------
     # Inspection
     # ------------------------------------------------------------------
