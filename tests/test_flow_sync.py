@@ -122,22 +122,22 @@ def test_peer_ahead_fetches_only_tail():
 
 
 # ---------------------------------------------------------------------------
-# node.sync_chain: _remote_is_better + _apply_chain
+# node.apply_better_chain: _remote_is_better + _apply_chain
 # ---------------------------------------------------------------------------
 
-def test_sync_chain_accepted_when_remote_longer():
+def test_apply_chain_accepted_when_remote_longer():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
         remote = make_chain(3)
         with patch("vdf.verify", return_value=True):
-            ok, err = n.sync_chain(remote)
+            ok, err = n.apply_better_chain(remote)
         assert ok, err
         assert len(n.chain) == 3
     finally:
         teardown_node(n, dbfile, keyfile)
 
 
-def test_sync_chain_rejected_when_remote_shorter():
+def test_apply_chain_rejected_when_remote_shorter():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
         # Commit two blocks locally
@@ -148,14 +148,14 @@ def test_sync_chain_rejected_when_remote_shorter():
                 commit_block(n, blk)
 
         remote = make_chain(1)   # just genesis
-        ok, err = n.sync_chain(remote)
+        ok, err = n.apply_better_chain(remote)
         assert not ok
         assert len(n.chain) == 3
     finally:
         teardown_node(n, dbfile, keyfile)
 
 
-def test_sync_chain_rejected_on_genesis_mismatch():
+def test_apply_chain_rejected_on_genesis_mismatch():
     n, sk, pk, pk_hex, addr, gossip, dbfile, keyfile = make_node()
     try:
         # Build a chain with a fake genesis
@@ -165,7 +165,7 @@ def test_sync_chain_rejected_on_genesis_mismatch():
         fake_chain = [fake_genesis] + make_chain(3)[1:]
 
         with patch("vdf.verify", return_value=True):
-            ok, err = n.sync_chain(fake_chain)
+            ok, err = n.apply_better_chain(fake_chain)
         assert not ok
         assert "genesis" in err.lower()
     finally:
@@ -190,7 +190,7 @@ def test_reorg_restores_displaced_txs_to_mempool():
         # Sync to a longer chain that doesn't include t
         remote = make_chain(4)
         with patch("vdf.verify", return_value=True):
-            n.sync_chain(remote)
+            n.apply_better_chain(remote)
 
         # t should be back in mempool
         assert n.mempool.get(tx_mod.tx_hash(t)) is not None

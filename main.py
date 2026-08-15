@@ -128,7 +128,7 @@ def main():
     if pool.count() > 0:
         syncer.check_and_sync(
             node.chain,
-            lambda chain: node.sync_chain(chain)[0],
+            lambda chain: node.apply_better_chain(chain)[0],
         )
 
     try:

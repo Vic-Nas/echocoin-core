@@ -91,7 +91,7 @@ def test_apply_chain_genesis_mismatch_rejected(node_setup):
     n, *_ = node_setup
     fake = block_mod.create_genesis()
     fake["hash"] = "ff" * 32
-    ok, err = n._apply_chain([fake], "test")
+    ok, err = n._apply_chain([fake])
     assert not ok and "genesis" in err.lower()
 
 
@@ -101,7 +101,7 @@ def test_apply_chain_invalid_block_rejected(node_setup):
     chain[2]["previous_hash"] = "00" * 32
     chain[2]["hash"] = block_mod.block_hash(chain[2])
     with patch("vdf.verify", return_value=True):
-        ok, err = n._apply_chain(chain, "test")
+        ok, err = n._apply_chain(chain)
     assert not ok and "invalid block at 2" in err
 
 

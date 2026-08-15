@@ -64,10 +64,14 @@ class NodeView:
     def _build_stats_points(chain, state, prev_points=None, prev_cum_burned=0):
         """Build chart data points for /api/stats.
 
-        Incremental: if prev_points is given (from the previous view) and the
-        chain only grew by one block, append that one point instead of walking
-        the whole chain. Falls back to full rebuild on reorg (length mismatch).
-        Downsamples to 500 points when the chain exceeds that length.
+        Normal path (chain grew by one block): reuse prev_points as a read-only
+        base and build a new list with one appended point. No mutation of the
+        previous view's list -- Flask threads may still be reading it.
+
+        Falls back to a full rebuild on reorg or when downsampling kicks in
+        (chain > 500 blocks, at which point we rebuild the full downsampled set).
+
+        Returns (points, cum_burned) so the caller can carry cum_burned forward.
         """
         if len(chain) <= 1:
             return [], 0
@@ -75,29 +79,29 @@ class NodeView:
         total_minted = state.total_minted
         max_height   = max(len(chain) - 1, 1)
 
-        # Incremental path: chain grew by exactly one block
+        # Fast path: chain grew by exactly one block and we're below the 500-point cap.
         if (prev_points is not None
                 and len(prev_points) < 500
-                and len(chain) == len(prev_points) + 2):  # +2: genesis not in points
+                and len(chain) == len(prev_points) + 2):   # +2: genesis not in points
             blk       = chain[-1]
             block_fee = sum(t["fee"] for t in blk.get("transactions", []))
             cum       = prev_cum_burned + block_fee
-            prev_points.append({
+            minted    = int(total_minted * blk["height"] / max_height)
+            new_point = {
                 "height":       blk["height"],
-                "minted":       int(total_minted * blk["height"] / max_height),
+                "minted":       minted,
                 "burned_fees":  cum,
-                "circulating":  int(total_minted * blk["height"] / max_height) - cum,
+                "circulating":  minted - cum,
                 "net_emission": block_fee,
-            })
-            return prev_points, cum
+            }
+            return prev_points + [new_point], cum   # new list, not mutation
 
-        # Full rebuild
+        # Full rebuild (startup, reorg, or post-500 downsample).
         points, cum = [], 0
         for blk in chain[1:]:
             block_fee  = sum(t["fee"] for t in blk.get("transactions", []))
             cum       += block_fee
-            frac       = blk["height"] / max_height
-            minted     = int(total_minted * frac)
+            minted     = int(total_minted * blk["height"] / max_height)
             points.append({
                 "height":       blk["height"],
                 "minted":       minted,
@@ -118,14 +122,17 @@ log = logging.getLogger("ec.node")
 SYNC_EVERY_N_CYCLES = 3
 
 
-def _replay_blocks(blocks, state):
-    """Replay a slice of blocks onto state in place.
-    Applies transactions then pool-aware reward distribution for each block.
-    Uses BurnWindow for O(1) per-block distribution lookup during replay
-    instead of O(window * txs) chain rescans.
-    blocks: iterable of block dicts, skipping genesis (height > 0).
+def _replay_blocks(blocks, state, window=None):
+    """Replay blocks onto state, return the BurnWindow used.
+
+    Accepts an existing window so callers can continue from the shared
+    prefix into the new tail without rebuilding it from scratch.
+    Creates a fresh window if none is provided.
+    Skips genesis (height 0) for tx/reward application but still adds
+    it to the window so expiry math is correct.
     """
-    window = pob_mod.BurnWindow()
+    if window is None:
+        window = pob_mod.BurnWindow()
     for blk in blocks:
         window.add_block(blk)
         if blk["height"] == 0:
@@ -137,6 +144,7 @@ def _replay_blocks(blocks, state):
             reward = state.compute_block_reward()
             dist = window.reward_distribution(builder, reward)
             state.apply_reward_distribution(dist)
+    return window
 
 
 class Node:
@@ -331,7 +339,7 @@ class Node:
         if self._cycle_count % SYNC_EVERY_N_CYCLES == 0:
             self.syncer.check_and_sync(
                 self.chain,
-                lambda chain: self.sync_chain(chain)[0],
+                lambda chain: self.apply_better_chain(chain)[0],
             )
 
         tip      = self.chain[-1]
@@ -559,7 +567,7 @@ class Node:
             return remote_chain[-1]["hash"] < self.chain[-1]["hash"]
         return False
 
-    def _apply_chain(self, candidate_chain, label):
+    def _apply_chain(self, candidate_chain):
         genesis = block_mod.create_genesis()
         if not candidate_chain or candidate_chain[0]["hash"] != genesis["hash"]:
             return False, "genesis mismatch"
@@ -571,20 +579,18 @@ class Node:
         )
 
         new_state = state_mod.State()
-        validated = []
 
         def fee_rate_at(h):
             return candidate_chain[h]["fee_rate"] if 0 <= h < len(candidate_chain) else None
 
-        # Replay the shared prefix (trusted -- already on chain, no revalidation).
-        # Build the burn window for the prefix in the same pass.
-        tail_window = pob_mod.BurnWindow()
-        _replay_blocks(candidate_chain[:fork_point], new_state)
-        for blk in candidate_chain[:fork_point]:
-            tail_window.add_block(blk)
-        validated = list(candidate_chain[:fork_point])
+        # Replay the shared prefix (trusted), get the window it built in one pass.
+        prefix    = candidate_chain[:fork_point]
+        window    = _replay_blocks(prefix, new_state)
+        validated = list(prefix)
+
+        # Validate and apply the new tail, continuing from the prefix window.
         for blk in candidate_chain[fork_point:]:
-            tail_window.add_block(blk)
+            window.add_block(blk)
             probe = new_state.snapshot()
             ok, err = block_mod.validate(blk, probe, validated, fee_rate_at)
             if not ok:
@@ -592,7 +598,7 @@ class Node:
             builder = blk.get("builder")
             if builder:
                 reward = probe.compute_block_reward()
-                dist = tail_window.reward_distribution(builder, reward)
+                dist = window.reward_distribution(builder, reward)
                 probe.apply_reward_distribution(dist)
             new_state = probe
             validated.append(blk)
@@ -620,7 +626,7 @@ class Node:
         self._rebuild_burn_window()
         self.storage.save_state(new_state)
         self._publish_view()
-        if label == "reorg":
+        if fork_point < len(self.chain) - 1:
             log.warning("[reorg] applied  height=%d  fork_point=%d",
                         len(self.chain) - 1, fork_point)
         else:
@@ -628,15 +634,17 @@ class Node:
                      len(self.chain) - 1, fork_point)
         return True, None
 
-    def sync_chain(self, remote_chain):
+    def apply_better_chain(self, remote_chain):
+        """Accept a remote chain if it is better than the local one.
+
+        Used by both periodic sync (syncer.check_and_sync) and inbound
+        peer blocks that arrive during _select_winner. A reorg (fork_point
+        below local tip) is logged at WARNING; a simple extension at INFO.
+        Returns (True, None) on success or (False, reason) on rejection.
+        """
         if not self._remote_is_better(remote_chain):
             return False, "remote chain not longer or heavier"
-        ok, err = self._apply_chain(remote_chain, "sync")
+        ok, err = self._apply_chain(remote_chain)
         if not ok:
             log.warning("[sync] rejected  reason=%s", err)
         return ok, err
-
-    def handle_reorg(self, fork_chain):
-        if not self._remote_is_better(fork_chain):
-            return False, "fork not longer or heavier"
-        return self._apply_chain(fork_chain, "reorg")

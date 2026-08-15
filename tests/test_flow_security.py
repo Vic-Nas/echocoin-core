@@ -29,7 +29,7 @@ def test_shorter_chain_rejected_on_sync():
         assert len(n.chain) == 4
 
         shorter = make_chain(2)
-        ok, err = n.sync_chain(shorter)
+        ok, err = n.apply_better_chain(shorter)
         assert not ok
         assert len(n.chain) == 4
     finally:
@@ -51,7 +51,7 @@ def test_reorg_replays_from_fork_point():
         # Remote chain forks after genesis
         remote = make_chain(4)
         with patch("vdf.verify", return_value=True):
-            ok, err = n.sync_chain(remote)
+            ok, err = n.apply_better_chain(remote)
         assert ok, err
         assert len(n.chain) == 4
     finally:
