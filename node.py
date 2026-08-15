@@ -361,7 +361,12 @@ class Node:
             return None, False
 
         all_valid = valid_peers + [candidate]
-        winner    = min(all_valid, key=lambda b: b["hash"])
+        # Fork choice: lowest PoB score wins. Hash breaks a tie (score collision
+        # is astronomically rare but must be deterministic).
+        chain = cs.chain
+        winner = min(all_valid, key=lambda b: (
+            pob_mod.score(chain, b["builder"]), b["hash"]
+        ))
         return winner, winner is not candidate
 
     def _commit(self, blk, relay=False):
@@ -458,13 +463,15 @@ class Node:
 
     def apply_better_chain(self, remote_chain):
         """Accept remote_chain if it is better than local. Used by syncer."""
+        # Check genesis first -- before replaying anything -- so a bad peer
+        # cannot burn CPU by sending a long chain with a wrong genesis block.
+        genesis_hash = self.cs.genesis_hash
+        if not remote_chain or remote_chain[0]["hash"] != genesis_hash:
+            return False, "genesis mismatch"
+
         remote_cs = ChainState.from_chain(remote_chain)
         if not remote_cs.is_better_than(self.cs):
             return False, "remote chain not better"
-
-        genesis_hash = ChainState.from_genesis().tip["hash"]
-        if not remote_chain or remote_chain[0]["hash"] != genesis_hash:
-            return False, "genesis mismatch"
 
         fork_point = next(
             (i for i, (a, b) in enumerate(zip(self.cs.chain, remote_chain))
@@ -474,7 +481,13 @@ class Node:
         prefix = remote_chain[:fork_point]
         tail   = remote_chain[fork_point:]
 
-        ok, err = _validate_tail(tail, prefix, remote_cs.fee_rate_at)
+        # Build fee rate lookup from the trusted local prefix only.
+        # Using remote_cs.fee_rate_at would let an attacker supply arbitrary
+        # fee rates for the shared prefix blocks.
+        trusted_prefix_cs = ChainState.from_chain(self.cs.chain[:fork_point]) \
+            if fork_point > 0 else ChainState.from_genesis()
+
+        ok, err = _validate_tail(tail, prefix, trusted_prefix_cs.fee_rate_at)
         if not ok:
             log.warning("[sync] rejected: %s", err)
             return False, err
