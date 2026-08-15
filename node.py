@@ -54,7 +54,7 @@ def _validate_tail(tail, prefix, fee_rate_at):
             return False, f"invalid block at {blk['height']}: {err}"
         # Apply to throw-away state so subsequent blocks see correct balances.
         builder = blk.get("builder")
-        window  = cs.burn_window
+        window  = cs.burn_window.copy()
         window.add_block(blk)
         if builder:
             probe.apply_reward_distribution(

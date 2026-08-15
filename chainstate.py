@@ -77,16 +77,19 @@ class ChainState:
                 state.apply_reward_distribution(
                     window.reward_distribution(builder, state.compute_block_reward())
                 )
-                vdf_out = blk.get("vdf_output") or blk["hash"]
-                score  += window.score(int(vdf_out[:64], 16), builder)
+                # Score uses the previous tip's hash (before this block was added).
+                # chain[:blk["height"]] is the prefix ending at the parent block.
+                score += window.score(
+                    pob_mod._tip_hash_int(chain[:blk["height"]]), builder
+                )
         return cls(list(chain), state, window, score)
 
     @classmethod
     def from_storage(cls, chain, stored_state):
         """Build a ChainState from a chain and a pre-loaded State snapshot.
-        Used at startup when a valid state snapshot exists -- avoids replaying
-        the full chain just to recover balances. Burns window is still built
-        from the chain since it isn't persisted.
+        Avoids replaying txs (balances come from the snapshot). Builds the
+        burn window and cumulative score from the chain since those aren't
+        persisted.
         """
         window = pob_mod.BurnWindow()
         score  = 0
@@ -94,8 +97,9 @@ class ChainState:
             window.add_block(blk)
             builder = blk.get("builder")
             if builder and blk["height"] > 0:
-                vdf_out = blk.get("vdf_output") or blk["hash"]
-                score  += window.score(int(vdf_out[:64], 16), builder)
+                score += window.score(
+                    pob_mod._tip_hash_int(chain[:blk["height"]]), builder
+                )
         return cls(list(chain), stored_state, window, score)
 
     # ------------------------------------------------------------------
@@ -103,14 +107,9 @@ class ChainState:
     # ------------------------------------------------------------------
 
     def apply_block(self, blk):
-        """Return a new ChainState with blk appended. Does not mutate self.
-        The block must already be validated. Used by _commit.
-        """
+        """Return a new ChainState with blk appended. Does not mutate self."""
         new_state  = self.state.snapshot()
-        new_window = self.burn_window         # BurnWindow is mutable but we
-        # add_block is incremental and safe to call in-place because ChainState
-        # is always replaced atomically -- no concurrent reader will see a
-        # half-updated window since node.cs is replaced as a whole ref.
+        new_window = self.burn_window.copy()   # independent copy -- self is not mutated
         new_window.add_block(blk)
 
         for t in blk.get("transactions", []):
@@ -122,8 +121,7 @@ class ChainState:
             new_state.apply_reward_distribution(
                 new_window.reward_distribution(builder, new_state.compute_block_reward())
             )
-            vdf_out   = blk.get("vdf_output") or blk["hash"]
-            new_score += new_window.score(int(vdf_out[:64], 16), builder)
+            new_score += new_window.score(pob_mod._tip_hash_int(self.chain), builder)
 
         return ChainState(self.chain + [blk], new_state, new_window, new_score)
 

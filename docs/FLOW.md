@@ -14,10 +14,15 @@ main.py
   ├─ create PeerPool, Gossip, Syncer, Node, Discovery
   │
   ├─ Node.__init__
-  │     ├─ load blocks from SQLite  (storage.py)
-  │     ├─ load state snapshot      (storage.py)
-  │     │   └─ or replay chain from genesis if snapshot missing
-  │     └─ rebuild BurnWindow from chain  (pob.py)
+  │     └─ _load_cs() → ChainState
+  │           ├─ storage has blocks + state snapshot?
+  │           │     └─ ChainState.from_storage(blocks, snapshot)
+  │           │          ├─ load balances/nonces from snapshot
+  │           │          └─ rebuild BurnWindow + score from chain
+  │           ├─ storage has blocks, no snapshot?
+  │           │     └─ ChainState.from_chain(blocks)  (full replay)
+  │           └─ empty storage?
+  │                 └─ ChainState.from_genesis()  (create + persist genesis)
   │
   ├─ admit --peer CLI addresses immediately (discovery.add_bootstrap_peer)
   ├─ one-shot sync against first peer if pool non-empty
@@ -34,11 +39,9 @@ main.py
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│  drain net_in_q  (tx submissions, inbound txs from peers)           │
+│  _drain_queue()  -- inbound txs and blocks from net_in_q            │
 │  every 3rd cycle: syncer.check_and_sync()                           │
-│    └─ binary-search fork point with peer                            │
-│    └─ fetch only the differing tail                                  │
-│    └─ node.sync_chain() → validate + apply if peer is ahead         │
+│    └─ binary-search fork point, fetch tail, node.apply_better_chain │
 │                                                                      │
 │  mempool.prune_stale()  (drop txs with expired fee_height)          │
 │                                                                      │
@@ -56,27 +59,22 @@ main.py
 │                                                                      │
 │  wait 5 seconds, drain net_in_q  (collect competing peer blocks)    │
 │                                                                      │
-│  _select_winner(candidate, peer_blocks)                             │
-│    for each peer block:                                              │
-│      ├─ height and previous_hash match?                              │
-│      ├─ block_hash lower than current best?                          │
-│      ├─ block.validate()  → hash, parent, timestamp, VDF proof,     │
-│      │                       tx ordering, fee rate, balances         │
-│      └─ _censorship_score()  → probabilistic check                  │
-│           (blocks that repeatedly exclude pending txs               │
-│            are rejected with probability 1/effective_age)           │
+│  _pick_winner(candidate, peer_blocks)                               │
+│    ├─ filter: height and previous_hash must match tip               │
+│    ├─ validate each peer block  (hash, VDF proof, txs, balances)    │
+│    ├─ censorship check  → probabilistic rejection for repeat        │
+│    │   excluders: P(reject) = 1/effective_exclusion_age            │
+│    └─ min(all valid blocks, key=hash)  → lowest hash wins           │
 │                                                                      │
 │  _commit(winner)                                                     │
 │    ├─ _update_exclusion_ages()                                       │
-│    ├─ burn_window.add_block()                                        │
-│    ├─ compute block reward  (state.compute_block_reward)             │
-│    ├─ burn_window.reward_distribution()  → split among contributors  │
-│    ├─ state.apply_reward_distribution()                              │
-│    ├─ chain.append(winner)                                           │
-│    ├─ storage.save_block()  + storage.save_state()                  │
-│    ├─ mempool.remove_many()  (confirmed txs)                         │
-│    ├─ publish new NodeView  (atomic ref swap, Flask reads this)      │
-│    └─ gossip.broadcast_block()  if winner came from a peer           │
+│    ├─ self.cs = self.cs.apply_block(winner)                         │
+│    │     ├─ copy BurnWindow, add block, apply txs, apply reward     │
+│    │     └─ return new ChainState (self.cs not mutated)             │
+│    ├─ storage.save_block() + storage.save_state()                   │
+│    ├─ mempool.remove_many()  (confirmed txs)                        │
+│    ├─ publish new NodeView  (atomic ref swap, Flask reads this)     │
+│    └─ gossip.broadcast_block()  if winner came from a peer          │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -91,7 +89,7 @@ api.py  →  node.submit_tx_from_api()
              └─ queues {type: submit_tx} on net_in_q
              └─ blocks waiting for reply (timeout 5s)
                          │
-                         ▼ (node loop thread picks it up in _drain_queue)
+                         ▼  (node loop picks it up in _drain_queue → _handle)
              node.submit_tx()
                ├─ tx.validate()   fields, signature, nonce, fee, balance
                ├─ mempool.add()
@@ -101,7 +99,8 @@ api.py  →  node.submit_tx_from_api()
 
 Inbound tx from a peer arrives at /api/receive_tx
   └─ api.py queues {type: tx} on net_in_q
-  └─ node loop: validate → mempool.add → gossip.relay_tx (dedup via seen-cache)
+  └─ node loop: _handle → _handle_inbound_tx
+       └─ validate → mempool.add → gossip.relay_tx (dedup via seen-cache)
 ```
 
 
@@ -143,50 +142,47 @@ syncer.check_and_sync(local_chain, apply_fn)  (called every 3 cycles)
   ├─ GET /api/info  → compare remote height
   ├─ if remote not ahead: return False
   ├─ _find_fork_point()  binary search O(log n) round trips
-  │   └─ highest height where both chains share the same hash
   ├─ _fetch_chain(from=fork_point)  paginated, 500 blocks/page
   └─ apply_fn(local_prefix + fetched_tail)
-       └─ node.sync_chain()
-            ├─ node._remote_is_better()
-            │   ├─ remote height > local?  → yes
-            │   ├─ equal height: compare cumulative PoB score  → lower wins
-            │   └─ equal score: compare tip hash  → lower wins
-            └─ node._apply_chain()
-                 ├─ verify genesis hash
-                 ├─ find fork point in local chain
-                 ├─ replay shared prefix onto fresh state (trusted, no revalidation)
-                 ├─ validate + apply each new block in the tail
-                 ├─ reorg mempool: restore old-tail txs not in new tail
-                 ├─ storage.replace_chain()
-                 └─ rebuild BurnWindow, publish new NodeView
+       └─ node.apply_better_chain(remote_chain)
+            ├─ ChainState.from_chain(remote) to get score
+            ├─ remote_cs.is_better_than(local_cs)?
+            │    ├─ remote height > local?  → yes
+            │    ├─ equal height: lower cumulative score wins
+            │    └─ equal score: lower tip hash wins
+            ├─ _validate_tail(tail, prefix, fee_rate_at)
+            │    └─ builds throw-away ChainState, checks each block
+            ├─ _reorg_mempool()  → restore displaced txs
+            ├─ storage.replace_chain()
+            └─ self.cs = remote_cs  (atomic swap)
 ```
 
 
 ## PoB Score and Reward
 
 ```
-Every block, after the winner is chosen:
+ChainState.apply_block(blk) called on every commit:
 
-burn_window.add_block(winner)
-  └─ scans winner's transactions for burn outputs  {to: "burn", amount, beneficiary}
-  └─ updates rolling totals: beneficiary → contributor → amount
-  └─ expires blocks older than POB_WINDOW (500 blocks, ~17 hours)
-     O(1) expiry via paired deques
+  new_window = burn_window.copy()       ← independent copy, no mutation
+  new_window.add_block(blk)
+    └─ scan txs for {to: "burn", amount, beneficiary}
+    └─ update rolling totals: beneficiary → contributor → amount
+    └─ expire blocks older than POB_WINDOW (500 blocks, ~17 hours)
+       O(1) expiry via paired deques
 
-burn_window.score(tip_hash_int, builder_addr)
-  numerator   = tip_hash_int XOR hash(builder_addr)   [as int]
-  denominator = max(1, total burns tagged to builder in window)
-  score       = numerator / denominator
-  → lower score = more committed = higher block-building priority
+  burn_window.score(tip_hash_int, builder_addr)
+    numerator   = tip_hash_int XOR hash(builder_addr)   [as int]
+    denominator = max(1, total burns to builder in window)
+    score       = numerator / denominator
+    → lower score = more committed = higher block-building priority
 
-burn_window.reward_distribution(builder, reward)
-  burns = {contributor: amount}  for builder in current window
-  each contributor gets:  reward * their_burns / total_burns
-  → if builder has no contributors: full reward goes to builder
+  burn_window.reward_distribution(builder, reward)
+    each contributor gets:  reward * their_burns / total_burns_to_builder
+    → no contributors: full reward to builder
 
-cumulative_score(chain)  [fork choice]
-  = sum of score(builder_i) for every block i > 0
-  → lower cumulative score = heavier chain = wins fork
+  cumulative_score  [fork choice, carried on ChainState]
+    += score(parent_tip_hash_int, builder) for each new block
+    → lower cumulative = heavier chain = wins fork
 ```
 
 
@@ -194,26 +190,27 @@ cumulative_score(chain)  [fork choice]
 
 ```
 Pure logic (no I/O, no threads):
-  params.py      protocol constants
-  crypto.py      keys, signing, address derivation
-  tx.py          transaction create / validate / sort
-  block.py       block create / validate / assemble
-  state.py       balance ledger, emission accounting
-  mempool.py     pending tx store
-  vdf.py         chiavdf wrapper: evaluate() and verify()
-  pob.py         BurnWindow, score, reward distribution
+  params.py        protocol constants
+  crypto.py        keys, signing (FALCON-512 via liboqs), address derivation
+  tx.py            transaction create / validate / sort
+  block.py         block create / validate / assemble
+  state.py         balance ledger, emission accounting
+  mempool.py       pending tx store
+  vdf.py           chiavdf wrapper: evaluate() and verify()
+  pob.py           BurnWindow, score, reward distribution
+  chainstate.py    ChainState: chain + state + burn_window + score as one unit
 
 I/O and coordination:
-  storage.py     SQLite: blocks, state snapshots, tx/addr index
-  gossip.py      HTTP POST broadcasts, Dandelion relay
-  peerpool.py    active peer set, strike/cooldown
-  syncer.py      periodic chain sync against a random peer
-  discovery.py   coordinator: candidate pipeline, peer cache, UPnP
+  storage.py         SQLite: blocks, state snapshots, tx/addr index
+  gossip.py          HTTP POST broadcasts, Dandelion relay
+  peerpool.py        active peer set, strike/cooldown
+  syncer.py          periodic chain sync against a random peer
+  discovery.py       coordinator: candidate pipeline, peer cache, UPnP
   discovery_dht.py   libtorrent session, BEP44, torrent DHT
   discovery_crawl.py peer-list crawl
-  node.py        block cycle orchestrator, NodeView publisher
-  api.py         Flask endpoints, web UI
-  main.py        entry point, thread startup
+  node.py            block cycle orchestrator, NodeView publisher
+  api.py             Flask endpoints, web UI
+  main.py            entry point, thread startup
 ```
 
 
@@ -229,4 +226,4 @@ I/O and coordination:
 | Fee manipulation / MEV | Fee = size × protocol_rate; ordering is deterministic (fee_height, nonce, hash) |
 | Spam | Asymmetric fee formula: sustained full blocks double fees in ~14 blocks |
 | Pool centralisation | Burn weight is address-specific and non-transferable; reward split goes directly to contributors |
-| Quantum signatures | FALCON-512 (NIST PQC standard) from genesis; no migration needed |
+| Quantum signatures | FALCON-512 (NIST PQC standard) via liboqs from genesis |

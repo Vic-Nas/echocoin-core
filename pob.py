@@ -60,8 +60,16 @@ class BurnWindow:
         # per-block history deque (newest-first for display); each entry is a list of dicts
         self._history_blocks: "collections.deque" = collections.deque()
 
+    def copy(self):
+        """Return an independent copy of this BurnWindow."""
+        import copy
+        w = BurnWindow()
+        w._blocks         = copy.copy(self._blocks)
+        w._totals         = copy.deepcopy(self._totals)
+        w._history_blocks = copy.copy(self._history_blocks)
+        return w
+
     def add_block(self, blk):
-        """Add a block to the window, expiring blocks outside POB_WINDOW."""
         height = blk["height"]
 
         # Expire old blocks -- O(1) per block: popleft from both deques together
