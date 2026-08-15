@@ -4,6 +4,14 @@ from params import EMISSION_RATE, SUPPLY_CAP
 from pob import BURN_ADDRESS
 
 
+def compute_reward(total_minted: int, total_burnt: int) -> int:
+    """Single source of truth for block reward. Used by State and NodeView stats."""
+    can_mint = SUPPLY_CAP - total_minted + total_burnt
+    if can_mint <= 0:
+        return 0
+    return int(can_mint * (1 - EMISSION_RATE))
+
+
 class State:
     def __init__(self):
         self._balances    = {}  # addr -> int (rings)
@@ -65,19 +73,9 @@ class State:
     # Emission
     # ------------------------------------------------------------------
 
-    def compute_block_reward(self):
-        """Compute the reward for the next accepted block.
-
-        can_mint = SUPPLY_CAP - total_minted + total_burnt
-        reward   = int(can_mint * (1 - EMISSION_RATE))
-
-        Burnt fees flow back into can_mint, sustaining rewards indefinitely
-        at high network usage. At low usage, emission decays toward zero.
-        """
-        can_mint = SUPPLY_CAP - self.total_minted + self.total_burnt
-        if can_mint <= 0:
-            return 0
-        return int(can_mint * (1 - EMISSION_RATE))
+    def compute_block_reward(self) -> int:
+        """Compute the reward for the next accepted block."""
+        return compute_reward(self.total_minted, self.total_burnt)
 
     def apply_reward_distribution(self, distribution):
         """Credit a pre-computed reward distribution from pob.reward_distribution().
@@ -91,6 +89,21 @@ class State:
             if amount >= 1:
                 self.credit(addr, amount)
                 self.total_minted += amount
+
+    # ------------------------------------------------------------------
+    # Construction from persisted data
+    # ------------------------------------------------------------------
+
+    @classmethod
+    def from_snapshot(cls, balances: dict, nonces: dict,
+                      total_minted: int, total_burnt: int) -> "State":
+        """Restore a State from persisted data. Replaces direct field assignment."""
+        s = cls()
+        s._balances    = balances
+        s._nonces      = nonces
+        s.total_minted = total_minted
+        s.total_burnt  = total_burnt
+        return s
 
     # ------------------------------------------------------------------
     # Snapshot / restore

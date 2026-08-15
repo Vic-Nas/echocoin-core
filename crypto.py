@@ -14,6 +14,7 @@ import os
 import nacl.pwhash
 import nacl.secret
 import nacl.utils
+import orjson
 import oqs
 
 from params import ADDRESS_WORD_COUNT, WORD_BITS
@@ -60,13 +61,13 @@ def verify(message_bytes, signature_bytes, public_key_bytes):
         return False
 
 
-def sha256(data):
+def sha256(data: bytes | str) -> bytes:
     if isinstance(data, str):
         data = data.encode()
     return hashlib.sha256(data).digest()
 
 
-def sha256_hex(data):
+def sha256_hex(data: bytes | str) -> str:
     if isinstance(data, str):
         data = data.encode()
     return hashlib.sha256(data).hexdigest()
@@ -102,15 +103,15 @@ def is_valid_address(addr):
     return all(w in _WORDLIST_SET for w in words)
 
 
-def canonical_json(obj):
-    """Deterministic JSON string: sorted keys, no whitespace."""
-    return json.dumps(obj, sort_keys=True, separators=(",", ":"))
+def canonical_json(obj) -> bytes:
+    """Deterministic JSON bytes: sorted keys, no whitespace. ~8x faster than stdlib."""
+    return orjson.dumps(obj, option=orjson.OPT_SORT_KEYS)
 
 
-def serialize_for_signing(tx_dict):
+def serialize_for_signing(tx_dict) -> bytes:
     """Canonical deterministic serialization excluding 'signature'."""
     fields = {k: v for k, v in tx_dict.items() if k != "signature"}
-    return canonical_json(fields).encode()
+    return canonical_json(fields)
 
 
 # ---------------------------------------------------------------------------

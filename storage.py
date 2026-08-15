@@ -1,11 +1,12 @@
 """
-Chain and state persistence via SQLite. All disk I/O lives here.
+Chain and state persistence via SQLite + peewee ORM.
 
 Schema:
-  blocks(height INTEGER PK, hash TEXT, data TEXT)  -- full block JSON
-  state(addr TEXT PK, balance INTEGER, nonce INTEGER)
-  emission(key TEXT PK, value INTEGER)  -- total_minted, total_burnt
-  meta(key TEXT PK, value TEXT)
+  Block  -- full block JSON, indexed by height
+  State  -- per-address balance and nonce
+  Emission -- total_minted, total_burnt singletons
+  TxIndex  -- tx_hash -> block_height lookup
+  AddrIndex -- addr -> (tx_hash, block_height) lookup
 
 Blocks are the source of truth. State is rebuilt from blocks on open
 if the stored state is missing or the chain was extended offline.
@@ -14,128 +15,128 @@ The node calls storage after every block is validated and applied.
 
 import json
 import logging
-import sqlite3
+
+from peewee import (
+    SqliteDatabase, Model,
+    IntegerField, TextField, CompositeKey,
+)
 
 log = logging.getLogger("ec.storage")
 
+db = SqliteDatabase(None, pragmas={"journal_mode": "wal", "synchronous": "normal"},
+                    check_same_thread=False)
 
-def _conn(path):
-    c = sqlite3.connect(path, check_same_thread=False)
-    c.execute("PRAGMA journal_mode=WAL")
-    c.execute("PRAGMA synchronous=NORMAL")
-    return c
+
+class _Base(Model):
+    class Meta:
+        database = db
+
+
+class Block(_Base):
+    height = IntegerField(primary_key=True)
+    hash   = TextField()
+    data   = TextField()          # full JSON blob
+
+
+class State(_Base):
+    addr    = TextField(primary_key=True)
+    balance = IntegerField(default=0)
+    nonce   = IntegerField(default=0)
+
+
+class Emission(_Base):
+    key   = TextField(primary_key=True)
+    value = IntegerField(default=0)
+
+
+class Meta(_Base):
+    key   = TextField(primary_key=True)
+    value = TextField()
+
+
+class TxIndex(_Base):
+    tx_hash      = TextField(primary_key=True)
+    block_height = IntegerField()
+
+
+class AddrIndex(_Base):
+    addr         = TextField()
+    tx_hash      = TextField()
+    block_height = IntegerField()
+
+    class Meta:
+        primary_key = CompositeKey("addr", "tx_hash")
+        indexes = ((("addr",), False),)
+
+
+_TABLES = [Block, State, Emission, Meta, TxIndex, AddrIndex]
 
 
 class Storage:
     def __init__(self, path):
         self.path = path
-        self.db   = _conn(path)
-        self._init_schema()
-
-    def _init_schema(self):
-        self.db.executescript("""
-            CREATE TABLE IF NOT EXISTS blocks (
-                height INTEGER PRIMARY KEY,
-                hash   TEXT NOT NULL,
-                data   TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS state (
-                addr    TEXT PRIMARY KEY,
-                balance INTEGER NOT NULL DEFAULT 0,
-                nonce   INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS emission (
-                key   TEXT PRIMARY KEY,
-                value INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE TABLE IF NOT EXISTS meta (
-                key   TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS tx_index (
-                tx_hash      TEXT PRIMARY KEY,
-                block_height INTEGER NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS addr_index (
-                addr         TEXT NOT NULL,
-                tx_hash      TEXT NOT NULL,
-                block_height INTEGER NOT NULL,
-                PRIMARY KEY (addr, tx_hash)
-            );
-            CREATE INDEX IF NOT EXISTS addr_index_addr ON addr_index(addr);
-        """)
-        self.db.commit()
+        db.init(path)
+        db.connect(reuse_if_open=True)
+        db.create_tables(_TABLES, safe=True)
 
     # ------------------------------------------------------------------
     # Blocks
     # ------------------------------------------------------------------
 
-    def _index_block(self, blk, tx_hashes=None):
-        """Insert tx_index and addr_index rows for all transactions in blk.
-        tx_hashes: optional list of pre-computed hashes (same order as blk["transactions"]).
-        Must be called inside a transaction."""
+    def _index_block(self, blk):
+        """Insert TxIndex and AddrIndex rows for all transactions in blk."""
         import tx as tx_mod
         height = blk["height"]
         txs = blk.get("transactions", [])
-        if tx_hashes is None:
-            tx_hashes = [tx_mod.tx_hash(t) for t in txs]
-        for t, h in zip(txs, tx_hashes):
-            self.db.execute(
-                "INSERT OR IGNORE INTO tx_index(tx_hash, block_height) VALUES(?,?)",
-                (h, height)
-            )
+        tx_rows, addr_rows = [], []
+        for t in txs:
+            h = tx_mod.tx_hash(t)
+            tx_rows.append({"tx_hash": h, "block_height": height})
             addrs = {t["from"]} | {o["to"] for o in t.get("outputs", [])}
             for addr in addrs:
-                self.db.execute(
-                    "INSERT OR IGNORE INTO addr_index(addr, tx_hash, block_height) VALUES(?,?,?)",
-                    (addr, h, height)
-                )
+                addr_rows.append({"addr": addr, "tx_hash": h, "block_height": height})
+        if tx_rows:
+            TxIndex.insert_many(tx_rows).on_conflict_ignore().execute()
+        if addr_rows:
+            AddrIndex.insert_many(addr_rows).on_conflict_ignore().execute()
 
     def save_block(self, blk):
-        with self.db:
-            self.db.execute(
-                "INSERT OR REPLACE INTO blocks(height, hash, data) VALUES(?,?,?)",
-                (blk["height"], blk["hash"], json.dumps(blk))
-            )
+        with db.atomic():
+            Block.insert(height=blk["height"], hash=blk["hash"],
+                         data=json.dumps(blk)).on_conflict_replace().execute()
             self._index_block(blk)
 
     def get_tx_height(self, tx_hash):
-        row = self.db.execute(
-            "SELECT block_height FROM tx_index WHERE tx_hash=?", (tx_hash,)
-        ).fetchone()
-        return row[0] if row else None
+        row = TxIndex.get_or_none(TxIndex.tx_hash == tx_hash)
+        return row.block_height if row else None
 
     def get_tx_heights_for_addr(self, addr):
-        rows = self.db.execute(
-            "SELECT block_height, tx_hash FROM addr_index WHERE addr=? ORDER BY block_height DESC",
-            (addr,)
-        ).fetchall()
-        return [(r[0], r[1]) for r in rows]
+        rows = (AddrIndex
+                .select(AddrIndex.block_height, AddrIndex.tx_hash)
+                .where(AddrIndex.addr == addr)
+                .order_by(AddrIndex.block_height.desc()))
+        return [(r.block_height, r.tx_hash) for r in rows]
 
     def load_block(self, height):
-        row = self.db.execute(
-            "SELECT data FROM blocks WHERE height=?", (height,)
-        ).fetchone()
-        return json.loads(row[0]) if row else None
+        row = Block.get_or_none(Block.height == height)
+        return json.loads(row.data) if row else None
 
     def load_all_blocks(self):
-        rows = self.db.execute("SELECT data FROM blocks ORDER BY height").fetchall()
-        return [json.loads(r[0]) for r in rows]
+        return [json.loads(r.data) for r in Block.select().order_by(Block.height)]
 
     def chain_height(self):
-        row = self.db.execute("SELECT MAX(height) FROM blocks").fetchone()
-        return row[0] if row and row[0] is not None else -1
+        row = Block.select(Block.height).order_by(Block.height.desc()).first()
+        return row.height if row else -1
 
     def replace_chain(self, from_height, blocks):
-        """Truncate from from_height and save replacement blocks atomically."""
-        with self.db:
-            self.db.execute("DELETE FROM blocks WHERE height >= ?", (from_height,))
-            self.db.execute("DELETE FROM tx_index WHERE block_height >= ?", (from_height,))
-            self.db.execute("DELETE FROM addr_index WHERE block_height >= ?", (from_height,))
-            self.db.executemany(
-                "INSERT OR REPLACE INTO blocks(height, hash, data) VALUES(?,?,?)",
-                [(blk["height"], blk["hash"], json.dumps(blk)) for blk in blocks]
-            )
+        with db.atomic():
+            Block.delete().where(Block.height >= from_height).execute()
+            TxIndex.delete().where(TxIndex.block_height >= from_height).execute()
+            AddrIndex.delete().where(AddrIndex.block_height >= from_height).execute()
+            Block.insert_many([
+                {"height": b["height"], "hash": b["hash"], "data": json.dumps(b)}
+                for b in blocks
+            ]).on_conflict_replace().execute()
             for blk in blocks:
                 self._index_block(blk)
 
@@ -144,62 +145,39 @@ class Storage:
     # ------------------------------------------------------------------
 
     def save_state(self, state):
-        """Persist full state including emission counters.
-        DELETE + INSERT is simpler and faster than a scan-diff-upsert:
-        state is small (one row per funded address) and the WAL transaction
-        makes it atomic. A crash mid-write leaves a partial state table,
-        but the node rebuilds state from blocks on next start if the table
-        is empty, so partial writes are safe.
-        """
         balances = state.all_balances()
         nonces   = state.all_nonces()
-        rows     = [
-            (addr, balances.get(addr, 0), nonces.get(addr, 0))
+        rows = [
+            {"addr": addr, "balance": balances.get(addr, 0), "nonce": nonces.get(addr, 0)}
             for addr in balances.keys() | nonces.keys()
         ]
-        with self.db:
-            self.db.execute("DELETE FROM state")
+        with db.atomic():
+            State.delete().execute()
             if rows:
-                self.db.executemany(
-                    "INSERT INTO state(addr, balance, nonce) VALUES(?,?,?)",
-                    rows
-                )
-            self.db.execute(
-                "INSERT OR REPLACE INTO emission(key, value) VALUES('total_minted', ?)",
-                (state.total_minted,)
-            )
-            self.db.execute(
-                "INSERT OR REPLACE INTO emission(key, value) VALUES('total_burnt', ?)",
-                (state.total_burnt,)
-            )
+                State.insert_many(rows).execute()
+            Emission.insert(key="total_minted", value=state.total_minted).on_conflict_replace().execute()
+            Emission.insert(key="total_burnt",  value=state.total_burnt).on_conflict_replace().execute()
 
     def load_state(self):
-        """Return (balances, nonces, total_minted, total_burnt)."""
-        rows     = self.db.execute("SELECT addr, balance, nonce FROM state").fetchall()
-        balances = {r[0]: r[1] for r in rows}
-        nonces   = {r[0]: r[2] for r in rows}
-        em       = {
-            r[0]: r[1] for r in
-            self.db.execute("SELECT key, value FROM emission").fetchall()
-        }
-        total_minted = em.get("total_minted", 0)
-        total_burnt  = em.get("total_burnt",  0)
-        return balances, nonces, total_minted, total_burnt
+        rows     = State.select()
+        balances = {r.addr: r.balance for r in rows}
+        nonces   = {r.addr: r.nonce   for r in rows}
+        em       = {r.key: r.value for r in Emission.select()}
+        return balances, nonces, em.get("total_minted", 0), em.get("total_burnt", 0)
 
     def state_exists(self):
-        return self.db.execute("SELECT COUNT(*) FROM state").fetchone()[0] > 0
+        return State.select().exists()
 
     # ------------------------------------------------------------------
     # Meta
     # ------------------------------------------------------------------
 
     def get_meta(self, key, default=None):
-        row = self.db.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-        return row[0] if row else default
+        row = Meta.get_or_none(Meta.key == key)
+        return row.value if row else default
 
     def set_meta(self, key, value):
-        self.db.execute("INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)", (key, str(value)))
-        self.db.commit()
+        Meta.insert(key=key, value=str(value)).on_conflict_replace().execute()
 
     def close(self):
-        self.db.close()
+        db.close()

@@ -63,11 +63,7 @@ class BurnWindow:
     def copy(self):
         """Return an independent copy of this BurnWindow."""
         import copy
-        w = BurnWindow()
-        w._blocks         = copy.copy(self._blocks)
-        w._totals         = copy.deepcopy(self._totals)
-        w._history_blocks = copy.copy(self._history_blocks)
-        return w
+        return copy.deepcopy(self)
 
     def add_block(self, blk):
         height = blk["height"]
@@ -187,45 +183,4 @@ def _addr_int(address):
     return struct.unpack(">Q", h[:8])[0]   # 64-bit, good enough for ordering
 
 
-def score(chain, address):
-    """Compute PoB score for address at the current chain tip.
 
-    Lower is better. Use BurnWindow.score() during replay/live operation
-    to avoid rescanning; this one-off version is for sync candidates and tests.
-    """
-    w = _make_window(chain)
-    return w.score(_tip_hash_int(chain), address)
-
-
-def cumulative_score(chain):
-    """Sum of scores for each block's builder over the whole chain.
-
-    Used as the fork-choice weight: lower cumulative score = heavier chain.
-    Genesis (height 0, no builder) contributes 0.
-
-    Uses a single rolling BurnWindow walked forward so cost is
-    O(chain * avg_burn_txs_per_block) not O(chain^2).
-    """
-    total  = 0
-    window = BurnWindow()
-    for blk in chain:
-        window.add_block(blk)
-        builder = blk.get("builder")
-        if builder and blk["height"] > 0:
-            # Use the parent tip's hash, matching ChainState.from_chain().
-            total += window.score(_tip_hash_int(chain[:blk["height"]]), builder)
-    return total
-
-
-def reward_distribution(chain, beneficiary, reward):
-    """Compute the reward split for a block won by beneficiary.
-
-    One-off version for sync candidates and tests. For live/replay use,
-    call BurnWindow.reward_distribution() directly.
-    """
-    return _make_window(chain).reward_distribution(beneficiary, reward)
-
-
-def best_builder(candidates, chain):
-    """Return the address with the lowest PoB score among candidates."""
-    return min(candidates, key=lambda a: score(chain, a))

@@ -106,6 +106,18 @@ class ChainState:
     # Produce a new ChainState by appending one block
     # ------------------------------------------------------------------
 
+    def validate_and_apply(self, blk, fee_rate_at):
+        """Validate blk against self, then return (ok, err, new_cs).
+
+        Uses a snapshot so failure leaves self unchanged. On success,
+        new_cs is the result of apply_block(blk).
+        """
+        probe = self.state.snapshot()
+        ok, err = block_mod.validate(blk, probe, self.chain, fee_rate_at)
+        if not ok:
+            return False, err, self
+        return True, None, self.apply_block(blk)
+
     def apply_block(self, blk):
         """Return a new ChainState with blk appended. Does not mutate self."""
         new_state  = self.state.snapshot()

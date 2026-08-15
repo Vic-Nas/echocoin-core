@@ -42,26 +42,13 @@ SYNC_EVERY_N_CYCLES = 3
 def _validate_tail(tail, prefix, fee_rate_at):
     """Validate new blocks against a trusted prefix. Pure: nothing is mutated.
 
-    Builds a throw-away ChainState from the prefix, then checks each block
-    in tail. Returns (True, None) or (False, error_string).
+    Returns (True, None) or (False, error_string).
     """
     cs = ChainState.from_chain(prefix) if prefix else ChainState.from_genesis()
-    validated = list(prefix)
     for blk in tail:
-        probe = cs.state.snapshot()
-        ok, err = block_mod.validate(blk, probe, validated, fee_rate_at)
+        ok, err, cs = cs.validate_and_apply(blk, fee_rate_at)
         if not ok:
             return False, f"invalid block at {blk['height']}: {err}"
-        # Apply to throw-away state so subsequent blocks see correct balances.
-        builder = blk.get("builder")
-        window  = cs.burn_window.copy()
-        window.add_block(blk)
-        if builder:
-            probe.apply_reward_distribution(
-                window.reward_distribution(builder, probe.compute_block_reward())
-            )
-        cs = ChainState(validated + [blk], probe, window, cs.cumulative_score)
-        validated.append(blk)
     return True, None
 
 
@@ -112,20 +99,14 @@ class NodeView:
                                     "net_emission": fee}], cum
 
         # Full rebuild: walk the chain, accumulate actual fee burns per block.
-        # total_minted is only available as a final figure from state, so we
-        # still use it as the running minted value at the tip. For chart
-        # purposes we distribute it proportionally by block reward schedule
-        # using the exponential decay factor.
-        from params import EMISSION_RATE, SUPPLY_CAP
+        from state import compute_reward
         points, cum = [], 0
         running_minted = 0
         running_burnt  = 0
         for blk in chain[1:]:
             fee     = sum(t["fee"] for t in blk.get("transactions", []))
             cum    += fee
-            # Approximate per-block reward using the emission formula.
-            can_mint = SUPPLY_CAP - running_minted + running_burnt
-            reward   = int(max(0, can_mint) * (1 - EMISSION_RATE)) if can_mint > 0 else 0
+            reward  = compute_reward(running_minted, running_burnt)
             running_minted += reward
             running_burnt  += fee
             points.append({"height": blk["height"], "minted": running_minted,
@@ -186,13 +167,8 @@ class Node:
                                        for t in blk.get("transactions", []))
 
         if self.storage.state_exists():
-            balances, nonces, total_minted, total_burnt = self.storage.load_state()
             import state as state_mod
-            s = state_mod.State()
-            s._balances    = balances
-            s._nonces      = nonces
-            s.total_minted = total_minted
-            s.total_burnt  = total_burnt
+            s = state_mod.State.from_snapshot(*self.storage.load_state())
             cs = ChainState.from_storage(stored, s)
         else:
             cs = ChainState.from_chain(stored)
@@ -363,9 +339,9 @@ class Node:
         all_valid = valid_peers + [candidate]
         # Fork choice: lowest PoB score wins. Hash breaks a tie (score collision
         # is astronomically rare but must be deterministic).
-        chain = cs.chain
+        tip_hash_int = pob_mod._tip_hash_int(cs.chain)
         winner = min(all_valid, key=lambda b: (
-            pob_mod.score(chain, b["builder"]), b["hash"]
+            cs.burn_window.score(tip_hash_int, b["builder"]), b["hash"]
         ))
         return winner, winner is not candidate
 

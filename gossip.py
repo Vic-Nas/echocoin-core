@@ -6,7 +6,7 @@ no threads of its own (uses short-lived thread pools for fan-out).
 
 import logging
 import threading
-from collections import OrderedDict
+from cachetools import LRUCache
 from concurrent.futures import ThreadPoolExecutor
 
 import requests
@@ -25,7 +25,7 @@ class Gossip:
     def __init__(self, pool, port):
         self.pool     = pool
         self.port     = port
-        self._seen_tx = OrderedDict()
+        self._seen_tx = LRUCache(maxsize=SEEN_TX_CACHE_SIZE)
         self._lock    = threading.Lock()
 
     # ---- Public API (called by Node) ----
@@ -43,8 +43,6 @@ class Gossip:
             if h in self._seen_tx:
                 return
             self._seen_tx[h] = True
-            if len(self._seen_tx) > SEEN_TX_CACHE_SIZE:
-                self._seen_tx.popitem(last=False)
         self.dandelion_send(tx_dict, STEM_HOPS)
 
     def mark_seen(self, h):
@@ -53,8 +51,6 @@ class Gossip:
             if h in self._seen_tx:
                 return True
             self._seen_tx[h] = True
-            if len(self._seen_tx) > SEEN_TX_CACHE_SIZE:
-                self._seen_tx.popitem(last=False)
             return False
 
     # ---- Dandelion stem/fluff ----

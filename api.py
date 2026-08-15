@@ -24,15 +24,13 @@ Endpoint map:
   POST /api/receive_block        -- inbound block from a peer
 """
 
-import functools
 import logging
 import os
-import threading
-import time
-from collections import OrderedDict
 
 import markdown
 from flask import Flask, jsonify, render_template, request
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 
 import crypto as crypto_mod
 import pob as pob_mod
@@ -54,63 +52,37 @@ def fmt_fee_rate(rings_per_byte):
     return f"{ech:.2e} ECH/byte"
 
 
+from pydantic import BaseModel, field_validator, model_validator
+from pydantic import ValidationError as PydanticValidationError
+
 log = logging.getLogger("ec.api")
 
-# ---------------------------------------------------------------------------
-# Rate limiting
-# ---------------------------------------------------------------------------
 
-_RATE_LIMITER_MAX_BUCKETS = 10_000
+class _BlockIn(BaseModel):
+    model_config = {"extra": "allow"}
+    height: int
+    previous_hash: str
+    hash: str
+    timestamp: float
+    transactions: list
+    builder: str | None = None
+    fee_rate: int
+    vdf_output: str | None = None
+    vdf_proof: str | None = None
 
+    @field_validator("height")
+    @classmethod
+    def height_non_negative(cls, v):
+        if v < 0:
+            raise ValueError("height must be non-negative")
+        return v
 
-class _TokenBucket:
-    def __init__(self, capacity, refill_per_second):
-        self.capacity = capacity
-        self.refill_per_second = refill_per_second
-        self.tokens = capacity
-        self.last_refill = time.monotonic()
-        self._lock = threading.Lock()
-
-    def take(self):
-        with self._lock:
-            now = time.monotonic()
-            elapsed = now - self.last_refill
-            self.tokens = min(self.capacity, self.tokens + elapsed * self.refill_per_second)
-            self.last_refill = now
-            if self.tokens >= 1:
-                self.tokens -= 1
-                return True
-            return False
-
-
-class RateLimiter:
-    def __init__(self, capacity=20, refill_per_second=5):
-        self.capacity = capacity
-        self.refill_per_second = refill_per_second
-        self._buckets = OrderedDict()
-        self._lock = threading.Lock()
-
-    def allow(self, key):
-        with self._lock:
-            if key in self._buckets:
-                self._buckets.move_to_end(key)
-            else:
-                if len(self._buckets) >= _RATE_LIMITER_MAX_BUCKETS:
-                    self._buckets.popitem(last=False)
-                self._buckets[key] = _TokenBucket(self.capacity, self.refill_per_second)
-            bucket = self._buckets[key]
-        return bucket.take()
-
-
-def _rate_limited(limiter):
-    def decorator(fn):
-        @functools.wraps(fn)
-        def wrapped(*args, **kwargs):
-            if not limiter.allow(request.remote_addr or "unknown"):
-                return jsonify({"ok": False, "error": "rate limited"}), 429
-            return fn(*args, **kwargs)
-        return wrapped
-    return decorator
+    @model_validator(mode="after")
+    def validate_transactions(self):
+        for t in self.transactions:
+            if not isinstance(t, dict) or not _TX_REQUIRED_FIELDS.issubset(t):
+                raise ValueError("malformed transaction in block")
+        return self
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -118,6 +90,21 @@ def _rate_limited(limiter):
 
 _TX_REQUIRED_FIELDS = {"from", "pubkey", "outputs", "nonce", "fee_height", "fee", "signature"}
 _LOCALHOST = ("127.0.0.1", "::1")
+
+
+def _get_address_history(addr, node):
+    """Return list of (height, tx_hash, direction, tx_dict) for addr."""
+    v = node.view
+    history = []
+    for h_height, h in node.storage.get_tx_heights_for_addr(addr):
+        chain = v.chain
+        if 0 <= h_height < len(chain):
+            for t in chain[h_height]["transactions"]:
+                if tx_mod.tx_hash(t) == h:
+                    direction = "sent" if t["from"] == addr else "received"
+                    history.append((h_height, h, direction, t))
+                    break
+    return history
 
 
 def _parse_sender(data):
@@ -156,8 +143,8 @@ def create_app(node, pool, net_in_q, discovery):
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate)
     app.logger.setLevel(logging.WARNING)
 
-    tx_limiter    = RateLimiter(capacity=20, refill_per_second=5)
-    block_limiter = RateLimiter(capacity=10, refill_per_second=2)
+    limiter = Limiter(get_remote_address, app=app, default_limits=[],
+                      storage_uri="memory://")
 
     # ---- UI pages --------------------------------------------------------
 
@@ -315,16 +302,7 @@ def create_app(node, pool, net_in_q, discovery):
             v = node.view
             ctx["balance"] = v.state.get_balance(addr)
             ctx["nonce"]   = v.state.get_nonce(addr)
-            history = []
-            for h_height, h in node.storage.get_tx_heights_for_addr(addr):
-                chain = v.chain
-                if 0 <= h_height < len(chain):
-                    for t in chain[h_height]["transactions"]:
-                        if tx_mod.tx_hash(t) == h:
-                            direction = "sent" if t["from"] == addr else "received"
-                            history.append((h_height, h, direction, t))
-                            break
-            ctx["history"] = history
+            ctx["history"] = _get_address_history(addr, node)
         return render_template("address.html", **ctx)
 
     @app.route("/whitepaper")
@@ -388,7 +366,7 @@ def create_app(node, pool, net_in_q, discovery):
         return jsonify(node.view.chain[-1])
 
     @app.route("/api/tx/send", methods=["POST"])
-    @_rate_limited(tx_limiter)
+    @limiter.limit("20 per second")
     def api_send_tx():
         data = request.get_json()
         if not data:
@@ -424,16 +402,10 @@ def create_app(node, pool, net_in_q, discovery):
     def api_history(addr):
         if not crypto_mod.is_valid_address(addr):
             return jsonify({"error": "invalid address"}), 400
-        chain = node.view.chain
-        history = []
-        for height, h in node.storage.get_tx_heights_for_addr(addr):
-            if 0 <= height < len(chain):
-                for t in chain[height]["transactions"]:
-                    if tx_mod.tx_hash(t) == h:
-                        history.append({"height": height, "tx_hash": h,
-                            "direction": "sent" if t["from"] == addr else "received", "tx": t})
-                        break
-        return jsonify(history)
+        return jsonify([
+            {"height": h, "tx_hash": th, "direction": d, "tx": t}
+            for h, th, d, t in _get_address_history(addr, node)
+        ])
 
     @app.route("/api/mempool")
     def api_mempool():
@@ -443,30 +415,22 @@ def create_app(node, pool, net_in_q, discovery):
              "outputs": t["outputs"], "fee": t["fee"]} for t in txs]})
 
     @app.route("/api/receive_block", methods=["POST"])
-    @_rate_limited(block_limiter)
+    @limiter.limit("10 per second")
     def api_recv_block():
         data = request.get_json()
         if not data or "block" not in data:
             return jsonify({"ok": False, "error": "missing block"}), 400
-        blk = data["block"]
-        required = {"height", "previous_hash", "hash", "timestamp",
-                    "transactions", "builder", "fee_rate", "vdf_output", "vdf_proof"}
-        if not isinstance(blk, dict) or not required.issubset(blk):
+        try:
+            blk = _BlockIn.model_validate(data["block"]).model_dump()
+        except PydanticValidationError:
+            _strike_sender(pool, data)
             return jsonify({"ok": False, "error": "malformed block"}), 400
-        if not isinstance(blk["height"], int) or blk["height"] < 0:
-            return jsonify({"ok": False, "error": "malformed block"}), 400
-        if not isinstance(blk["transactions"], list):
-            return jsonify({"ok": False, "error": "malformed block"}), 400
-        for t in blk["transactions"]:
-            if not isinstance(t, dict) or not _TX_REQUIRED_FIELDS.issubset(t):
-                _strike_sender(pool, data)
-                return jsonify({"ok": False, "error": "malformed block"}), 400
         net_in_q.put({"type": "block", "block": blk})
         _register_sender(discovery, data)
         return jsonify({"ok": True})
 
     @app.route("/api/receive_tx", methods=["POST"])
-    @_rate_limited(tx_limiter)
+    @limiter.limit("20 per second")
     def api_recv_tx():
         data = request.get_json()
         if not data or "tx" not in data:
