@@ -11,11 +11,11 @@ cffi_datas,       cffi_binaries,       cffi_hiddenimports       = collect_all("c
 oqs_datas,        oqs_binaries,        oqs_hiddenimports        = collect_all("oqs")
 chiavdf_datas,    chiavdf_binaries,    chiavdf_hiddenimports     = collect_all("chiavdf")
 
-# oqs-python loads liboqs via ctypes at module import time. PyInstaller cannot
-# detect ctypes dependencies through static analysis, so we find and bundle
-# liboqs.so* explicitly. They must land at the root of _MEIPASS ("." dest)
-# because hook_oqs.py sets OQS_INSTALL_PATH=_MEIPASS and oqs looks for
-# $OQS_INSTALL_PATH/lib/liboqs.so -- so dest must be "lib".
+# oqs-python loads liboqs via ctypes and searches for exactly "liboqs.so"
+# (unversioned) under $OQS_INSTALL_PATH/lib/. hook_oqs.py sets
+# OQS_INSTALL_PATH=_MEIPASS at runtime, so the .so must land in
+# _MEIPASS/lib/liboqs.so. We find the versioned file on disk and bundle
+# it under both the versioned and unversioned names.
 _search_roots = [
     "/usr/local/lib",
     "/usr/lib",
@@ -25,11 +25,16 @@ _search_roots = [
 ]
 _liboqs_bins = []
 for _root in _search_roots:
-    for _pat in ("liboqs.so", "liboqs.so.*", "liboqs.*.dylib", "liboqs.dll", "oqs.dll"):
-        for _p in glob.glob(os.path.join(_root, _pat)):
+    for _pat in ("liboqs.so.*", "liboqs.so", "liboqs.*.dylib", "liboqs.dll", "oqs.dll"):
+        for _p in sorted(glob.glob(os.path.join(_root, _pat))):
             if os.path.isfile(_p) and not os.path.islink(_p):
+                # Bundle under versioned name AND unversioned name
                 _liboqs_bins.append((_p, "lib"))
+                # Also add as liboqs.so so ctypes finds it by exact name
+                _liboqs_bins.append((_p, "lib/liboqs.so"))
                 break
+    if _liboqs_bins:
+        break
 
 # Bundle MSVC runtime DLLs on Windows (no-op on Linux).
 _py_dir = os.path.dirname(sys.executable)
