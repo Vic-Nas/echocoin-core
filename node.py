@@ -61,7 +61,7 @@ class NodeView:
     Flask reads node.view -- one reference swap, GIL-atomic, no lock needed.
     """
     __slots__ = ("chain", "height", "tip", "genesis_hash", "cumulative_score",
-                 "state", "stats_points", "_cum_burned")
+                 "state", "stats_points", "_cum_burned", "_stats_chain_len")
 
     def __init__(self, cs, prev_view=None):
         self.chain            = cs.chain
@@ -70,26 +70,29 @@ class NodeView:
         self.genesis_hash     = cs.genesis_hash
         self.cumulative_score = cs.cumulative_score
         self.state            = cs.state.snapshot()
-        prev_points = getattr(prev_view, "stats_points", None)
-        prev_cum    = getattr(prev_view, "_cum_burned",  0)
+        prev_points    = getattr(prev_view, "stats_points", None)
+        prev_cum       = getattr(prev_view, "_cum_burned", 0)
+        prev_chain_len = getattr(prev_view, "_stats_chain_len", 0)
         self.stats_points, self._cum_burned = self._build_stats(
-            cs.chain, self.state, prev_points, prev_cum
+            cs.chain, self.state, prev_points, prev_cum, prev_chain_len
         )
+        self._stats_chain_len = len(cs.chain)
 
     @staticmethod
-    def _build_stats(chain, state, prev_points=None, prev_cum=0):
+    @staticmethod
+    def _build_stats(chain, state, prev_points=None, prev_cum=0, prev_chain_len=0):
         """Chart data for /api/stats. Incremental when chain grew by one block.
 
-        Tracks cumulative minted/burned by replaying per-block totals from
-        the chain rather than linearly interpolating, so the chart accurately
-        reflects exponential emission decay.
+        Uses prev_chain_len (not len(prev_points)) to detect a single-block
+        increment — prev_points may be downsampled to 500 entries regardless
+        of chain length, so comparing lengths directly was broken for chains
+        longer than 501 blocks.
         """
         if len(chain) <= 1:
             return [], 0
 
-        # Incremental path: append one point for the new tip.
-        if prev_points is not None and len(prev_points) < 500 \
-                and len(chain) == len(prev_points) + 2:
+        # Incremental: chain grew by exactly one block since last view.
+        if prev_points is not None and len(chain) == prev_chain_len + 1:
             blk    = chain[-1]
             fee    = sum(t["fee"] for t in blk.get("transactions", []))
             cum    = prev_cum + fee
@@ -98,7 +101,7 @@ class NodeView:
                                     "burned_fees": cum, "circulating": minted - cum,
                                     "net_emission": fee}], cum
 
-        # Full rebuild: walk the chain, accumulate actual fee burns per block.
+        # Full rebuild.
         from state import compute_reward
         points, cum = [], 0
         running_minted = 0
@@ -445,15 +448,9 @@ class Node:
 
     def apply_better_chain(self, remote_chain):
         """Accept remote_chain if it is better than local. Used by syncer."""
-        # Check genesis first -- before replaying anything -- so a bad peer
-        # cannot burn CPU by sending a long chain with a wrong genesis block.
         genesis_hash = self.cs.genesis_hash
         if not remote_chain or remote_chain[0]["hash"] != genesis_hash:
             return False, "genesis mismatch"
-
-        remote_cs = ChainState.from_chain(remote_chain)
-        if not remote_cs.is_better_than(self.cs):
-            return False, "remote chain not better"
 
         fork_point = next(
             (i for i, (a, b) in enumerate(zip(self.cs.chain, remote_chain))
@@ -463,13 +460,23 @@ class Node:
         prefix = remote_chain[:fork_point]
         tail   = remote_chain[fork_point:]
 
-        # Use local chain for fee rate lookup up to the fork point — it's
-        # the trusted source and already computed. An attacker cannot influence
-        # self.cs.fee_rate_at since it comes from our own validated chain.
+        # Validate the new tail first — before replaying any untrusted tx history.
+        # Previously from_chain() ran before _validate_tail, which meant malformed
+        # txs in a remote chain could raise unhandled exceptions and crash sync.
         ok, err = _validate_tail(tail, prefix, self.cs.fee_rate_at)
         if not ok:
             log.warning("[sync] rejected: %s", err)
             return False, err
+
+        # Now safe to replay the full chain (all blocks are structurally valid).
+        try:
+            remote_cs = ChainState.from_chain(remote_chain)
+        except Exception as e:
+            log.warning("[sync] chain replay failed: %s", e)
+            return False, f"chain replay error: {e}"
+
+        if not remote_cs.is_better_than(self.cs):
+            return False, "remote chain not better"
 
         self._reorg_mempool(fork_point, remote_chain)
         self.storage.replace_chain(fork_point, tail)

@@ -108,12 +108,12 @@ def _check_signature(tx_dict):
     try:
         pubkey_bytes = bytes.fromhex(pubkey_hex)
         sig_bytes    = bytes.fromhex(sig_hex)
-    except ValueError:
-        return False, "pubkey or signature is not valid hex"
-    if crypto.public_key_to_address(pubkey_bytes) != tx_dict["from"]:
-        return False, "pubkey does not match from address"
-    if not crypto.verify(crypto.serialize_for_signing(tx_dict), sig_bytes, pubkey_bytes):
-        return False, "invalid signature"
+        if crypto.public_key_to_address(pubkey_bytes) != tx_dict["from"]:
+            return False, "pubkey does not match from address"
+        if not crypto.verify(crypto.serialize_for_signing(tx_dict), sig_bytes, pubkey_bytes):
+            return False, "invalid signature"
+    except (ValueError, Exception):
+        return False, "malformed pubkey or signature"
     return True, None
 
 

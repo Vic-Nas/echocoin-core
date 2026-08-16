@@ -16,6 +16,7 @@ The node calls storage after every block is validated and applied.
 import json
 import logging
 
+import tx as tx_mod
 from peewee import (
     SqliteDatabase, Model,
     IntegerField, TextField, CompositeKey,
@@ -85,7 +86,6 @@ class Storage:
 
     def _index_block(self, blk):
         """Insert TxIndex and AddrIndex rows for all transactions in blk."""
-        import tx as tx_mod
         height = blk["height"]
         txs = blk.get("transactions", [])
         tx_rows, addr_rows = [], []
