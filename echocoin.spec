@@ -11,22 +11,27 @@ cffi_datas,       cffi_binaries,       cffi_hiddenimports       = collect_all("c
 oqs_datas,        oqs_binaries,        oqs_hiddenimports        = collect_all("oqs")
 chiavdf_datas,    chiavdf_binaries,    chiavdf_hiddenimports     = collect_all("chiavdf")
 
-# Explicitly bundle the liboqs shared library -- oqs-python loads it via ctypes
-# at runtime and PyInstaller won't detect it through normal import analysis.
-_liboqs_bins = [
-    (p, ".")
-    for pattern in ("liboqs.so*", "liboqs*.dylib", "liboqs*.dll")
-    for p in (
-        glob.glob(f"/usr/local/lib/{pattern}")
-        + glob.glob(f"/usr/lib/{pattern}")
-        + glob.glob(f"/usr/lib/x86_64-linux-gnu/{pattern}")
-        + glob.glob(os.path.join(os.path.dirname(sys.executable), f"../lib/{pattern}"))
-    )
+# oqs-python loads liboqs via ctypes at module import time. PyInstaller cannot
+# detect ctypes dependencies through static analysis, so we find and bundle
+# liboqs.so* explicitly. They must land at the root of _MEIPASS ("." dest)
+# because hook_oqs.py sets OQS_INSTALL_PATH=_MEIPASS and oqs looks for
+# $OQS_INSTALL_PATH/lib/liboqs.so -- so dest must be "lib".
+_search_roots = [
+    "/usr/local/lib",
+    "/usr/lib",
+    "/usr/lib/x86_64-linux-gnu",
+    "/usr/lib/aarch64-linux-gnu",
+    os.path.join(os.path.dirname(sys.executable), "..", "lib"),
 ]
+_liboqs_bins = []
+for _root in _search_roots:
+    for _pat in ("liboqs.so", "liboqs.so.*", "liboqs.*.dylib", "liboqs.dll", "oqs.dll"):
+        for _p in glob.glob(os.path.join(_root, _pat)):
+            if os.path.isfile(_p) and not os.path.islink(_p):
+                _liboqs_bins.append((_p, "lib"))
+                break
 
-# Bundle MSVC runtime DLLs so Windows users don't need VC++ redist installed.
-# Globs next to python.exe on a standard Windows Python install.
-# Produces nothing on Linux/CI -- harmless.
+# Bundle MSVC runtime DLLs on Windows (no-op on Linux).
 _py_dir = os.path.dirname(sys.executable)
 _msvc_dlls = [
     (p, ".")
@@ -75,7 +80,7 @@ a = Analysis(
     ],
     hookspath=[],
     hooksconfig={},
-    runtime_hooks=[],
+    runtime_hooks=["hook_oqs.py"],
     excludes=["pytest", "unittest", "tkinter"],
     noarchive=False,
 )
@@ -95,7 +100,7 @@ exe = EXE(
     upx=True,
     upx_exclude=[],
     console=True,
-    icon="favicon.ico",   # Windows only; ignored on Linux
+    icon="favicon.ico",
     disable_windowed_traceback=False,
     target_arch=None,
     codesign_identity=None,
