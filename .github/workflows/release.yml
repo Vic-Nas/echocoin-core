@@ -53,9 +53,6 @@ jobs:
 
       - name: Set GENESIS_TIMESTAMP if TESTNET=True
         run: |
-          # Only update GENESIS_TIMESTAMP for testnet releases.
-          # For mainnet (TESTNET=False), the timestamp is set manually once
-          # at launch and must never be overwritten by the workflow.
           IS_TESTNET=$(python3 -c "import re; m=re.search(r'^TESTNET\s*=\s*(\S+)', open('params.py').read(), re.M); print(m.group(1) if m else 'False')")
           if [ "$IS_TESTNET" != "True" ]; then
             echo "TESTNET=False: skipping GENESIS_TIMESTAMP update"
@@ -106,27 +103,30 @@ jobs:
           python-version: "3.11"
           cache: pip
 
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-          pip install pyinstaller
-
       - name: Install system dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y cmake ninja-build libssl-dev libcairo2-dev pkg-config python3-dev
 
-      - name: Install icon build dependencies
-        run: pip install cairosvg Pillow
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller cairosvg Pillow
 
-      - name: Build
+      - name: Install appimagetool
+        run: |
+          wget -q https://github.com/AppImage/AppImageKit/releases/latest/download/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+          sudo mv appimagetool /usr/local/bin/appimagetool
+
+      - name: Build AppImage
         run: make linux
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: echocoin-linux
-          path: dist/echocoin
+          path: dist/echocoin.AppImage
 
   build-windows:
     needs: test
@@ -153,7 +153,6 @@ jobs:
           pip install pyinstaller
 
       - name: Build
-        # Icons are pre-committed from the Linux build; no cairo needed on Windows.
         run: pyinstaller --clean --noconfirm echocoin.spec
 
       - name: Upload artifact
@@ -173,20 +172,20 @@ jobs:
           ref: main
           fetch-depth: 0
 
-      - name: Download Linux binary
+      - name: Download Linux artifact
         uses: actions/download-artifact@v4
         with:
           name: echocoin-linux
           path: artifacts/linux
 
-      - name: Download Windows binary
+      - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
           name: echocoin-windows
           path: artifacts/windows
 
-      - name: Make Linux binary executable
-        run: chmod +x artifacts/linux/echocoin
+      - name: Make AppImage executable
+        run: chmod +x artifacts/linux/echocoin.AppImage
 
       - name: Generate changelog
         id: changelog
@@ -221,7 +220,7 @@ jobs:
           name: Echocoin ${{ needs.version.outputs.tag }}
           body: ${{ steps.changelog.outputs.CHANGELOG }}
           files: |
-            artifacts/linux/echocoin
+            artifacts/linux/echocoin.AppImage
             artifacts/windows/echocoin.exe
           fail_on_unmatched_files: true
         env:
