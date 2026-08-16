@@ -69,7 +69,6 @@ a = Analysis(
 pyz = PYZ(a.pure)
 
 if sys.platform == "win32":
-    # Windows: single onefile exe
     exe = EXE(
         pyz,
         a.scripts,
@@ -90,12 +89,12 @@ if sys.platform == "win32":
         entitlements_file=None,
     )
 else:
-    # Linux: onedir -- EXE gets only scripts, COLLECT gets everything else.
-    # This produces dist/echocoin/ which the Makefile wraps into an AppImage.
+    # onedir: exclude_binaries=True tells EXE not to bundle libs itself;
+    # COLLECT then assembles everything into dist/echocoin/
     exe = EXE(
         pyz,
         a.scripts,
-        [],
+        exclude_binaries=True,
         name="echocoin",
         debug=False,
         strip=False,
@@ -110,7 +109,6 @@ else:
     coll = COLLECT(
         exe,
         a.binaries,
-        a.zipfiles,
         a.datas,
         strip=False,
         upx=False,
