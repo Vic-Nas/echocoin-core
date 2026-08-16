@@ -229,7 +229,7 @@ def create_app(node, pool, net_in_q, discovery):
             return denied
         v = node.view
         balance      = v.state.get_balance(node.addr)
-        bw           = node.cs.burn_window
+        bw           = v.burn_window
         pool_totals  = bw.pool_totals()
         burn_totals  = bw.sender_totals()
         tip_hash_int = pob_mod._tip_hash_int(v.chain)

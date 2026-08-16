@@ -286,5 +286,7 @@ def assemble(tip, txs, builder_addr, fee_rate, deadline=None):
 
     skeleton["transactions"] = valid_txs
     skeleton["tx_bytes"]     = running - base_size
-    skeleton["hash"]         = block_hash(skeleton)
+    # Hash is NOT set here: the caller must add vdf_output + vdf_proof before
+    # hashing. block_hash is called once in _run_cycle after all fields are final.
+    del skeleton["hash"]
     return skeleton

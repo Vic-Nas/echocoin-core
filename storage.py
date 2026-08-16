@@ -172,6 +172,18 @@ class Storage:
     # Meta
     # ------------------------------------------------------------------
 
+    def save_block_and_state(self, blk, state):
+        """Save block and state atomically — prevents inconsistency on crash."""
+        with db.atomic():
+            self.save_block(blk)
+            self.save_state(state)
+
+    def replace_chain_and_state(self, fork_point, blocks, state):
+        """Replace chain tail and state atomically."""
+        with db.atomic():
+            self.replace_chain(fork_point, blocks)
+            self.save_state(state)
+
     def get_meta(self, key, default=None):
         row = Meta.get_or_none(Meta.key == key)
         return row.value if row else default

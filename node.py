@@ -76,7 +76,7 @@ class StatsAccumulator:
             self.points, self._cum, self._chain_len = [], 0, len(chain)
             return
 
-        if len(chain) == self._chain_len + 1 and self.points is not None:
+        if len(chain) == self._chain_len + 1:
             # Incremental: one new block appended.
             blk    = chain[-1]
             fee    = sum(t["fee"] for t in blk.get("transactions", []))
@@ -136,8 +136,8 @@ class CensorshipTracker:
         # Evict hashes no longer in the mempool.
         self._age = {h: v for h, v in self._age.items() if h in pending}
 
-    def score(self, blk, confirmed: set, pending: frozenset) -> float:
-        """Acceptance probability for blk. 1.0 if no long-excluded txs."""
+    def score(self, confirmed: set, pending: frozenset) -> float:
+        """Acceptance probability for a block. 1.0 if no long-excluded txs."""
         s = 1.0
         for h in pending - confirmed:
             age = self._age.get(h, 0)
@@ -155,7 +155,8 @@ class NodeView:
     Flask reads node.view -- one reference swap, GIL-atomic, no lock needed.
     stats_points comes from node.stats, not carried here.
     """
-    __slots__ = ("chain", "height", "tip", "genesis_hash", "cumulative_score", "state")
+    __slots__ = ("chain", "height", "tip", "genesis_hash", "cumulative_score",
+                 "state", "burn_window")
 
     def __init__(self, cs):
         self.chain            = cs.chain
@@ -164,6 +165,7 @@ class NodeView:
         self.genesis_hash     = cs.genesis_hash
         self.cumulative_score = cs.cumulative_score
         self.state            = cs.state.snapshot()
+        self.burn_window      = cs.burn_window
 
 
 # ---------------------------------------------------------------------------
@@ -282,7 +284,6 @@ class Node:
         if not ok:
             return False, h
         self.gossip.relay_tx(tx_dict)
-        self.view = NodeView(self.cs)
         log.info("[tx] accepted  hash=%s  from=%s", h[:12],
                  tx_dict.get("from", "?")[:24])
         return True, h
@@ -379,7 +380,7 @@ class Node:
                 log.debug("[vdf] peer block rejected: %s", err)
                 continue
             confirmed = {tx_mod.tx_hash(t) for t in blk.get("transactions", [])}
-            if _rng.random() > self._censorship_tracker.score(blk, confirmed, pending):
+            if _rng.random() > self._censorship_tracker.score(confirmed, pending):
                 log.debug("[vdf] peer block failed censorship check")
                 continue
             valid_peers.append(blk)
@@ -402,8 +403,7 @@ class Node:
         is_full   = blk.get("tx_bytes", 0) >= BLOCK_SIZE_LIMIT * 0.99
         self._censorship_tracker.update(confirmed, pending, is_full)
         self.cs = self.cs.apply_block(blk)
-        self.storage.save_block(blk)
-        self.storage.save_state(self.cs.state)
+        self.storage.save_block_and_state(blk, self.cs.state)
         self.mempool.remove_many(confirmed)
         self.stats.update(self.cs.chain, self.cs.state)
         self.view = NodeView(self.cs)
@@ -509,8 +509,7 @@ class Node:
             return False, err
 
         self._reorg_mempool(fork_point, remote_chain)
-        self.storage.replace_chain(fork_point, tail)
-        self.storage.save_state(remote_cs.state)
+        self.storage.replace_chain_and_state(fork_point, tail, remote_cs.state)
         self.cs = remote_cs
         self.stats.update(self.cs.chain, self.cs.state)
         self.view = NodeView(self.cs)
