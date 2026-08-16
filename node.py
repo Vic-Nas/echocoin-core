@@ -39,14 +39,14 @@ SYNC_EVERY_N_CYCLES = 3
 # Tail validation (pure -- no node state touched)
 # ---------------------------------------------------------------------------
 
-def _validate_tail(tail, prefix, fee_rate_at):
+def _validate_tail(tail, prefix):
     """Validate new blocks against a trusted prefix. Pure: nothing is mutated.
 
     Returns (True, None) or (False, error_string).
     """
     cs = ChainState.from_chain(prefix) if prefix else ChainState.from_genesis()
     for blk in tail:
-        ok, err, cs = cs.validate_and_apply(blk, fee_rate_at)
+        ok, err, cs = cs.validate_and_apply(blk)
         if not ok:
             return False, f"invalid block at {blk['height']}: {err}"
     return True, None
@@ -115,6 +115,38 @@ class StatsAccumulator:
 
 
 # ---------------------------------------------------------------------------
+# CensorshipTracker: owns _exclusion_age, updated each commit
+# ---------------------------------------------------------------------------
+
+class CensorshipTracker:
+    """Tracks how many consecutive non-full blocks have excluded each pending tx.
+
+    Owned by Node, updated in _commit(). Keeps the censorship-resistance
+    feature self-contained instead of scattered across two Node methods.
+    """
+
+    def __init__(self):
+        self._age: dict = {}  # tx_hash -> consecutive non-full blocks excluding it
+
+    def update(self, confirmed: set, pending: frozenset, block_is_full: bool) -> None:
+        """Age up pending-but-unconfirmed txs if block was not full."""
+        if not block_is_full:
+            for h in pending - confirmed:
+                self._age[h] = self._age.get(h, 0) + 1
+        # Evict hashes no longer in the mempool.
+        self._age = {h: v for h, v in self._age.items() if h in pending}
+
+    def score(self, blk, confirmed: set, pending: frozenset) -> float:
+        """Acceptance probability for blk. 1.0 if no long-excluded txs."""
+        s = 1.0
+        for h in pending - confirmed:
+            age = self._age.get(h, 0)
+            if age > 0:
+                s = min(s, 1.0 / age)
+        return s
+
+
+# ---------------------------------------------------------------------------
 # NodeView: read-only snapshot for Flask threads
 # ---------------------------------------------------------------------------
 
@@ -157,8 +189,7 @@ class Node:
         self._loop_thread = None
         self._cycle_count = 0
 
-        # tx_hash -> consecutive non-full blocks that excluded it.
-        self._exclusion_age = {}
+        self._censorship_tracker = CensorshipTracker()
 
         self.stats = StatsAccumulator()
         self.cs    = self._load_cs()
@@ -320,17 +351,21 @@ class Node:
         self.gossip.broadcast_block(candidate)
 
         peer_blocks = self._drain_queue(timeout=5) + self._drain_queue()
-        winner, relay = self._pick_winner(candidate, peer_blocks)
+        # Pass cs explicitly — self.cs may have advanced during drain if syncer fired.
+        winner, relay = self._pick_winner(cs, candidate, peer_blocks)
         if winner is None:
             return
         self._commit(winner, relay=relay)
 
-    def _pick_winner(self, candidate, peer_blocks):
+    def _pick_winner(self, cs, candidate, peer_blocks):
         """Return (best_block, relay). relay=True means it came from a peer.
-        Returns (None, False) only if our own candidate is invalid -- shouldn't happen.
+        Returns (None, False) if the candidate is stale (tip changed under sync).
+
+        cs: the ChainState candidate was built against — passed explicitly so
+        this method is immune to self.cs advancing during the drain window.
         """
-        cs = self.cs
-        tip = cs.tip
+        tip     = cs.tip
+        pending = self.mempool.pending_hashes()
 
         valid_peers = []
         for blk in peer_blocks:
@@ -344,20 +379,16 @@ class Node:
                 log.debug("[vdf] peer block rejected: %s", err)
                 continue
             confirmed = {tx_mod.tx_hash(t) for t in blk.get("transactions", [])}
-            if _rng.random() > self._censorship_score(blk, confirmed):
+            if _rng.random() > self._censorship_tracker.score(blk, confirmed, pending):
                 log.debug("[vdf] peer block failed censorship check")
                 continue
             valid_peers.append(blk)
 
-        probe = cs.state.snapshot()
-        ok, err = block_mod.validate(candidate, probe, cs.chain, cs.fee_rate_at)
-        if not ok:
-            log.error("[vdf] own block invalid: %s", err)
+        if candidate.get("previous_hash") != tip["hash"]:
+            log.warning("[vdf] candidate stale (tip advanced during drain) — skipping")
             return None, False
 
         all_valid = valid_peers + [candidate]
-        # Fork choice: lowest PoB score wins. Hash breaks a tie (score collision
-        # is astronomically rare but must be deterministic).
         tip_hash_int = pob_mod._tip_hash_int(cs.chain)
         winner = min(all_valid, key=lambda b: (
             cs.burn_window.score(tip_hash_int, b["builder"]), b["hash"]
@@ -366,13 +397,10 @@ class Node:
 
     def _commit(self, blk, relay=False):
         """Append a validated block: update ChainState, persist, publish view."""
-        if "tx_bytes" not in blk:
-            blk["tx_bytes"] = sum(tx_mod.tx_size(t)
-                                   for t in blk.get("transactions", []))
-
-        # Compute confirmed hashes once — used by exclusion tracking and remove_many.
         confirmed = {tx_mod.tx_hash(t) for t in blk.get("transactions", [])}
-        self._update_exclusion_ages(blk, confirmed)
+        pending   = self.mempool.pending_hashes()
+        is_full   = blk.get("tx_bytes", 0) >= BLOCK_SIZE_LIMIT * 0.99
+        self._censorship_tracker.update(confirmed, pending, is_full)
         self.cs = self.cs.apply_block(blk)
         self.storage.save_block(blk)
         self.storage.save_state(self.cs.state)
@@ -432,33 +460,6 @@ class Node:
             self.gossip.relay_tx(tx_dict)
 
     # ------------------------------------------------------------------
-    # Censorship resistance
-    # ------------------------------------------------------------------
-
-    def _censorship_score(self, blk, confirmed: set) -> float:
-        """Acceptance probability for blk. 1.0 if no long-excluded txs.
-        confirmed: pre-computed set of tx hashes in blk.
-        """
-        score = 1.0
-        for h in self.mempool.pending_hashes() - confirmed:
-            age = self._exclusion_age.get(h, 0)
-            if age > 0:
-                score = min(score, 1.0 / age)
-        return score
-
-    def _update_exclusion_ages(self, blk, confirmed: set) -> None:
-        """Update exclusion age counters after committing blk.
-        confirmed: pre-computed set of tx hashes in blk.
-        """
-        pending = self.mempool.pending_hashes()
-        is_full = blk.get("tx_bytes", 0) >= BLOCK_SIZE_LIMIT * 0.99
-        if not is_full:
-            for h in pending - confirmed:
-                self._exclusion_age[h] = self._exclusion_age.get(h, 0) + 1
-        self._exclusion_age = {h: v for h, v in self._exclusion_age.items()
-                                if h in pending}
-
-    # ------------------------------------------------------------------
     # Chain sync / reorg
     # ------------------------------------------------------------------
 
@@ -485,7 +486,7 @@ class Node:
         )
         tail = remote_chain[fork_point:]
 
-        ok, err = _validate_tail(tail, remote_chain[:fork_point], self.cs.fee_rate_at)
+        ok, err = _validate_tail(tail, remote_chain[:fork_point])
         if not ok:
             log.warning("[sync] rejected: %s", err)
             return False, err, None, None, None

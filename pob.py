@@ -55,9 +55,19 @@ class BurnWindow:
         self._history_blocks: "collections.deque" = collections.deque()
 
     def copy(self):
-        """Return an independent copy of this BurnWindow."""
+        """Return an independent copy of this BurnWindow.
+
+        _blocks and _history_blocks contain tuples/lists that are never mutated
+        in place — only appended/popped — so a shallow deque copy suffices.
+        _totals is a nested dict that IS mutated (counters incremented), so it
+        needs a deep copy of one level down.
+        """
         import copy
-        return copy.deepcopy(self)
+        w = BurnWindow()
+        w._blocks         = collections.deque(self._blocks)
+        w._history_blocks = collections.deque(self._history_blocks)
+        w._totals         = {b: dict(contribs) for b, contribs in self._totals.items()}
+        return w
 
     def add_block(self, blk):
         height = blk["height"]

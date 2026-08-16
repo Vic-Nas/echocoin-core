@@ -142,13 +142,12 @@ def _check_tx_ordering(blk):
         missing = _TX_SORT_FIELDS - t.keys()
         if missing:
             return False, f"transaction at position {i} missing fields for ordering: {missing}"
-    # Hash each tx once, then compare orderings by hash rather than re-hashing.
-    hashes     = [tx_mod.tx_hash(t) for t in txs]
-    sorted_txs = tx_mod.sort_txs(txs)
-    sorted_hashes = [tx_mod.tx_hash(t) for t in sorted_txs]
-    for i, (actual_h, expected_h) in enumerate(zip(hashes, sorted_hashes)):
-        if actual_h != expected_h:
-            return False, f"transaction ordering violation at position {i}"
+    # Verify canonical order in O(n) by checking each adjacent pair.
+    # Order key: (fee_height asc, nonce asc, tx_hash lex). Pre-compute hashes once.
+    keys = [(t["fee_height"], t["nonce"], tx_mod.tx_hash(t)) for t in txs]
+    for i in range(len(keys) - 1):
+        if keys[i] > keys[i + 1]:
+            return False, f"transaction ordering violation at position {i + 1}"
     return True, None
 
 
@@ -286,5 +285,6 @@ def assemble(tip, txs, builder_addr, fee_rate, deadline=None):
         running += t_size
 
     skeleton["transactions"] = valid_txs
-    skeleton["hash"] = block_hash(skeleton)
+    skeleton["tx_bytes"]     = running - base_size
+    skeleton["hash"]         = block_hash(skeleton)
     return skeleton
