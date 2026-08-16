@@ -129,9 +129,9 @@ def _check_fee(tx_dict, chain_tip_height, get_fee_rate_at_height):
     if not isinstance(fh, int):
         return False, "fee_height must be an integer"
     if fh > chain_tip_height:
-        return False, "fee_height is in the future"
+        return False, f"fee_height {fh} is in the future (tip={chain_tip_height})"
     if fh < chain_tip_height - (FEE_HEIGHT_MAX_AGE - 1):
-        return False, "fee_height is too old"
+        return False, f"fee_height {fh} is too old (tip={chain_tip_height}, max_age={FEE_HEIGHT_MAX_AGE})"
     fee_rate = get_fee_rate_at_height(fh)
     if fee_rate is None:
         return False, f"no fee rate at height {fh}"
@@ -149,8 +149,10 @@ def _check_fee(tx_dict, chain_tip_height, get_fee_rate_at_height):
 
 def _check_balance(tx_dict, state):
     total_out = sum(o["amount"] for o in tx_dict["outputs"])
-    if total_out + tx_dict["fee"] > state.get_balance(tx_dict["from"]):
-        return False, "insufficient balance"
+    available = state.get_balance(tx_dict["from"])
+    required  = total_out + tx_dict["fee"]
+    if required > available:
+        return False, f"insufficient balance: have {available}, need {required}"
     return True, None
 
 

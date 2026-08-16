@@ -126,6 +126,7 @@ def _check_builder_and_vdf(blk, chain):
     vdf_proof  = blk.get("vdf_proof")
     if not isinstance(vdf_output, str) or not isinstance(vdf_proof, str):
         return False, "missing vdf_output or vdf_proof"
+    # Safe: _check_hash already verified the hash field is valid hex.
     challenge = bytes.fromhex(chain[-1]["hash"])
     if not vdf_mod.verify(challenge, vdf_output, vdf_proof):
         return False, "invalid VDF proof"
@@ -156,7 +157,7 @@ def _check_fee_rate(blk, chain):
         return True, None
     expected_rate = compute_expected_fee_rate(chain)
     if blk["fee_rate"] != expected_rate:
-        return False, "fee rate mismatch"
+        return False, f"fee rate mismatch: expected {expected_rate}, got {blk['fee_rate']}"
     return True, None
 
 
@@ -280,7 +281,7 @@ def assemble(tip, txs, builder_addr, fee_rate, deadline=None):
         # We add 1 for the "," separator between txs (except the first).
         t_size = tx_mod.tx_size_in_block(t, position=len(valid_txs))
         if running + t_size > BLOCK_SIZE_LIMIT:
-            continue
+            continue  # not break: a later smaller tx might still fit
         valid_txs.append(t)
         running += t_size
 

@@ -122,6 +122,8 @@ class Storage:
         return json.loads(row.data) if row else None
 
     def load_all_blocks(self):
+        """Load and return the full chain as a list. The entire chain is kept
+        in memory by design — this is called once at startup."""
         return [json.loads(r.data) for r in Block.select().order_by(Block.height)]
 
     def chain_height(self):
@@ -144,19 +146,23 @@ class Storage:
     # State snapshots
     # ------------------------------------------------------------------
 
-    def save_state(self, state):
+    def _save_state_inner(self, state):
+        """Write state rows — must be called inside an existing db.atomic()."""
         balances = state.all_balances()
         nonces   = state.all_nonces()
         rows = [
             {"addr": addr, "balance": balances.get(addr, 0), "nonce": nonces.get(addr, 0)}
             for addr in balances.keys() | nonces.keys()
         ]
+        State.delete().execute()
+        if rows:
+            State.insert_many(rows).execute()
+        Emission.insert(key="total_minted", value=state.total_minted).on_conflict_replace().execute()
+        Emission.insert(key="total_burnt",  value=state.total_burnt).on_conflict_replace().execute()
+
+    def save_state(self, state):
         with db.atomic():
-            State.delete().execute()
-            if rows:
-                State.insert_many(rows).execute()
-            Emission.insert(key="total_minted", value=state.total_minted).on_conflict_replace().execute()
-            Emission.insert(key="total_burnt",  value=state.total_burnt).on_conflict_replace().execute()
+            self._save_state_inner(state)
 
     def load_state(self):
         rows     = State.select()
@@ -173,16 +179,28 @@ class Storage:
     # ------------------------------------------------------------------
 
     def save_block_and_state(self, blk, state):
-        """Save block and state atomically — prevents inconsistency on crash."""
+        """Save block and state in one atomic transaction.
+        Calls inner logic directly to avoid nested db.atomic() savepoints.
+        """
         with db.atomic():
-            self.save_block(blk)
-            self.save_state(state)
+            Block.insert(height=blk["height"], hash=blk["hash"],
+                         data=json.dumps(blk)).on_conflict_replace().execute()
+            self._index_block(blk)
+            self._save_state_inner(state)
 
     def replace_chain_and_state(self, fork_point, blocks, state):
-        """Replace chain tail and state atomically."""
+        """Replace chain tail and state in one atomic transaction."""
         with db.atomic():
-            self.replace_chain(fork_point, blocks)
-            self.save_state(state)
+            Block.delete().where(Block.height >= fork_point).execute()
+            TxIndex.delete().where(TxIndex.block_height >= fork_point).execute()
+            AddrIndex.delete().where(AddrIndex.block_height >= fork_point).execute()
+            Block.insert_many([
+                {"height": b["height"], "hash": b["hash"], "data": json.dumps(b)}
+                for b in blocks
+            ]).on_conflict_replace().execute()
+            for blk in blocks:
+                self._index_block(blk)
+            self._save_state_inner(state)
 
     def get_meta(self, key, default=None):
         row = Meta.get_or_none(Meta.key == key)

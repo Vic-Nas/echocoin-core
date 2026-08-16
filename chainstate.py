@@ -115,34 +115,43 @@ class ChainState:
     def validate_and_apply(self, blk):
         """Validate blk against self, then return (ok, err, new_cs).
 
-        Uses a snapshot so failure leaves self unchanged. On success,
-        new_cs is the result of apply_block(blk). Uses self.fee_rate_at
-        directly — callers no longer need to pass it.
+        Passes the post-validation probe state directly to _apply_block_state
+        so transactions are applied only once (validate() already applied them
+        to probe). Failure leaves self unchanged.
         """
         probe = self.state.snapshot()
         ok, err = block_mod.validate(blk, probe, self.chain, self.fee_rate_at)
         if not ok:
             return False, err, self
-        return True, None, self.apply_block(blk)
+        # probe is now the post-tx state; hand it directly to avoid re-applying.
+        return True, None, self._apply_block_with_state(blk, probe)
 
     def apply_block(self, blk):
-        """Return a new ChainState with blk appended. Does not mutate self."""
-        new_state  = self.state.snapshot()
-        new_window = self.burn_window.copy()   # independent copy -- self is not mutated
-        new_window.add_block(blk)
-
+        """Return a new ChainState with blk appended. Does not mutate self.
+        Used by from_chain replay where no pre-validated probe is available.
+        """
+        post_tx = self.state.snapshot()
         for t in blk.get("transactions", []):
-            new_state.apply_tx(t)
+            post_tx.apply_tx(t)
+        return self._apply_block_with_state(blk, post_tx)
 
-        new_score = self.cumulative_score
-        builder   = blk.get("builder")
+    def _apply_block_with_state(self, blk, post_tx_state):
+        """Finish applying blk given a state that already has txs applied.
+
+        Shared by apply_block (which builds post_tx via replay) and
+        validate_and_apply (which gets post_tx from the validation probe,
+        avoiding a second application of all transactions).
+        """
+        new_window = self.burn_window.copy()
+        new_window.add_block(blk)
+        new_score  = self.cumulative_score
+        builder    = blk.get("builder")
         if builder:
-            new_state.apply_reward_distribution(
-                new_window.reward_distribution(builder, new_state.compute_block_reward())
+            post_tx_state.apply_reward_distribution(
+                new_window.reward_distribution(builder, post_tx_state.compute_block_reward())
             )
             new_score += new_window.score(pob_mod._tip_hash_int(self.chain), builder)
-
-        return ChainState(self.chain + [blk], new_state, new_window, new_score)
+        return ChainState(self.chain + [blk], post_tx_state, new_window, new_score)
 
     # ------------------------------------------------------------------
     # Fork choice

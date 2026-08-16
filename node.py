@@ -16,6 +16,7 @@ sole writer; every mutation publishes a new snapshot atomically.
 import logging
 import queue
 import secrets as _secrets
+import state as state_mod
 import threading
 import time
 
@@ -218,7 +219,6 @@ class Node:
                                        for t in blk.get("transactions", []))
 
         if self.storage.state_exists():
-            import state as state_mod
             s = state_mod.State.from_snapshot(*self.storage.load_state())
             cs = ChainState.from_storage(stored, s)
         else:
@@ -332,13 +332,10 @@ class Node:
             )
 
         cs = self.cs   # local alias -- can change under sync
-        log.info("[vdf] starting height=%d  tip=%s  peers=%d  mempool=%d",
-                 cs.height + 1, cs.tip["hash"][:12],
-                 self.pool.count(), self.mempool.size())
-
         pruned = self.mempool.prune_stale(cs.height, cs.state)
-        if pruned:
-            log.info("[vdf] mempool pruned  dropped=%d", len(pruned))
+        log.info("[vdf] starting height=%d  tip=%s  peers=%d  mempool=%d  pruned=%d",
+                 cs.height + 1, cs.tip["hash"][:12],
+                 self.pool.count(), self.mempool.size(), len(pruned))
 
         vdf_out, vdf_proof = vdf_mod.evaluate(bytes.fromhex(cs.tip["hash"]))
         log.info("[vdf] proof ready  height=%d", cs.height + 1)
@@ -383,10 +380,13 @@ class Node:
             if _rng.random() > self._censorship_tracker.score(confirmed, pending):
                 log.debug("[vdf] peer block failed censorship check")
                 continue
+            log.debug("[vdf] peer block accepted  height=%d  hash=%s  builder=%s  tx=%d",
+                      blk["height"], blk["hash"][:12],
+                      (blk.get("builder") or "")[:24], len(blk.get("transactions", [])))
             valid_peers.append(blk)
 
         if candidate.get("previous_hash") != tip["hash"]:
-            log.warning("[vdf] candidate stale (tip advanced during drain) — skipping")
+            log.warning("[vdf] candidate stale (tip advanced during drain) — skipping cycle")
             return None, False
 
         all_valid = valid_peers + [candidate]
@@ -394,21 +394,28 @@ class Node:
         winner = min(all_valid, key=lambda b: (
             cs.burn_window.score(tip_hash_int, b["builder"]), b["hash"]
         ))
-        return winner, winner is not candidate
+        is_peer = winner is not candidate
+        log.info("[vdf] winner  hash=%s  peer=%s  candidates=%d  peer_candidates=%d",
+                 winner["hash"][:12], is_peer, len(all_valid), len(valid_peers))
+        return winner, is_peer
 
     def _commit(self, blk, relay=False):
         """Append a validated block: update ChainState, persist, publish view."""
         confirmed = {tx_mod.tx_hash(t) for t in blk.get("transactions", [])}
-        pending   = self.mempool.pending_hashes()
-        is_full   = blk.get("tx_bytes", 0) >= BLOCK_SIZE_LIMIT * 0.99
-        self._censorship_tracker.update(confirmed, pending, is_full)
         self.cs = self.cs.apply_block(blk)
         self.storage.save_block_and_state(blk, self.cs.state)
         self.mempool.remove_many(confirmed)
+        # Update censorship tracker after remove_many so confirmed txs are
+        # already gone from pending — no stale entries linger in _age.
+        pending = self.mempool.pending_hashes()
+        is_full = blk.get("tx_bytes", 0) >= BLOCK_SIZE_LIMIT * 0.99
+        self._censorship_tracker.update(confirmed, pending, is_full)
         self.stats.update(self.cs.chain, self.cs.state)
         self.view = NodeView(self.cs)
 
         if relay:
+            # Peer-won block: broadcast it now. Our own candidate was already
+            # broadcast in _run_cycle before the drain window; relay=False there.
             try:
                 self.gossip.broadcast_block(blk)
             except Exception:
@@ -449,15 +456,30 @@ class Node:
             self._handle_inbound_tx(msg)
 
     def _handle_inbound_tx(self, msg):
+        """Route an inbound tx message.
+
+        Stem txs (Dandelion relay) are forwarded without validation — we are
+        not the ultimate recipient, just a relay node. Fluff txs are validated
+        and added to the mempool if new and valid.
+        """
         tx_dict   = msg["tx"]
+        sender    = tx_dict.get("from", "?")[:24]
         remaining = msg.get("remaining_hops", 0)
         if msg.get("relay_type") == "tx_stem" and remaining > 0:
+            log.debug("[tx] stem relay  hops_remaining=%d  from=%s", remaining, sender)
             self.gossip.dandelion_send(tx_dict, remaining)
             return
-        ok, _ = tx_mod.validate(tx_dict, self.cs.state,
-                                  self.cs.height, self.cs.fee_rate_at)
-        if ok and self.mempool.add(tx_dict)[0]:
+        ok, err = tx_mod.validate(tx_dict, self.cs.state,
+                                   self.cs.height, self.cs.fee_rate_at)
+        if not ok:
+            log.debug("[tx] inbound rejected  reason=%s  from=%s", err, sender)
+            return
+        added, h_or_err = self.mempool.add(tx_dict)
+        if added:
+            log.debug("[tx] inbound accepted  hash=%s  from=%s", h_or_err[:12], sender)
             self.gossip.relay_tx(tx_dict)
+        else:
+            log.debug("[tx] inbound duplicate  from=%s", sender)
 
     # ------------------------------------------------------------------
     # Chain sync / reorg
@@ -508,8 +530,9 @@ class Node:
         if not ok:
             return False, err
 
-        self._reorg_mempool(fork_point, remote_chain)
+        # Storage write first — if it fails, mempool stays consistent with self.cs.
         self.storage.replace_chain_and_state(fork_point, tail, remote_cs.state)
+        self._reorg_mempool(fork_point, remote_chain)
         self.cs = remote_cs
         self.stats.update(self.cs.chain, self.cs.state)
         self.view = NodeView(self.cs)
