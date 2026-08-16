@@ -8,8 +8,21 @@ from PyInstaller.utils.hooks import collect_all
 
 nacl_datas,       nacl_binaries,       nacl_hiddenimports       = collect_all("nacl")
 cffi_datas,       cffi_binaries,       cffi_hiddenimports       = collect_all("cffi")
-pqcrypto_datas,   pqcrypto_binaries,   pqcrypto_hiddenimports   = collect_all("pqcrypto")
+oqs_datas,        oqs_binaries,        oqs_hiddenimports        = collect_all("oqs")
 chiavdf_datas,    chiavdf_binaries,    chiavdf_hiddenimports     = collect_all("chiavdf")
+
+# Explicitly bundle the liboqs shared library -- oqs-python loads it via ctypes
+# at runtime and PyInstaller won't detect it through normal import analysis.
+_liboqs_bins = [
+    (p, ".")
+    for pattern in ("liboqs.so*", "liboqs*.dylib", "liboqs*.dll")
+    for p in (
+        glob.glob(f"/usr/local/lib/{pattern}")
+        + glob.glob(f"/usr/lib/{pattern}")
+        + glob.glob(f"/usr/lib/x86_64-linux-gnu/{pattern}")
+        + glob.glob(os.path.join(os.path.dirname(sys.executable), f"../lib/{pattern}"))
+    )
+]
 
 # Bundle MSVC runtime DLLs so Windows users don't need VC++ redist installed.
 # Globs next to python.exe on a standard Windows Python install.
@@ -27,8 +40,9 @@ a = Analysis(
     binaries=[
         *nacl_binaries,
         *cffi_binaries,
-        *pqcrypto_binaries,
+        *oqs_binaries,
         *chiavdf_binaries,
+        *_liboqs_bins,
         *_msvc_dlls,
     ],
     datas=[
@@ -39,14 +53,15 @@ a = Analysis(
         ("favicon.ico",       "."),
         *nacl_datas,
         *cffi_datas,
-        *pqcrypto_datas,
+        *oqs_datas,
         *chiavdf_datas,
     ],
     hiddenimports=[
         *nacl_hiddenimports,
         *cffi_hiddenimports,
-        *pqcrypto_hiddenimports,
+        *oqs_hiddenimports,
         *chiavdf_hiddenimports,
+        "oqs",
         "_cffi_backend",
         "libtorrent",
         "miniupnpc",
