@@ -145,6 +145,7 @@ def _submit_and_alert(node, outputs, passphrase, ctx):
         else:
             ctx["alert_err"] = f"Error: {result}"
     except Exception as e:
+        log.warning("[api] tx build/submit failed  err=%s", e)
         ctx["alert_err"] = f"Error: {e}"
 
 
@@ -433,7 +434,9 @@ def create_app(node, pool, net_in_q, discovery):
             return jsonify({"ok": False, "error": "missing block"}), 400
         try:
             blk = _BlockIn.model_validate(data["block"]).model_dump()
-        except PydanticValidationError:
+        except PydanticValidationError as e:
+            log.warning("[api] malformed block from %s: %s",
+                        request.remote_addr, str(e)[:120])
             _strike_sender(pool, data)
             return jsonify({"ok": False, "error": "malformed block"}), 400
         net_in_q.put({"type": "block", "block": blk})
@@ -443,6 +446,7 @@ def create_app(node, pool, net_in_q, discovery):
     @app.route("/api/receive_tx", methods=["POST"])
     @limiter.limit("20 per second")
     def api_recv_tx():
+        # Validated and enqueued via node loop; errors logged there.
         data = request.get_json()
         if not data or "tx" not in data:
             return jsonify({"ok": False, "error": "missing tx"}), 400

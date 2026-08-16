@@ -282,6 +282,8 @@ class Node:
             return False, err
         ok, h = self.mempool.add(tx_dict)
         if not ok:
+            log.debug("[tx] mempool add failed  reason=%s  from=%s", h,
+                      tx_dict.get("from", "?")[:24])
             return False, h
         self.gossip.relay_tx(tx_dict)
         log.info("[tx] accepted  hash=%s  from=%s", h[:12],
@@ -499,6 +501,9 @@ class Node:
           5. is_better_than — fork choice, only after we know it's valid.
         """
         if not remote_chain or remote_chain[0]["hash"] != self.cs.genesis_hash:
+            log.warning("[sync] rejected genesis mismatch  remote=%s  expected=%s",
+                        (remote_chain[0]["hash"][:12] if remote_chain else "empty"),
+                        self.cs.genesis_hash[:12])
             return False, "genesis mismatch", None, None, None
 
         fork_point = next(
@@ -520,6 +525,9 @@ class Node:
             return False, f"chain replay error: {e}", None, None, None
 
         if not remote_cs.is_better_than(self.cs):
+            log.debug("[sync] remote chain not better  remote_h=%d  local_h=%d  remote_score=%d  local_score=%d",
+                      remote_cs.height, self.cs.height,
+                      remote_cs.cumulative_score, self.cs.cumulative_score)
             return False, "remote chain not better", None, None, None
 
         return True, None, fork_point, tail, remote_cs

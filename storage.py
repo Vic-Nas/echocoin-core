@@ -181,7 +181,11 @@ class Storage:
     def save_block_and_state(self, blk, state):
         """Save block and state in one atomic transaction.
         Calls inner logic directly to avoid nested db.atomic() savepoints.
+        Exceptions from peewee propagate to the caller (node._commit),
+        which is wrapped in the cycle's unhandled-error handler.
         """
+        log.debug("[storage] save block+state  height=%d  hash=%s",
+                  blk["height"], blk.get("hash", "?")[:12])
         with db.atomic():
             Block.insert(height=blk["height"], hash=blk["hash"],
                          data=json.dumps(blk)).on_conflict_replace().execute()
@@ -190,6 +194,8 @@ class Storage:
 
     def replace_chain_and_state(self, fork_point, blocks, state):
         """Replace chain tail and state in one atomic transaction."""
+        log.debug("[storage] replace chain  fork_point=%d  new_blocks=%d",
+                  fork_point, len(blocks))
         with db.atomic():
             Block.delete().where(Block.height >= fork_point).execute()
             TxIndex.delete().where(TxIndex.block_height >= fork_point).execute()

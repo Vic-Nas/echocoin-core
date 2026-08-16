@@ -32,13 +32,16 @@ class Syncer:
         """
         peer = self.pool.random()
         if not peer:
+            log.debug("[sync] no peers available")
             return False
         try:
             r = requests.get(f"http://{peer}/api/info", timeout=3)
             if r.status_code != 200:
+                log.debug("[sync] info fetch failed  peer=%s  status=%d", peer, r.status_code)
                 return False
             info = r.json()
-        except Exception:
+        except Exception as e:
+            log.debug("[sync] info fetch error  peer=%s  err=%s", peer, e)
             self.pool.strike(peer)
             return False
 
@@ -46,11 +49,13 @@ class Syncer:
         local_height  = len(local_chain) - 1
 
         if remote_height < local_height:
+            log.debug("[sync] peer not ahead  peer=%s  remote_h=%d  local_h=%d",
+                      peer, remote_height, local_height)
             return False
 
-        # Find the fork point: walk back until we find a hash the peer also has.
         fork_from = self._find_fork_point(peer, local_chain)
         if fork_from is None:
+            log.warning("[sync] fork point search failed  peer=%s", peer)
             return False
 
         log.info("[sync] peer %s at height=%d  local=%d  fork_from=%d  fetching",
@@ -58,6 +63,7 @@ class Syncer:
 
         tail = self._fetch_chain(peer, from_h=fork_from)
         if not tail:
+            log.warning("[sync] chain fetch returned empty  peer=%s  from_h=%d", peer, fork_from)
             return False
 
         # Reconstruct the full chain: trusted local prefix + fetched tail.
@@ -89,11 +95,16 @@ class Syncer:
                     timeout=10,
                 )
                 if r.status_code != 200:
+                    log.debug("[sync] fork search HTTP error  peer=%s  height=%d  status=%d",
+                              peer_addr, mid, r.status_code)
                     return None
                 page = r.json()
                 if not isinstance(page, list) or not page:
+                    log.debug("[sync] fork search bad response  peer=%s  height=%d", peer_addr, mid)
                     return None
-            except Exception:
+            except Exception as e:
+                log.debug("[sync] fork search exception  peer=%s  height=%d  err=%s",
+                          peer_addr, mid, e)
                 return None
 
             if page[0].get("hash") == local_hash:
@@ -116,9 +127,12 @@ class Syncer:
                     timeout=30,
                 )
                 if r.status_code != 200:
+                    log.warning("[sync] fetch page HTTP error  peer=%s  from=%d  status=%d",
+                                peer_addr, from_h, r.status_code)
                     break
                 page = r.json()
                 if not isinstance(page, list) or not page:
+                    log.debug("[sync] fetch page empty  peer=%s  from=%d", peer_addr, from_h)
                     break
                 chain.extend(page)
                 if len(chain) >= FETCH_CHAIN_MAX_BLOCKS:
@@ -127,5 +141,6 @@ class Syncer:
                     break
                 from_h += 500
             return chain or None
-        except Exception:
+        except Exception as e:
+            log.warning("[sync] fetch chain exception  peer=%s  err=%s", peer_addr, e)
             return None
