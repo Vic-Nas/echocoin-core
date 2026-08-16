@@ -51,7 +51,7 @@ DB_PATH = "echocoin_chain.db"
 
 # Genesis timestamp: unix time when the chain was launched. Set once manually
 # before the first release and never changed.
-GENESIS_TIMESTAMP = 0
+GENESIS_TIMESTAMP = 1786884303
 
 # Number of BEP44 DHT slots used for peer discovery.
 BEP44_SLOT_COUNT = 256
