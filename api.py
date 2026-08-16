@@ -107,6 +107,47 @@ def _get_address_history(addr, node):
     return history
 
 
+def _localhost_only():
+    """Return a 403 response if request is not from localhost, else None."""
+    if request.remote_addr not in _LOCALHOST:
+        return jsonify({"ok": False, "error": "localhost only"}), 403
+    return None
+
+
+def _parse_csv_outputs(outputs_raw):
+    """Parse 'address,amount' CSV lines. Returns (outputs, errors)."""
+    outputs, errors = [], []
+    for i, line in enumerate(outputs_raw.splitlines()):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = [p.strip() for p in line.split(",")]
+        if len(parts) != 2:
+            errors.append(f"line {i+1}: expected 'address,amount'")
+            continue
+        try:
+            outputs.append({"to": parts[0], "amount": int(parts[1])})
+        except ValueError:
+            errors.append(f"line {i+1}: amount must be an integer")
+    return outputs, errors
+
+
+def _submit_and_alert(node, outputs, passphrase, ctx):
+    """Build, sign, and submit a tx. Sets ctx alert_ok or alert_err in place."""
+    if not passphrase and not node.is_signing_active():
+        ctx["alert_err"] = "Passphrase required (leave blank if mining loop is active)."
+        return
+    try:
+        t, _fee = node.build_and_sign_tx(outputs, passphrase or None)
+        ok, result = node.submit_tx_from_api(t)
+        if ok:
+            ctx["alert_ok"] = f'Submitted. tx: <span class="hash">{result}</span>'
+        else:
+            ctx["alert_err"] = f"Error: {result}"
+    except Exception as e:
+        ctx["alert_err"] = f"Error: {e}"
+
+
 def _parse_sender(data):
     port = data.get("sender_port")
     if port is None:
@@ -157,8 +198,9 @@ def create_app(node, pool, net_in_q, discovery):
 
     @app.route("/send", methods=["GET", "POST"])
     def send():
-        if request.remote_addr not in _LOCALHOST:
-            return jsonify({"ok": False, "error": "localhost only"}), 403
+        denied = _localhost_only()
+        if denied:
+            return denied
         v = node.view
         ctx = dict(title="Send", from_addr=node.addr, balance=v.state.get_balance(node.addr),
                    nonce=v.state.get_nonce(node.addr) + 1, fee_rate=v.tip["fee_rate"],
@@ -169,57 +211,36 @@ def create_app(node, pool, net_in_q, discovery):
             csv_file    = request.files.get("csv_file")
             if csv_file and csv_file.filename:
                 outputs_raw = csv_file.read().decode()
-            outputs, errors = [], []
-            for i, line in enumerate(outputs_raw.splitlines()):
-                line = line.strip()
-                if not line or line.startswith("#"):
-                    continue
-                parts = [p.strip() for p in line.split(",")]
-                if len(parts) != 2:
-                    errors.append(f"line {i+1}: expected 'address,amount'")
-                    continue
-                try:
-                    outputs.append({"to": parts[0], "amount": int(parts[1])})
-                except ValueError:
-                    errors.append(f"line {i+1}: amount must be an integer")
+            outputs, errors = _parse_csv_outputs(outputs_raw)
             if errors:
                 ctx["alert_err"] = "<br>".join(errors)
             elif not outputs:
                 ctx["alert_err"] = "No valid outputs."
-            elif not passphrase and not node.is_signing_active():
-                ctx["alert_err"] = "Passphrase required (leave blank if mining loop is active)."
             else:
-                try:
-                    t, _fee = node.build_and_sign_tx(outputs, passphrase or None)
-                    ok, result = node.submit_tx_from_api(t)
-                    if ok:
-                        ctx["alert_ok"] = f'Sent. tx hash: <span class="hash">{result}</span>'
-                    else:
-                        ctx["alert_err"] = f"Error: {result}"
-                except Exception as e:
-                    ctx["alert_err"] = f"Error: {e}"
+                _submit_and_alert(node, outputs, passphrase, ctx)
+                if ctx["alert_ok"]:
+                    ctx["alert_ok"] = ctx["alert_ok"].replace("Submitted.", "Sent.")
         return render_template("send.html", **ctx)
 
     @app.route("/burn", methods=["GET", "POST"])
     def burn():
-        if request.remote_addr not in _LOCALHOST:
-            return jsonify({"ok": False, "error": "localhost only"}), 403
+        denied = _localhost_only()
+        if denied:
+            return denied
         v = node.view
-        chain = v.chain
-        balance = v.state.get_balance(node.addr)
-        bw          = node.cs.burn_window
-        pool_totals = bw.pool_totals()
-        burn_totals = bw.sender_totals()
-        burn_history = bw.history()
-        tip_hash_int = pob_mod._tip_hash_int(chain)
-        scores = {addr: bw.score(tip_hash_int, addr) for addr in pool_totals}
+        balance      = v.state.get_balance(node.addr)
+        bw           = node.cs.burn_window
+        pool_totals  = bw.pool_totals()
+        burn_totals  = bw.sender_totals()
+        tip_hash_int = pob_mod._tip_hash_int(v.chain)
         ctx = dict(title="Burn", from_addr=node.addr, balance=balance,
                    my_burn=burn_totals.get(node.addr, 0),
                    my_score=bw.score(tip_hash_int, node.addr),
                    total_burn=sum(pool_totals.values()),
                    sorted_burners=sorted(burn_totals.items(), key=lambda x: -x[1]),
                    sorted_pools=sorted(pool_totals.items(), key=lambda x: -x[1]),
-                   burn_history=burn_history, scores=scores,
+                   burn_history=bw.history(),
+                   scores={addr: bw.score(tip_hash_int, addr) for addr in pool_totals},
                    pob_window=POB_WINDOW, alert_ok="", alert_err="")
         if request.method == "POST":
             raw        = request.form.get("amount", "").strip()
@@ -231,26 +252,16 @@ def create_app(node, pool, net_in_q, discovery):
             except ValueError as e:
                 ctx["alert_err"] = f"Invalid amount: {e}"
             else:
-                if not passphrase and not node.is_signing_active():
-                    ctx["alert_err"] = "Passphrase required (leave blank if mining loop is active)."
-                elif burn_rings > balance:
+                if burn_rings > balance:
                     ctx["alert_err"] = "Insufficient balance."
                 else:
-                    try:
-                        beneficiary = request.form.get("beneficiary", "").strip() or node.addr
-                        if not crypto_mod.is_valid_address(beneficiary):
-                            beneficiary = node.addr
-                        burn_out = {"to": BURN_ADDRESS, "amount": burn_rings}
-                        if beneficiary != node.addr:
-                            burn_out["beneficiary"] = beneficiary
-                        t, _fee = node.build_and_sign_tx([burn_out], passphrase or None)
-                        ok, result = node.submit_tx_from_api(t)
-                        if ok:
-                            ctx["alert_ok"] = f'Burn submitted. tx: <span class="hash">{result}</span>'
-                        else:
-                            ctx["alert_err"] = f"Error: {result}"
-                    except Exception as e:
-                        ctx["alert_err"] = f"Error: {e}"
+                    beneficiary = request.form.get("beneficiary", "").strip() or node.addr
+                    if not crypto_mod.is_valid_address(beneficiary):
+                        beneficiary = node.addr
+                    burn_out = {"to": BURN_ADDRESS, "amount": burn_rings}
+                    if beneficiary != node.addr:
+                        burn_out["beneficiary"] = beneficiary
+                    _submit_and_alert(node, [burn_out], passphrase, ctx)
         return render_template("burn.html", **ctx)
 
     @app.route("/explorer")
@@ -453,8 +464,9 @@ def create_app(node, pool, net_in_q, discovery):
 
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():
-        if request.remote_addr not in _LOCALHOST:
-            return jsonify({"ok": False, "error": "localhost only"}), 403
+        denied = _localhost_only()
+        if denied:
+            return denied
         data = request.get_json()
         if data and "host" in data and "port" in data:
             pool.add(f"{data['host']}:{data['port']}")

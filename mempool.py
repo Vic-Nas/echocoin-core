@@ -5,89 +5,65 @@ import time
 import tx as tx_mod
 from params import FEE_HEIGHT_MAX_AGE
 
-# Local mempool hygiene only. Age out an unconfirmed tx after this many
-# seconds regardless of nonce/fee_height status, so a stuck slot doesn't
-# sit in an honest node's mempool forever.
 MEMPOOL_TTL_SECONDS = 30 * 60
-
-
-def _is_fee_height_stale(tx_dict, chain_tip_height):
-    fh = tx_dict.get("fee_height")
-    return (
-        not isinstance(fh, int)
-        or fh > chain_tip_height
-        or fh < chain_tip_height - (FEE_HEIGHT_MAX_AGE - 1)
-    )
 
 
 class Mempool:
     """
     The node loop is the only writer. Flask threads are read-only.
     CPython GIL makes dict reads and single-key writes atomic, so no
-    lock is needed -- the same reasoning NodeView uses explicitly.
-    Flask threads must never call add, remove, or remove_many.
+    lock is needed. Flask threads must never call add, remove, or remove_many.
     """
 
     def __init__(self):
-        self._txs     = {}   # tx_hash -> tx_dict
-        self._entered = {}   # tx_hash -> monotonic time added
+        # tx_hash -> (tx_dict, entered_monotonic)
+        self._pool: dict = {}
 
-    def add(self, tx_dict):
-        """Add a transaction. Returns (True, hash) or (False, reason)."""
+    def add(self, tx_dict) -> tuple:
         h = tx_mod.tx_hash(tx_dict)
-        if h in self._txs:
+        if h in self._pool:
             return False, "duplicate"
-        self._txs[h] = tx_dict
-        self._entered[h] = time.monotonic()
+        self._pool[h] = (tx_dict, time.monotonic())
         return True, h
 
     def remove(self, tx_hash):
-        """Remove a transaction by hash."""
-        self._txs.pop(tx_hash, None)
-        self._entered.pop(tx_hash, None)
+        self._pool.pop(tx_hash, None)
 
     def remove_many(self, tx_hashes):
-        """Remove multiple transactions."""
         for h in tx_hashes:
-            self._txs.pop(h, None)
-            self._entered.pop(h, None)
+            self._pool.pop(h, None)
 
     def get(self, tx_hash):
-        return self._txs.get(tx_hash)
+        entry = self._pool.get(tx_hash)
+        return entry[0] if entry else None
 
     def get_txs_by_hashes(self, tx_hashes):
-        """Return list of tx dicts for given hashes (skips missing)."""
-        return [self._txs[h] for h in tx_hashes if h in self._txs]
+        return [self._pool[h][0] for h in tx_hashes if h in self._pool]
 
     def size(self):
-        return len(self._txs)
+        return len(self._pool)
 
     def all_txs(self):
-        return list(self._txs.values())
+        return [tx for tx, _ in self._pool.values()]
 
     def pending_hashes(self):
-        """Return frozenset of all pending tx hashes. For censorship scoring."""
-        return frozenset(self._txs.keys())
+        return frozenset(self._pool.keys())
 
     def prune_stale(self, chain_tip_height, state, ttl_seconds=MEMPOOL_TTL_SECONDS):
-        """Evict entries that can never become valid again: a stale
-        fee_height (older than the tx.validate() acceptance window), a
-        nonce already superseded by confirmed state, or (TTL) simply too
-        old to keep carrying regardless of nonce/fee_height. Does NOT touch
-        entries that are simply queued ahead of their turn (nonce >
-        current + 1) since those are still valid future candidates.
-
-        Returns list of pruned tx hashes.
-        """
-        pruned = []
+        """Evict txs that can never become valid: stale fee_height, superseded
+        nonce, or simply too old. Returns list of pruned hashes."""
         now = time.monotonic()
-        for h, t in list(self._txs.items()):
-            if (
-                _is_fee_height_stale(t, chain_tip_height)
-                or t["nonce"] <= state.get_nonce(t["from"])
-                or now - self._entered.get(h, now) > ttl_seconds
-            ):
+        pruned = []
+        for h, (t, entered) in list(self._pool.items()):
+            fh = t.get("fee_height")
+            stale_fee = (
+                not isinstance(fh, int)
+                or fh > chain_tip_height
+                or fh < chain_tip_height - (FEE_HEIGHT_MAX_AGE - 1)
+            )
+            if (stale_fee
+                    or t["nonce"] <= state.get_nonce(t["from"])
+                    or now - entered > ttl_seconds):
                 pruned.append(h)
-                del self._txs[h]
-                self._entered.pop(h, None)
+                del self._pool[h]
         return pruned
