@@ -1,12 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# PyInstaller spec for Echocoin node.
-#
-# Linux:   make linux  -> dist/echocoin.AppImage  (onedir wrapped in AppImage)
-# Windows: make windows -> dist/echocoin.exe      (onefile)
-#
-# onedir on Linux means liboqs.so lands next to the binary where the dynamic
-# linker finds it normally -- no ctypes path magic needed.
+# Linux:   make linux   -> dist/echocoin.AppImage  (onedir wrapped in AppImage)
+# Windows: make windows -> dist/echocoin.exe       (onefile)
 
 import glob, os, sys
 from PyInstaller.utils.hooks import collect_all
@@ -16,8 +11,6 @@ cffi_datas,    cffi_binaries,    cffi_hiddenimports    = collect_all("cffi")
 oqs_datas,     oqs_binaries,     oqs_hiddenimports     = collect_all("oqs")
 chiavdf_datas, chiavdf_binaries, chiavdf_hiddenimports = collect_all("chiavdf")
 
-# Explicitly bundle liboqs.so* -- oqs loads it via ctypes, invisible to
-# PyInstaller's static analysis.
 _search_roots = [
     "/usr/local/lib",
     "/usr/lib",
@@ -33,7 +26,6 @@ for _root in _search_roots:
     if _liboqs_bins:
         break
 
-# Windows: MSVC runtime DLLs (no-op on Linux)
 _py_dir = os.path.dirname(sys.executable)
 _msvc_dlls = [
     (p, ".")
@@ -41,47 +33,32 @@ _msvc_dlls = [
     for p in glob.glob(os.path.join(_py_dir, pattern))
 ]
 
-_is_windows = sys.platform == "win32"
+_all_binaries = [
+    *nacl_binaries, *cffi_binaries, *oqs_binaries,
+    *chiavdf_binaries, *_liboqs_bins, *_msvc_dlls,
+]
+_all_datas = [
+    ("bip39_english.txt", "."),
+    ("docs/whitepaper.md", "."),
+    ("echocoin.svg",       "."),
+    ("echocoin.png",       "."),
+    ("favicon.ico",        "."),
+    *nacl_datas, *cffi_datas, *oqs_datas, *chiavdf_datas,
+]
+_all_hiddenimports = [
+    *nacl_hiddenimports, *cffi_hiddenimports,
+    *oqs_hiddenimports, *chiavdf_hiddenimports,
+    "oqs", "_cffi_backend", "libtorrent", "miniupnpc",
+    "flask", "werkzeug", "werkzeug.serving", "werkzeug.debug",
+    "jinja2", "jinja2.ext", "markdown",
+]
 
 a = Analysis(
     ["main.py"],
     pathex=["."],
-    binaries=[
-        *nacl_binaries,
-        *cffi_binaries,
-        *oqs_binaries,
-        *chiavdf_binaries,
-        *_liboqs_bins,
-        *_msvc_dlls,
-    ],
-    datas=[
-        ("bip39_english.txt", "."),
-        ("docs/whitepaper.md", "."),
-        ("echocoin.svg",      "."),
-        ("echocoin.png",      "."),
-        ("favicon.ico",       "."),
-        *nacl_datas,
-        *cffi_datas,
-        *oqs_datas,
-        *chiavdf_datas,
-    ],
-    hiddenimports=[
-        *nacl_hiddenimports,
-        *cffi_hiddenimports,
-        *oqs_hiddenimports,
-        *chiavdf_hiddenimports,
-        "oqs",
-        "_cffi_backend",
-        "libtorrent",
-        "miniupnpc",
-        "flask",
-        "werkzeug",
-        "werkzeug.serving",
-        "werkzeug.debug",
-        "jinja2",
-        "jinja2.ext",
-        "markdown",
-    ],
+    binaries=_all_binaries,
+    datas=_all_datas,
+    hiddenimports=_all_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=["hook_oqs.py"],
@@ -91,8 +68,8 @@ a = Analysis(
 
 pyz = PYZ(a.pure)
 
-if _is_windows:
-    # Windows: single .exe
+if sys.platform == "win32":
+    # Windows: single onefile exe
     exe = EXE(
         pyz,
         a.scripts,
@@ -113,8 +90,8 @@ if _is_windows:
         entitlements_file=None,
     )
 else:
-    # Linux: onedir so liboqs.so lands next to the binary,
-    # then Makefile wraps the directory into an AppImage.
+    # Linux: onedir -- EXE gets only scripts, COLLECT gets everything else.
+    # This produces dist/echocoin/ which the Makefile wraps into an AppImage.
     exe = EXE(
         pyz,
         a.scripts,
@@ -133,6 +110,7 @@ else:
     coll = COLLECT(
         exe,
         a.binaries,
+        a.zipfiles,
         a.datas,
         strip=False,
         upx=False,
