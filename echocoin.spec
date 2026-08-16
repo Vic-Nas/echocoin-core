@@ -33,7 +33,7 @@ a = Analysis(
     ],
     datas=[
         ("bip39_english.txt", "."),
-        ("whitepaper.md",     "."),
+        ("docs/whitepaper.md", "."),
         ("echocoin.svg",      "."),
         ("echocoin.png",      "."),
         ("favicon.ico",       "."),
