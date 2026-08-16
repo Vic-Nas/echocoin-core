@@ -337,7 +337,7 @@ def create_app(node, pool, net_in_q, discovery):
     def api_stats():
         v  = node.view
         sv = v.state
-        return jsonify({"points": v.stats_points, "totals": {
+        return jsonify({"points": node.stats.points, "totals": {
             "minted":      sv.total_minted,
             "burned_fees": sv.total_burnt,
             "circulating": sv.total_minted - sv.total_burnt,

@@ -53,72 +53,85 @@ def _validate_tail(tail, prefix, fee_rate_at):
 
 
 # ---------------------------------------------------------------------------
+# StatsAccumulator: owned by Node, updated each commit, read by NodeView
+# ---------------------------------------------------------------------------
+
+class StatsAccumulator:
+    """Maintains the /api/stats chart data incrementally.
+
+    Owned by Node and updated in _commit() so it always stays current
+    without NodeView needing to carry forward state from a previous view.
+    Flask reads node.stats (GIL-safe reference) directly.
+    """
+    from state import compute_reward as _compute_reward
+
+    def __init__(self):
+        self.points:    list  = []   # [{height, minted, burned_fees, circulating, net_emission}]
+        self._cum:      int   = 0    # cumulative fee burns for incremental update
+        self._chain_len: int  = 0    # chain length at last update
+
+    def update(self, chain, state):
+        """Extend or rebuild points to match chain. Call after every commit."""
+        if len(chain) <= 1:
+            self.points, self._cum, self._chain_len = [], 0, len(chain)
+            return
+
+        if len(chain) == self._chain_len + 1 and self.points is not None:
+            # Incremental: one new block appended.
+            blk    = chain[-1]
+            fee    = sum(t["fee"] for t in blk.get("transactions", []))
+            self._cum += fee
+            self.points = self.points + [{
+                "height":      blk["height"],
+                "minted":      state.total_minted,
+                "burned_fees": self._cum,
+                "circulating": state.total_minted - self._cum,
+                "net_emission": fee,
+            }]
+        else:
+            # Full rebuild (startup, reorg, or first call).
+            from state import compute_reward
+            points, cum = [], 0
+            running_minted = running_burnt = 0
+            for blk in chain[1:]:
+                fee     = sum(t["fee"] for t in blk.get("transactions", []))
+                cum    += fee
+                reward  = compute_reward(running_minted, running_burnt)
+                running_minted += reward
+                running_burnt  += fee
+                points.append({
+                    "height":      blk["height"],
+                    "minted":      running_minted,
+                    "burned_fees": cum,
+                    "circulating": running_minted - cum,
+                    "net_emission": fee,
+                })
+            if len(points) > 500:
+                step   = len(points) / 500
+                points = [points[int(i * step)] for i in range(500)]
+            self.points, self._cum = points, cum
+
+        self._chain_len = len(chain)
+
+
+# ---------------------------------------------------------------------------
 # NodeView: read-only snapshot for Flask threads
 # ---------------------------------------------------------------------------
 
 class NodeView:
     """Immutable snapshot of node state. Published after every block commit.
     Flask reads node.view -- one reference swap, GIL-atomic, no lock needed.
+    stats_points comes from node.stats, not carried here.
     """
-    __slots__ = ("chain", "height", "tip", "genesis_hash", "cumulative_score",
-                 "state", "stats_points", "_cum_burned", "_stats_chain_len")
+    __slots__ = ("chain", "height", "tip", "genesis_hash", "cumulative_score", "state")
 
-    def __init__(self, cs, prev_view=None):
+    def __init__(self, cs):
         self.chain            = cs.chain
         self.tip              = cs.tip
         self.height           = cs.height
         self.genesis_hash     = cs.genesis_hash
         self.cumulative_score = cs.cumulative_score
         self.state            = cs.state.snapshot()
-        prev_points    = getattr(prev_view, "stats_points", None)
-        prev_cum       = getattr(prev_view, "_cum_burned", 0)
-        prev_chain_len = getattr(prev_view, "_stats_chain_len", 0)
-        self.stats_points, self._cum_burned = self._build_stats(
-            cs.chain, self.state, prev_points, prev_cum, prev_chain_len
-        )
-        self._stats_chain_len = len(cs.chain)
-
-    @staticmethod
-    @staticmethod
-    def _build_stats(chain, state, prev_points=None, prev_cum=0, prev_chain_len=0):
-        """Chart data for /api/stats. Incremental when chain grew by one block.
-
-        Uses prev_chain_len (not len(prev_points)) to detect a single-block
-        increment — prev_points may be downsampled to 500 entries regardless
-        of chain length, so comparing lengths directly was broken for chains
-        longer than 501 blocks.
-        """
-        if len(chain) <= 1:
-            return [], 0
-
-        # Incremental: chain grew by exactly one block since last view.
-        if prev_points is not None and len(chain) == prev_chain_len + 1:
-            blk    = chain[-1]
-            fee    = sum(t["fee"] for t in blk.get("transactions", []))
-            cum    = prev_cum + fee
-            minted = state.total_minted
-            return prev_points + [{"height": blk["height"], "minted": minted,
-                                    "burned_fees": cum, "circulating": minted - cum,
-                                    "net_emission": fee}], cum
-
-        # Full rebuild.
-        from state import compute_reward
-        points, cum = [], 0
-        running_minted = 0
-        running_burnt  = 0
-        for blk in chain[1:]:
-            fee     = sum(t["fee"] for t in blk.get("transactions", []))
-            cum    += fee
-            reward  = compute_reward(running_minted, running_burnt)
-            running_minted += reward
-            running_burnt  += fee
-            points.append({"height": blk["height"], "minted": running_minted,
-                            "burned_fees": cum, "circulating": running_minted - cum,
-                            "net_emission": fee})
-        if len(points) > 500:
-            step   = len(points) / 500
-            points = [points[int(i * step)] for i in range(500)]
-        return points, cum
 
 
 # ---------------------------------------------------------------------------
@@ -147,8 +160,10 @@ class Node:
         # tx_hash -> consecutive non-full blocks that excluded it.
         self._exclusion_age = {}
 
-        self.cs   = self._load_cs()
-        self.view = NodeView(self.cs)
+        self.stats = StatsAccumulator()
+        self.cs    = self._load_cs()
+        self.stats.update(self.cs.chain, self.cs.state)
+        self.view  = NodeView(self.cs)
 
     # ------------------------------------------------------------------
     # Startup
@@ -236,7 +251,7 @@ class Node:
         if not ok:
             return False, h
         self.gossip.relay_tx(tx_dict)
-        self.view = NodeView(self.cs, prev_view=self.view)
+        self.view = NodeView(self.cs)
         log.info("[tx] accepted  hash=%s  from=%s", h[:12],
                  tx_dict.get("from", "?")[:24])
         return True, h
@@ -362,7 +377,8 @@ class Node:
         self.storage.save_block(blk)
         self.storage.save_state(self.cs.state)
         self.mempool.remove_many(confirmed)
-        self.view = NodeView(self.cs, prev_view=self.view)
+        self.stats.update(self.cs.chain, self.cs.state)
+        self.view = NodeView(self.cs)
 
         if relay:
             try:
@@ -446,42 +462,56 @@ class Node:
     # Chain sync / reorg
     # ------------------------------------------------------------------
 
-    def apply_better_chain(self, remote_chain):
-        """Accept remote_chain if it is better than local. Used by syncer."""
-        genesis_hash = self.cs.genesis_hash
-        if not remote_chain or remote_chain[0]["hash"] != genesis_hash:
-            return False, "genesis mismatch"
+    def _evaluate_remote_chain(self, remote_chain):
+        """Pure evaluation of a candidate remote chain. No state is mutated.
+
+        Returns (ok, err, fork_point, tail, remote_cs) on success,
+        or (False, err, None, None, None) on rejection.
+
+        Order of operations matters for security:
+          1. Genesis check  — cheap, stops wrong-network chains immediately.
+          2. Fork point     — O(min(local, remote)) hash comparisons.
+          3. _validate_tail — structural block validation on untrusted data.
+          4. from_chain     — trusted replay, only runs on validated blocks.
+          5. is_better_than — fork choice, only after we know it's valid.
+        """
+        if not remote_chain or remote_chain[0]["hash"] != self.cs.genesis_hash:
+            return False, "genesis mismatch", None, None, None
 
         fork_point = next(
             (i for i, (a, b) in enumerate(zip(self.cs.chain, remote_chain))
              if a["hash"] != b["hash"]),
             min(len(self.cs.chain), len(remote_chain))
         )
-        prefix = remote_chain[:fork_point]
-        tail   = remote_chain[fork_point:]
+        tail = remote_chain[fork_point:]
 
-        # Validate the new tail first — before replaying any untrusted tx history.
-        # Previously from_chain() ran before _validate_tail, which meant malformed
-        # txs in a remote chain could raise unhandled exceptions and crash sync.
-        ok, err = _validate_tail(tail, prefix, self.cs.fee_rate_at)
+        ok, err = _validate_tail(tail, remote_chain[:fork_point], self.cs.fee_rate_at)
         if not ok:
             log.warning("[sync] rejected: %s", err)
-            return False, err
+            return False, err, None, None, None
 
-        # Now safe to replay the full chain (all blocks are structurally valid).
         try:
             remote_cs = ChainState.from_chain(remote_chain)
         except Exception as e:
             log.warning("[sync] chain replay failed: %s", e)
-            return False, f"chain replay error: {e}"
+            return False, f"chain replay error: {e}", None, None, None
 
         if not remote_cs.is_better_than(self.cs):
-            return False, "remote chain not better"
+            return False, "remote chain not better", None, None, None
+
+        return True, None, fork_point, tail, remote_cs
+
+    def apply_better_chain(self, remote_chain):
+        """Accept remote_chain if it is better than local. Used by syncer."""
+        ok, err, fork_point, tail, remote_cs = self._evaluate_remote_chain(remote_chain)
+        if not ok:
+            return False, err
 
         self._reorg_mempool(fork_point, remote_chain)
         self.storage.replace_chain(fork_point, tail)
         self.storage.save_state(remote_cs.state)
-        self.cs   = remote_cs
+        self.cs = remote_cs
+        self.stats.update(self.cs.chain, self.cs.state)
         self.view = NodeView(self.cs)
 
         if fork_point < self.cs.height:
