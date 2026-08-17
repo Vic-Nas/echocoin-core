@@ -34,7 +34,7 @@ linux: icons
 	printf '[Desktop Entry]\nName=Echocoin\nExec=echocoin\nIcon=echocoin\nType=Application\nCategories=Network;Finance;\n' > $(APPDIR)/echocoin.desktop
 	printf '#!/bin/sh\nexec "$$APPDIR/usr/bin/echocoin" "$$@"\n' > $(APPDIR)/AppRun
 	chmod +x $(APPDIR)/AppRun
-	ARCH=x86_64 appimagetool $(APPDIR) $(DIST)/echocoin.AppImage
+	ARCH=x86_64 appimagetool --appimage-extract-and-run $(APPDIR) $(DIST)/echocoin.AppImage
 	@echo "Built: $(DIST)/echocoin.AppImage"
 
 windows:
