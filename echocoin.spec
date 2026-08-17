@@ -17,12 +17,17 @@ _search_roots = [
     "/usr/lib/x86_64-linux-gnu",
     "/usr/lib/aarch64-linux-gnu",
     os.path.join(os.path.dirname(sys.executable), "..", "lib"),
+    # Windows: liboqs installed to C:/liboqs/install by CI
+    "C:/liboqs/install/bin",
+    "C:/liboqs/install/lib",
 ]
+_liboqs_patterns = ["liboqs.so*"] if sys.platform != "win32" else ["oqs.dll", "liboqs.dll"]
 _liboqs_bins = []
 for _root in _search_roots:
-    for _p in sorted(glob.glob(os.path.join(_root, "liboqs.so*"))):
-        if os.path.isfile(_p):
-            _liboqs_bins.append((_p, "."))
+    for _pat in _liboqs_patterns:
+        for _p in sorted(glob.glob(os.path.join(_root, _pat))):
+            if os.path.isfile(_p):
+                _liboqs_bins.append((_p, "."))
     if _liboqs_bins:
         break
 

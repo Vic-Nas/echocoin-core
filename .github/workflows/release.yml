@@ -159,6 +159,20 @@ jobs:
           echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
         shell: pwsh
 
+      - name: Build and install liboqs system-wide
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git C:/liboqs
+          cmake -S C:/liboqs -B C:/liboqs/build `
+            -G Ninja `
+            -DOQS_ALGS_ENABLED=STD `
+            -DBUILD_SHARED_LIBS=ON `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX="C:/liboqs/install"
+          cmake --build C:/liboqs/build -j4
+          cmake --install C:/liboqs/build
+          echo "C:\liboqs\install\bin" >> $env:GITHUB_PATH
+
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
