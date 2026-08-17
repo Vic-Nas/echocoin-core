@@ -108,6 +108,18 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y cmake ninja-build libssl-dev libcairo2-dev pkg-config python3-dev
 
+      - name: Build and install liboqs system-wide
+        run: |
+          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
+          cmake -S /tmp/liboqs -B /tmp/liboqs/build \
+            -DOQS_ALGS_ENABLED=STD \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build /tmp/liboqs/build -j$(nproc)
+          sudo cmake --install /tmp/liboqs/build
+          sudo ldconfig
+
       - name: Install Python dependencies
         run: |
           pip install -r requirements.txt
