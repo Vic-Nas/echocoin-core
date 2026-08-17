@@ -52,12 +52,8 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set GENESIS_TIMESTAMP if TESTNET=True
+        if: ${{ vars.TESTNET == 'True' }}
         run: |
-          IS_TESTNET=$(python3 -c "import re; m=re.search(r'^TESTNET\s*=\s*(\S+)', open('params.py').read(), re.M); print(m.group(1) if m else 'False')")
-          if [ "$IS_TESTNET" != "True" ]; then
-            echo "TESTNET=False: skipping GENESIS_TIMESTAMP update"
-            exit 0
-          fi
           TIMESTAMP=$(python3 -c "import time; print(int(time.time()))")
           sed -i "s/^GENESIS_TIMESTAMP = .*/GENESIS_TIMESTAMP = $TIMESTAMP/" params.py
           git config user.name "github-actions[bot]"
@@ -283,8 +279,7 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git pull --rebase origin main
           echo "$PREV" > VERSION
-          IS_TESTNET=$(python3 -c "import re; m=re.search(r'^TESTNET\s*=\s*(\S+)', open('params.py').read(), re.M); print(m.group(1) if m else 'False')")
-          if [ "$IS_TESTNET" = "True" ]; then
+          if [ "${{ vars.TESTNET }}" = "True" ]; then
             sed -i "s/^GENESIS_TIMESTAMP = .*/GENESIS_TIMESTAMP = 0/" params.py
             git add VERSION params.py
           else
