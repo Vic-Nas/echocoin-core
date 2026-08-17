@@ -196,6 +196,8 @@ def create_app(node, pool, net_in_q, discovery):
     app = Flask(__name__, template_folder="templates_html")
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate, fmt_score=fmt_score)
     app.logger.setLevel(logging.WARNING)
+    # Enable werkzeug access log so requests appear in node output
+    logging.getLogger("werkzeug").setLevel(logging.INFO)
 
     limiter = Limiter(get_remote_address, app=app, default_limits=[],
                       storage_uri="memory://")
