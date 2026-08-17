@@ -38,7 +38,7 @@ POB_WINDOW = 500
 # commodity hardware. Must be calibrated empirically before genesis and
 # cannot change after launch without breaking chain identity.
 # Placeholder: replace with measured value before mainnet.
-VDF_ITERATIONS = 85_000_000  # calibrated: ~120s on flash-mint (~700k iters/sec at 1024-bit)
+VDF_ITERATIONS = 170_000_000  # calibrated: ~120s
 
 # Genesis message. Embedded in block 0 and hashed into the genesis block hash.
 # Cannot change after launch without breaking network identity.
