@@ -143,21 +143,30 @@ class BurnWindow:
 
     def reward_distribution(self, beneficiary, reward):
         """Compute proportional reward split among contributors to beneficiary.
-        Same semantics as pob.reward_distribution() but O(contributors) not
-        O(window * txs_per_block).
+        The builder always receives a guaranteed 2% base cut so they cannot
+        be locked out of their own reward by third-party pool contributors.
+        The remaining 98% is split proportionally among contributors.
         """
+        if reward == 0:
+            return [(beneficiary, 0)]
+        # 2% guaranteed to the builder (block producer)
+        builder_cut = max(1, reward * 2 // 100)
+        remainder   = reward - builder_cut
         burns = self.burns_for(beneficiary)
         total = sum(burns.values())
-        if total == 0 or reward == 0:
+        if total == 0 or remainder == 0:
             return [(beneficiary, reward)]
         distribution = [
-            (addr, reward * amount // total)
+            (addr, remainder * amount // total)
             for addr, amount in burns.items()
-            if reward * amount // total >= 1
+            if remainder * amount // total >= 1
         ]
         if not distribution:
             return [(beneficiary, reward)]
-        return distribution
+        # Add builder's guaranteed cut (merge if builder is also a contributor)
+        dist_map = dict(distribution)
+        dist_map[beneficiary] = dist_map.get(beneficiary, 0) + builder_cut
+        return list(dist_map.items())
 
     def score(self, tip_hash_int, address):
         """Compute PoB score using the rolling window instead of chain scan."""
@@ -177,6 +186,3 @@ def _addr_int(address):
     """Deterministic integer derived from an address string."""
     h = hashlib.sha256(address.encode()).digest()
     return struct.unpack(">Q", h[:8])[0]   # 64-bit, good enough for ordering
-
-
-
