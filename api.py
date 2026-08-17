@@ -45,6 +45,18 @@ def fmt_balance(rings):
     return f"{ech} ECH {rem:,} rings"
 
 
+def fmt_score(score):
+    """Abbreviate large PoB scores for display: 3.01e26, 1.2e18, etc."""
+    if score == 0:
+        return "0"
+    import math
+    exp = int(math.log10(score))
+    if exp < 6:
+        return f"{score:,}"
+    mantissa = score / (10 ** exp)
+    return f"{mantissa:.2f}e{exp}"
+
+
 def fmt_fee_rate(rings_per_byte):
     ech = rings_per_byte / RINGS_PER_ECH
     if ech >= 0.001:
@@ -182,7 +194,7 @@ def _strike_sender(pool, data):
 
 def create_app(node, pool, net_in_q, discovery):
     app = Flask(__name__, template_folder="templates_html")
-    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate)
+    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate, fmt_score=fmt_score)
     app.logger.setLevel(logging.WARNING)
 
     limiter = Limiter(get_remote_address, app=app, default_limits=[],

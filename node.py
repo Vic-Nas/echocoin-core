@@ -339,7 +339,14 @@ class Node:
                  cs.height + 1, cs.tip["hash"][:12],
                  self.pool.count(), self.mempool.size(), len(pruned))
 
-        vdf_out, vdf_proof = vdf_mod.evaluate(bytes.fromhex(cs.tip["hash"]))
+        # Run VDF in a background thread so the node loop stays responsive
+        # to tx submissions and peer messages during the ~120s evaluation.
+        import concurrent.futures as _cf
+        with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
+            _fut = _pool.submit(vdf_mod.evaluate, bytes.fromhex(cs.tip["hash"]))
+            while not _fut.done():
+                self._drain_queue(timeout=1)
+            vdf_out, vdf_proof = _fut.result()
         log.info("[vdf] proof ready  height=%d", cs.height + 1)
 
         fee_rate   = block_mod.compute_expected_fee_rate(cs.chain)
