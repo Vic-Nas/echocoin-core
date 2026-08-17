@@ -6,7 +6,7 @@
 <div class="stats" style="margin-bottom:1rem">
   <div class="stat"><div class="stat-label">Your balance</div><div class="stat-value" style="font-size:1rem">{{ fmt_balance(balance) }}</div></div>
   <div class="stat"><div class="stat-label">Your burns (last {{ pob_window }} blocks)</div><div class="stat-value" style="font-size:1rem">{{ fmt_balance(my_burn) }}</div></div>
-  <div class="stat"><div class="stat-label">Your PoB score</div><div class="stat-value" style="font-size:1rem;font-family:var(--mono)">{{ "{:,}".format(my_score) }}</div></div>
+  <div class="stat"><div class="stat-label">Your PoB score</div><div class="stat-value" style="font-size:1rem;font-family:var(--mono)">{{ fmt_score(my_score) }}</div></div>
   <div class="stat"><div class="stat-label">Network burns (last {{ pob_window }} blocks)</div><div class="stat-value" style="font-size:1rem">{{ fmt_balance(total_burn) }}</div></div>
 </div>
 
@@ -49,7 +49,7 @@
         <td>{{ loop.index }}</td>
         <td class="hash-short"{% if addr == from_addr %} style="color:var(--green)"{% endif %}>{{ addr }}</td>
         <td>{{ fmt_balance(amount) }}</td>
-        <td style="font-family:var(--mono);font-size:.75rem">{{ "{:,}".format(scores.get(addr, 0)) }}</td>
+        <td style="font-family:var(--mono);font-size:.75rem"><span title="{{ scores.get(addr, 0) }}">{{ fmt_score(scores.get(addr, 0)) }}</span></td>
       </tr>
       {% endfor %}
     {% else %}
