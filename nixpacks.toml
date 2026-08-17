@@ -1,0 +1,14 @@
+[phases.setup]
+nixPkgs = ["cmake", "ninja", "openssl", "git", "gcc"]
+
+[phases.build]
+cmds = [
+  "git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs",
+  "cmake -S /tmp/liboqs -B /tmp/liboqs/build -DOQS_ALGS_ENABLED=STD -DBUILD_SHARED_LIBS=ON -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local",
+  "cmake --build /tmp/liboqs/build -j4",
+  "cmake --install /tmp/liboqs/build",
+  "pip install -r requirements.txt"
+]
+
+[start]
+cmd = "python main.py --log-level DEBUG --keyfile /data/echocoin_key.json --db /data/echocoin_chain.db"
