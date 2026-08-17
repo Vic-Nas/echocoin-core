@@ -247,9 +247,10 @@ class TestRewardDistribution:
                                beneficiary_index=2)
         w = window_from_blocks([g, b1, b2])
         dist = dict(w.reward_distribution(address(2), 4000))
-        # 3:1 split -> addr0=3000, addr1=1000
-        assert dist[address(0)] == 3000
-        assert dist[address(1)] == 1000
+        # 2% builder cut = 80 to address(2); remainder 3920 splits 3:1
+        assert dist[address(2)] == 80
+        assert dist[address(0)] == 2940
+        assert dist[address(1)] == 980
 
     def test_zero_reward_returns_beneficiary_with_zero(self):
         w = BurnWindow()

@@ -120,9 +120,10 @@ class TestE2E_PoBPoolSplit:
         # addr(2) is the beneficiary builder -- they won the block
         dist = cs2.burn_window.reward_distribution(address(2), 4000)
         dist_map = dict(dist)
-        # 3:1 ratio -> addr0 gets 3000, addr1 gets 1000 (rounding may vary by 1)
-        assert abs(dist_map.get(address(0), 0) - 3000) <= 1
-        assert abs(dist_map.get(address(1), 0) - 1000) <= 1
+        # 2% builder cut=80 to address(2); remainder 3920 splits 3:1
+        assert dist_map.get(address(2), 0) == 80
+        assert abs(dist_map.get(address(0), 0) - 2940) <= 1
+        assert abs(dist_map.get(address(1), 0) - 980) <= 1
 
     def test_pool_weight_non_transferable(self):
         """Whitepaper Section 3: burn weight is address-specific."""
