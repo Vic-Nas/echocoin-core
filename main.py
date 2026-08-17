@@ -11,7 +11,7 @@ import threading
 import block as block_mod
 import crypto
 import params
-from api import create_app
+from api import create_app, create_private_app
 from discovery import Discovery
 from gossip import Gossip
 from node import Node
@@ -87,6 +87,10 @@ def main():
     parser.add_argument("--db",      default=DB_PATH)
     parser.add_argument("--peer",       action="append", default=[])
     parser.add_argument(
+        "--private-port", type=int, default=None,
+        help="Port for private API (send/burn). Defaults to --port+1. Never expose via Funnel.",
+    )
+    parser.add_argument(
         "--max-peers", type=int, default=params.MAX_PEERS,
         help="Hard cap on peer table size (default %(default)s).",
     )
@@ -122,7 +126,15 @@ def main():
         target=lambda: app.run(host=args.host, port=args.port, threaded=True),
         daemon=True,
     ).start()
-    log.info("[startup] API on http://%s:%d", args.host, args.port)
+    log.info("[startup] public API on http://%s:%d", args.host, args.port)
+
+    private_port = args.private_port if args.private_port else args.port + 1
+    private_app = create_private_app(node, pool)
+    threading.Thread(
+        target=lambda: private_app.run(host="127.0.0.1", port=private_port, threaded=True),
+        daemon=True,
+    ).start()
+    log.info("[startup] private API on http://127.0.0.1:%d (send/burn/peers)", private_port)
     log.info("[startup] genesis=%s", genesis["hash"][:12])
 
     if pool.count() > 0:

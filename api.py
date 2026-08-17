@@ -101,9 +101,6 @@ class _BlockIn(BaseModel):
 # ---------------------------------------------------------------------------
 
 _TX_REQUIRED_FIELDS = {"from", "pubkey", "outputs", "nonce", "fee_height", "fee", "signature"}
-_LOCALHOST = ("127.0.0.1", "::1")
-
-
 def _get_address_history(addr, node):
     """Return list of (height, tx_hash, direction, tx_dict) for addr."""
     v = node.view
@@ -117,13 +114,6 @@ def _get_address_history(addr, node):
                     history.append((h_height, h, direction, t))
                     break
     return history
-
-
-def _localhost_only():
-    """Return a 403 response if request is not from localhost, else None."""
-    if request.remote_addr not in _LOCALHOST:
-        return jsonify({"ok": False, "error": "localhost only"}), 403
-    return None
 
 
 def _parse_csv_outputs(outputs_raw):
@@ -210,74 +200,6 @@ def create_app(node, pool, net_in_q, discovery):
         chain = node.view.chain
         return render_template("dashboard.html", title="Dashboard",
             info=info, tip=chain[-1], recent_blocks=chain[-10:][::-1])
-
-    @app.route("/send", methods=["GET", "POST"])
-    def send():
-        denied = _localhost_only()
-        if denied:
-            return denied
-        v = node.view
-        ctx = dict(title="Send", from_addr=node.addr, balance=v.state.get_balance(node.addr),
-                   nonce=v.state.get_nonce(node.addr) + 1, fee_rate=v.tip["fee_rate"],
-                   alert_ok="", alert_err="")
-        if request.method == "POST":
-            outputs_raw = request.form.get("outputs", "").strip()
-            passphrase  = request.form.get("passphrase", "").strip()
-            csv_file    = request.files.get("csv_file")
-            if csv_file and csv_file.filename:
-                outputs_raw = csv_file.read().decode()
-            outputs, errors = _parse_csv_outputs(outputs_raw)
-            if errors:
-                ctx["alert_err"] = "<br>".join(errors)
-            elif not outputs:
-                ctx["alert_err"] = "No valid outputs."
-            else:
-                _submit_and_alert(node, outputs, passphrase, ctx)
-                if ctx["alert_ok"]:
-                    ctx["alert_ok"] = ctx["alert_ok"].replace("Submitted.", "Sent.")
-        return render_template("send.html", **ctx)
-
-    @app.route("/burn", methods=["GET", "POST"])
-    def burn():
-        denied = _localhost_only()
-        if denied:
-            return denied
-        v = node.view
-        balance      = v.state.get_balance(node.addr)
-        bw           = v.burn_window
-        pool_totals  = bw.pool_totals()
-        burn_totals  = bw.sender_totals()
-        tip_hash_int = pob_mod._tip_hash_int(v.chain)
-        ctx = dict(title="Burn", from_addr=node.addr, balance=balance,
-                   my_burn=burn_totals.get(node.addr, 0),
-                   my_score=bw.score(tip_hash_int, node.addr),
-                   total_burn=sum(pool_totals.values()),
-                   sorted_burners=sorted(burn_totals.items(), key=lambda x: -x[1]),
-                   sorted_pools=sorted(pool_totals.items(), key=lambda x: -x[1]),
-                   burn_history=bw.history(),
-                   scores={addr: bw.score(tip_hash_int, addr) for addr in pool_totals},
-                   pob_window=POB_WINDOW, alert_ok="", alert_err="")
-        if request.method == "POST":
-            raw        = request.form.get("amount", "").strip()
-            passphrase = request.form.get("passphrase", "").strip()
-            try:
-                burn_rings = int(raw)
-                if burn_rings <= 0:
-                    raise ValueError("must be positive")
-            except ValueError as e:
-                ctx["alert_err"] = f"Invalid amount: {e}"
-            else:
-                if burn_rings > balance:
-                    ctx["alert_err"] = "Insufficient balance."
-                else:
-                    beneficiary = request.form.get("beneficiary", "").strip() or node.addr
-                    if not crypto_mod.is_valid_address(beneficiary):
-                        beneficiary = node.addr
-                    burn_out = {"to": BURN_ADDRESS, "amount": burn_rings}
-                    if beneficiary != node.addr:
-                        burn_out["beneficiary"] = beneficiary
-                    _submit_and_alert(node, [burn_out], passphrase, ctx)
-        return render_template("burn.html", **ctx)
 
     @app.route("/explorer")
     def explorer():
@@ -480,11 +402,83 @@ def create_app(node, pool, net_in_q, discovery):
         addrs = pool.all_addrs()
         return jsonify({"count": len(addrs), "peers": addrs})
 
+    return app
+
+
+# ---------------------------------------------------------------------------
+# Private app  —  bind to 127.0.0.1 only, never exposed via Funnel
+# ---------------------------------------------------------------------------
+
+def create_private_app(node, pool):
+    """Minimal Flask app for wallet actions. Must only be bound to 127.0.0.1."""
+    app = Flask(__name__, template_folder="templates_html")
+    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate, fmt_score=fmt_score)
+    app.logger.setLevel(logging.WARNING)
+
+    @app.route("/send", methods=["GET", "POST"])
+    def send():
+        v = node.view
+        ctx = dict(title="Send", from_addr=node.addr, balance=v.state.get_balance(node.addr),
+                   nonce=v.state.get_nonce(node.addr) + 1, fee_rate=v.tip["fee_rate"],
+                   alert_ok="", alert_err="")
+        if request.method == "POST":
+            outputs_raw = request.form.get("outputs", "").strip()
+            passphrase  = request.form.get("passphrase", "").strip()
+            csv_file    = request.files.get("csv_file")
+            if csv_file and csv_file.filename:
+                outputs_raw = csv_file.read().decode()
+            outputs, errors = _parse_csv_outputs(outputs_raw)
+            if errors:
+                ctx["alert_err"] = "<br>".join(errors)
+            elif not outputs:
+                ctx["alert_err"] = "No valid outputs."
+            else:
+                _submit_and_alert(node, outputs, passphrase, ctx)
+                if ctx["alert_ok"]:
+                    ctx["alert_ok"] = ctx["alert_ok"].replace("Submitted.", "Sent.")
+        return render_template("send.html", **ctx)
+
+    @app.route("/burn", methods=["GET", "POST"])
+    def burn():
+        v = node.view
+        balance      = v.state.get_balance(node.addr)
+        bw           = v.burn_window
+        pool_totals  = bw.pool_totals()
+        burn_totals  = bw.sender_totals()
+        tip_hash_int = pob_mod._tip_hash_int(v.chain)
+        ctx = dict(title="Burn", from_addr=node.addr, balance=balance,
+                   my_burn=burn_totals.get(node.addr, 0),
+                   my_score=bw.score(tip_hash_int, node.addr),
+                   total_burn=sum(pool_totals.values()),
+                   sorted_burners=sorted(burn_totals.items(), key=lambda x: -x[1]),
+                   sorted_pools=sorted(pool_totals.items(), key=lambda x: -x[1]),
+                   burn_history=bw.history(),
+                   scores={addr: bw.score(tip_hash_int, addr) for addr in pool_totals},
+                   pob_window=POB_WINDOW, alert_ok="", alert_err="")
+        if request.method == "POST":
+            raw        = request.form.get("amount", "").strip()
+            passphrase = request.form.get("passphrase", "").strip()
+            try:
+                burn_rings = int(raw)
+                if burn_rings <= 0:
+                    raise ValueError("must be positive")
+            except ValueError as e:
+                ctx["alert_err"] = f"Invalid amount: {e}"
+            else:
+                if burn_rings > balance:
+                    ctx["alert_err"] = "Insufficient balance."
+                else:
+                    beneficiary = request.form.get("beneficiary", "").strip() or node.addr
+                    if not crypto_mod.is_valid_address(beneficiary):
+                        beneficiary = node.addr
+                    burn_out = {"to": BURN_ADDRESS, "amount": burn_rings}
+                    if beneficiary != node.addr:
+                        burn_out["beneficiary"] = beneficiary
+                    _submit_and_alert(node, [burn_out], passphrase, ctx)
+        return render_template("burn.html", **ctx)
+
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():
-        denied = _localhost_only()
-        if denied:
-            return denied
         data = request.get_json()
         if data and "host" in data and "port" in data:
             pool.add(f"{data['host']}:{data['port']}")
