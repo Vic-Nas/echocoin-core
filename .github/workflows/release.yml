@@ -169,6 +169,10 @@ jobs:
           cmake --install C:/liboqs/build
           echo "C:\liboqs\install\bin" >> $env:GITHUB_PATH
 
+      - name: Install Visual C++ redistributable
+        run: choco install vcredist140 --no-progress -y
+        shell: pwsh
+
       - name: Install dependencies
         run: |
           pip install -r requirements.txt

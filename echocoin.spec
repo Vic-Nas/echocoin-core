@@ -31,12 +31,21 @@ for _root in _search_roots:
     if _liboqs_bins:
         break
 
-_py_dir = os.path.dirname(sys.executable)
-_msvc_dlls = [
-    (p, ".")
-    for pattern in ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll")
-    for p in glob.glob(os.path.join(_py_dir, pattern))
-]
+# Search multiple locations for MSVC runtime DLLs (no-op on Linux).
+_msvc_dlls = []
+if sys.platform == "win32":
+    _msvc_search = [
+        os.path.dirname(sys.executable),
+        os.path.join(os.environ.get("SystemRoot", "C:/Windows"), "System32"),
+        os.path.join(os.environ.get("SystemRoot", "C:/Windows"), "SysWOW64"),
+    ]
+    for _pat in ("vcruntime140.dll", "vcruntime140_1.dll", "msvcp140.dll",
+                 "concrt140.dll"):
+        for _root in _msvc_search:
+            for _p in glob.glob(os.path.join(_root, _pat)):
+                if os.path.isfile(_p) and (_p, ".") not in _msvc_dlls:
+                    _msvc_dlls.append((_p, "."))
+                    break
 
 _all_binaries = [
     *nacl_binaries, *cffi_binaries, *oqs_binaries,
