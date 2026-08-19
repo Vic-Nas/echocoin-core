@@ -27,6 +27,7 @@
   nav .brand { font-weight: 700; color: var(--accent); font-size: 1.1rem; letter-spacing: .05em; }
   nav a { color: var(--muted); font-size: .85rem; }
   nav a:hover { color: var(--text); text-decoration: none; }
+  nav a.nav-disabled { color: #2e3340; pointer-events: none; cursor: default; }
   .page { max-width: 1100px; margin: 0 auto; padding: 1.5rem; }
   .card { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 1rem 1.25rem; margin-bottom: 1rem; }
   .card-title { font-size: .7rem; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); margin-bottom: .5rem; }
@@ -78,8 +79,17 @@
 <nav>
   <span class="brand">ECHOCOIN</span>
   <a href="/">Dashboard</a>
+  {% if is_private %}
   <a href="/send">Send</a>
   <a href="/burn">Burn</a>
+  {% else %}
+  <a class="nav-disabled" title="Only available on localhost:{{ private_port }}">Send</a>
+  <a class="nav-disabled" title="Only available on localhost:{{ private_port }}">Burn</a>
+  {% endif %}
+  <a href="/explorer">Explorer</a>
+  <a href="/address">Address</a>
+  <a href="/stats">Stats</a>
+  <a href="/whitepaper">Whitepaper</a>
   <a href="/explorer">Explorer</a>
   <a href="/address">Address</a>
   <a href="/stats">Stats</a>

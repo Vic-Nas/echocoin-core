@@ -182,7 +182,7 @@ def _strike_sender(pool, data):
 # ---------------------------------------------------------------------------
 
 
-def create_app(node, pool, net_in_q, discovery):
+def create_app(node, pool, net_in_q, discovery, private_port=8334, public_port=8333):
     app = Flask(__name__, template_folder="templates_html")
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate, fmt_score=fmt_score)
     app.logger.setLevel(logging.WARNING)
@@ -191,6 +191,10 @@ def create_app(node, pool, net_in_q, discovery):
 
     limiter = Limiter(get_remote_address, app=app, default_limits=[],
                       storage_uri="memory://")
+
+    @app.context_processor
+    def inject_is_private():
+        return {"is_private": False, "private_port": private_port, "public_port": public_port}
 
     # ---- UI pages --------------------------------------------------------
 
@@ -267,6 +271,16 @@ def create_app(node, pool, net_in_q, discovery):
     @app.route("/stats")
     def stats():
         return render_template("stats.html", title="Stats")
+
+    @app.route("/send")
+    def send_locked():
+        return render_template("error.html", title="Send",
+            message="Send is only available on the local interface."), 403
+
+    @app.route("/burn")
+    def burn_locked():
+        return render_template("error.html", title="Burn",
+            message="Burn is only available on the local interface."), 403
 
     # ---- JSON API --------------------------------------------------------
 
@@ -409,11 +423,94 @@ def create_app(node, pool, net_in_q, discovery):
 # Private app  —  bind to 127.0.0.1 only, never exposed via Funnel
 # ---------------------------------------------------------------------------
 
-def create_private_app(node, pool):
-    """Minimal Flask app for wallet actions. Must only be bound to 127.0.0.1."""
+def create_private_app(node, pool, private_port=8334, public_port=8333):
+    """Full-featured Flask app for local use. Must only be bound to 127.0.0.1.
+    Serves all read-only pages plus Send/Burn so the owner never has to switch ports."""
     app = Flask(__name__, template_folder="templates_html")
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate, fmt_score=fmt_score)
     app.logger.setLevel(logging.WARNING)
+
+    @app.context_processor
+    def inject_is_private():
+        return {"is_private": True, "private_port": private_port, "public_port": public_port}
+
+    # ---- Read-only UI pages (same as public app) -------------------------
+
+    @app.route("/")
+    def dashboard():
+        info = node.get_info()
+        chain = node.view.chain
+        return render_template("dashboard.html", title="Dashboard",
+            info=info, tip=chain[-1], recent_blocks=chain[-10:][::-1])
+
+    @app.route("/explorer")
+    def explorer():
+        return render_template("explorer.html", title="Explorer",
+            recent=node.view.chain[-20:][::-1])
+
+    @app.route("/explorer/block/<int:height>")
+    def block_detail(height):
+        chain = node.view.chain
+        if height < 0 or height >= len(chain):
+            return render_template("error.html", title="Not found",
+                message="Block not found."), 404
+        b = chain[height]
+        tx_rows = [(tx_mod.tx_hash(t), t, sum(o["amount"] for o in t["outputs"]))
+                   for t in b["transactions"]]
+        return render_template("block_detail.html", title=f"Block {height}",
+            b=b, tx_rows=tx_rows, has_next=height + 1 < len(chain))
+
+    @app.route("/explorer/tx/<tx_hash>")
+    def tx_detail(tx_hash):
+        found = found_height = None
+        height = node.storage.get_tx_height(tx_hash)
+        if height is not None:
+            chain = node.view.chain
+            if 0 <= height < len(chain):
+                for t in chain[height]["transactions"]:
+                    if tx_mod.tx_hash(t) == tx_hash:
+                        found, found_height = t, height
+                        break
+        if not found:
+            found = node.mempool.get(tx_hash)
+        if not found:
+            return render_template("error.html", title="Not found",
+                message="Transaction not found."), 404
+        location = f"Block {found_height}" if found_height is not None else "Mempool (unconfirmed)"
+        return render_template("tx_detail.html", title="Transaction",
+            tx_hash=tx_hash, tx=found, location=location)
+
+    @app.route("/address", methods=["GET", "POST"])
+    def address_lookup():
+        addr = request.args.get("addr", "").strip()
+        ctx = dict(title="Address", addr=addr, alert_err="", history=None,
+                   balance=0, nonce=0)
+        if addr and not crypto_mod.is_valid_address(addr):
+            ctx["alert_err"] = "Invalid address format."
+            ctx["addr"] = ""
+        elif addr:
+            v = node.view
+            ctx["balance"] = v.state.get_balance(addr)
+            ctx["nonce"]   = v.state.get_nonce(addr)
+            ctx["history"] = _get_address_history(addr, node)
+        return render_template("address.html", **ctx)
+
+    @app.route("/whitepaper")
+    def whitepaper():
+        base    = getattr(__import__("sys"), "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        wp_path = os.path.join(base, "docs", "whitepaper.md")
+        try:
+            with open(wp_path) as f:
+                rendered = markdown.markdown(f.read(), extensions=["fenced_code", "tables"])
+        except FileNotFoundError:
+            rendered = "<p>whitepaper.md not found.</p>"
+        return render_template("whitepaper.html", title="Whitepaper", rendered=rendered)
+
+    @app.route("/stats")
+    def stats():
+        return render_template("stats.html", title="Stats")
+
+    # ---- Wallet pages ----------------------------------------------------
 
     @app.route("/send", methods=["GET", "POST"])
     def send():
@@ -476,6 +573,8 @@ def create_private_app(node, pool):
                         burn_out["beneficiary"] = beneficiary
                     _submit_and_alert(node, [burn_out], passphrase, ctx)
         return render_template("burn.html", **ctx)
+
+    # ---- Private API -----------------------------------------------------
 
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():

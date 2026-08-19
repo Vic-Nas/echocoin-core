@@ -121,15 +121,16 @@ def main():
 
     threading.Thread(target=discovery.run, daemon=True).start()
 
-    app = create_app(node, pool, net_in_q, discovery)
+    private_port = args.private_port if args.private_port else args.port + 1
+
+    app = create_app(node, pool, net_in_q, discovery, private_port=private_port, public_port=args.port)
     threading.Thread(
         target=lambda: app.run(host=args.host, port=args.port, threaded=True),
         daemon=True,
     ).start()
     log.info("[startup] public API on http://%s:%d", args.host, args.port)
 
-    private_port = args.private_port if args.private_port else args.port + 1
-    private_app = create_private_app(node, pool)
+    private_app = create_private_app(node, pool, private_port=private_port, public_port=args.port)
     threading.Thread(
         target=lambda: private_app.run(host="127.0.0.1", port=private_port, threaded=True),
         daemon=True,
