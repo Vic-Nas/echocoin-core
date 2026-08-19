@@ -76,7 +76,15 @@ When omitted, the beneficiary defaults to the sender. Burns tagged to a benefici
 contributor_share = reward * contributor_burns / total_burns_to_beneficiary
 ```
 
-This enables voluntary burn pools without any protocol-level pooling mechanism: contributors choose a beneficiary they trust to run a well-connected node, burn on their behalf, and receive rewards proportional to their contribution when that node wins. Crucially, burn weight is address-specific and non-transferable -- a pool operator cannot aggregate the scores of members or redirect burn weight to another address. The block reward is split among actual contributors, not concentrated at the operator. A participant who distrusts the operator can stop tagging burns at any time; their weight expires out of the 500-block window within ~17 hours.
+This enables voluntary burn pools without any protocol-level pooling mechanism: contributors choose a beneficiary they trust to run a well-connected node, burn on their behalf, and receive rewards proportional to their contribution when that node wins. To protect the block builder from being locked out of their own reward by third-party contributors, the builder always receives a guaranteed 2% base cut of the block reward. The remaining 98% is split proportionally among contributors:
+
+```
+builder_cut        = max(1, reward * 2 / 100)
+remainder          = reward - builder_cut
+contributor_share  = remainder * contributor_burns / total_burns_to_beneficiary
+```
+
+The builder's guaranteed cut is merged with their proportional contributor share if they also contributed burns. Crucially, burn weight is address-specific and non-transferable -- a pool operator cannot aggregate the scores of members or redirect burn weight to another address. A participant who distrusts the operator can stop tagging burns at any time; their weight expires out of the 500-block window within ~17 hours.
 
 **Fork resolution.** Two nodes may complete the VDF at roughly the same time and broadcast competing blocks for the same slot. Both blocks may be structurally valid. Nodes select the block whose builder has the lower PoB score. This is deterministic and locally computable without coordination. If scores are equal (hash coincidence), the lower block hash breaks the tie.
 
@@ -88,7 +96,7 @@ cumulative_score(chain) = sum of score(builder_i) for all blocks i > 0
 
 A chain built by nodes with real burn commitments will always have a lower cumulative score than one built by a botnet whose denominator stays at 1. The attacker's chain is objectively and locally rejectable, with no voting or peer trust required.
 
-**History rewriting.** An attacker wishing to rewrite block N must recompute the VDF sequentially for every block from N to the present -- that takes as long in real time as the honest network took. They must also produce competitive PoB scores for each rewritten block, which requires burning real coins proportional to the honest network's burn history. Both constraints must be overcome simultaneously.
+**History rewriting.** An attacker wishing to rewrite block N must recompute the VDF sequentially for every block from N to the present -- that takes as long in real time as the honest network took. The VDF is the binding constraint: no amount of parallelism or capital can compress it. PoB scores on a private fork can be freely manipulated using coins minted on that fork, so they do not add independent protection against rewriting. The honest chain advances continuously while the attacker rewrites, widening the gap permanently.
 
 Every valid block received from a peer is immediately rebroadcast to all other peers. This ensures that nodes behind NAT or with limited connectivity participate in propagation through well-connected peers.
 
@@ -125,7 +133,7 @@ reward(block)     = int(can_mint * (1 - EMISSION_RATE))
 
 `can_mint` starts at the full supply cap and decreases as coins are minted. Both fee burns and intentional PoB burns are added back into `can_mint`, so network activity -- whether transactional or burn-based -- replenishes the mintable pool and sustains block rewards indefinitely. At low usage, emission decays smoothly toward zero. At high usage, burns partially offset emission, keeping net supply stable.
 
-The full block reward goes to the node that built the accepted block. Because block-building priority is determined by burn history rather than hardware, running more nodes does not increase a participant's share. Burn weight is personal and non-transferable: a pool operator cannot aggregate the burn scores of contributing members. The pooling incentive that centralized Bitcoin mining does not exist here.
+The block reward is distributed among contributors to the winning builder's burn pool (see Section 3). The builder always retains a guaranteed 2% base cut. Because block-building priority is determined by burn history rather than hardware, running more nodes does not increase a participant's share. Burn weight is personal and non-transferable: a pool operator cannot aggregate the burn scores of contributing members or redirect weight to another address. Contributors who distrust an operator can exit within ~17 hours as their burns age out of the scoring window.
 
 ## 6. Privacy and Security
 
@@ -149,11 +157,11 @@ The full block history is stored permanently. Balance state is always recoverabl
 
 **Competing chain against an active network.** A botnet that attempts to build an alternative chain without burning real coins produces blocks with `denominator = 1` and therefore very large scores. The honest network, whose participants have accumulated burn weight over 500-block windows, produces blocks with far lower scores. The honest chain's cumulative score is always lower, and every node independently rejects the botnet's chain without coordination.
 
-**Majority VDF attack.** VDF sequentiality means a majority of nodes produce blocks at the same rate as a single honest node. Acquiring a majority of sequential compute does not help an attacker rewrite history faster. Combined with PoB, any rewritten chain also requires proportional real burns, making the attack doubly costly.
+**Majority VDF attack.** VDF sequentiality means a majority of nodes produce blocks at the same rate as a single honest node. Acquiring a majority of sequential compute does not help an attacker rewrite history faster. The VDF time cost is the sole binding constraint on history rewriting.
 
 **Transaction censorship.** Even a majority of burners only wins roughly that fraction of slots by score lottery. The honest minority wins the remaining slots and includes censored transactions. The probabilistic acceptance mechanism further penalizes repeated exclusion.
 
-**Deep history rewriting offline.** VDF makes all history equally costly to rewrite per block. An attacker working offline against an old fork point must recompute one VDF per block sequentially, plus produce competitive burns for each rewritten block -- an insurmountable cost for any chain of meaningful length.
+**Deep history rewriting offline.** VDF makes all history equally costly to rewrite per block. An attacker working offline against an old fork point must recompute one VDF per block sequentially -- an insurmountable time cost for any chain of meaningful length. The honest chain keeps advancing during any rewrite attempt, so the attacker can never catch up without a faster VDF implementation than commodity hardware.
 
 **Whale dominance and the decay window.** A participant who burns a large amount early cannot hold a permanent advantage. Burns older than 500 blocks (~17 hours) fall out of the scoring window. Sustained block-building priority requires sustained burning, aligning incentives with ongoing network participation rather than one-time capital expenditure.
 
@@ -161,7 +169,7 @@ The full block history is stored permanently. Balance state is always recoverabl
 
 ## 9. Conclusion
 
-Echocoin inherits Bitcoin's guarantee: no trust required, everything verifiable, no authority can reverse a transaction. It replaces proof-of-work with a Verifiable Delay Function that anchors the chain to real elapsed time and Proof-of-Burn that anchors block-building rights to real economic commitment. Supply is bounded by a 21 million ECH cap with smooth exponential decay over a 20-year half-life, sustained indefinitely by fee and intentional burns recycled into future emission. No halvings, no fee manipulation incentive, no energy waste, no pool advantage, no botnet vulnerability.
+Echocoin inherits Bitcoin's guarantee: no trust required, everything verifiable, no authority can reverse a transaction. It replaces proof-of-work with a Verifiable Delay Function that anchors the chain to real elapsed time and Proof-of-Burn that anchors block-building rights to real economic commitment. Supply is bounded by a 21 million ECH cap with smooth exponential decay over a 20-year half-life, sustained indefinitely by fee and intentional burns recycled into future emission. No halvings, no fee manipulation incentive, no energy waste, no botnet vulnerability. Voluntary burn pools are supported natively: contributors tag burns to a trusted node and share rewards proportionally, with a guaranteed 2% cut protecting the block builder from being locked out of their own reward.
 
 ## References
 

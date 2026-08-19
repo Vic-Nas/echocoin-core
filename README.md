@@ -1,17 +1,43 @@
 # Echocoin
 
-A peer-to-peer electronic cash system. Every participating node earns the full reward for every block it builds. No pools, no puzzle, no energy waste. Block timing is enforced by a Verifiable Delay Function anchored to real elapsed time. Fees are deterministic and burned. Signatures are quantum-resistant (FALCON-512).
+A peer-to-peer electronic cash system. Every participating node earns the full reward for every block it builds. Block timing is enforced by a Verifiable Delay Function anchored to real elapsed time. Fees are deterministic and burned. Signatures are quantum-resistant (FALCON-512). Voluntary burn pools are supported natively with a guaranteed 2% cut for the block builder to prevent hijacking by pool contributors.
 
-See [docs/whitepaper.md](docs/whitepaper.md) for the protocol specification and [docs/FLOW.md](docs/FLOW.md) for a walkthrough of the node's internals.
+See [docs/whitepaper.md](docs/whitepaper.md) for the full protocol specification.
 
-## Quickstart
+## Installation
+
+**Recommended: use a pre-built release.** Building from source requires native libraries (liboqs, chiavdf) that involve complex C/C++ compilation and can produce DLL or shared library errors depending on your platform. The release binaries on the [releases page](https://github.com/Vic-Nas/echocoin-core/releases) are self-contained and require no dependencies.
+
+Download the binary for your platform and run it directly:
+
+```
+# Linux
+chmod +x echocoin.AppImage
+./echocoin.AppImage
+
+# Windows
+echocoin.exe
+```
+
+### Running from source
+
+If you need to run from source, Python 3.11+ is required along with the native build dependencies for your platform.
 
 ```
 pip install -r requirements.txt
 python main.py
 ```
 
-Open `http://localhost:8333` for the node UI. On first run a FALCON-512 keypair is generated and you are prompted for a passphrase to encrypt it.
+## Ports
+
+Echocoin runs two HTTP servers:
+
+| Port | Interface | Purpose |
+|---|---|---|
+| `8333` (or `--port`) | `0.0.0.0` | Public node UI and peer API. Safe to expose. Send and Burn are disabled. |
+| `port+1` (or `--private-port`) | `127.0.0.1` | Private wallet UI. Never expose this. Full access including Send and Burn. |
+
+Open `http://localhost:8334` for your personal wallet interface. Open `http://localhost:8333` (or your public address) for the block explorer. The private port is always one above the public port unless overridden with `--private-port`.
 
 ## Passphrase
 
@@ -40,15 +66,18 @@ The `--passphrase` CLI flag has been removed. It was visible in process listings
 
 | Option | Default | Description |
 |---|---|---|
-| `--host` | `0.0.0.0` | Interface to bind |
-| `--port` | `8333` | Port for HTTP API and peer connections |
+| `--host` | `0.0.0.0` | Interface to bind for the public port |
+| `--port` | `8333` | Public port for HTTP API and peer connections |
+| `--private-port` | `port+1` | Private port for wallet UI. Always bound to 127.0.0.1. |
 | `--keyfile` | `echocoin_key.json` | Path to encrypted keypair |
 | `--db` | `echocoin_chain.db` | Path to SQLite chain database |
 | `--peer host:port` | - | Bootstrap peer (repeatable) |
 | `--max-peers` | `125` | Hard cap on peer table size |
 | `--log-level` | `INFO` | Verbosity: DEBUG, INFO, WARNING, ERROR |
 
-## Building a standalone binary
+## Building from source
+
+Pre-built releases are strongly preferred. If you must build from source:
 
 ```
 pip install pyinstaller cairosvg Pillow
@@ -56,11 +85,11 @@ make linux    # on Linux
 make windows  # on Windows
 ```
 
-Produces `dist/echocoin` with no Python dependency. Icons are regenerated from `echocoin.svg` before each build.
+Produces a self-contained binary in `dist/`. Building requires cmake, ninja, and a C compiler for the native dependencies. On Windows, liboqs and MSVC redistributables must be present.
 
 ## Requirements
 
 - Python 3.11+
 - chiavdf (VDF computation and verification)
-- pqcrypto (FALCON-512 signatures)
+- liboqs-python (FALCON-512 signatures)
 - See `requirements.txt` for the full list
