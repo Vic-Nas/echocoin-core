@@ -47,6 +47,17 @@ if sys.platform == "win32":
                     _msvc_dlls.append((_p, "."))
                     break
 
+    # chiavdf installs as a single top-level .pyd (not a package directory),
+    # so collect_all/collect_dynamic_libs silently skips its native DLLs.
+    # Delvewheel places the mpir DLLs directly in site-packages next to the
+    # .pyd for top-level extension modules, so we grab them explicitly here.
+    import site
+    for _sp in site.getsitepackages():
+        for _pat in ("mpir*.dll", "chiavdf*.dll"):
+            for _p in glob.glob(os.path.join(_sp, _pat)):
+                if os.path.isfile(_p) and (_p, ".") not in _msvc_dlls:
+                    _msvc_dlls.append((_p, "."))
+
 _all_binaries = [
     *nacl_binaries, *cffi_binaries, *oqs_binaries,
     *chiavdf_binaries, *_liboqs_bins, *_msvc_dlls,
