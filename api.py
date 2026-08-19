@@ -576,6 +576,18 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
 
     # ---- Private API -----------------------------------------------------
 
+    @app.route("/api/stats")
+    def api_stats():
+        v  = node.view
+        sv = v.state
+        return jsonify({"points": node.stats.points, "totals": {
+            "minted":      sv.total_minted,
+            "burned_fees": sv.total_burnt,
+            "circulating": sv.total_minted - sv.total_burnt,
+            "can_mint":    max(0, SUPPLY_CAP - sv.total_minted + sv.total_burnt),
+            "rings_per_ech": RINGS_PER_ECH,
+        }})
+
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():
         data = request.get_json()
