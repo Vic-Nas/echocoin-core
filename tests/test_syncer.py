@@ -55,25 +55,25 @@ class TestCheckAndSync:
 
     def test_info_request_fails_returns_false(self):
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
-        udp.request_sync.return_value = None
+        udp.get_info.return_value = None
         assert syncer.check_and_sync(chain_of(3), apply_fn=MagicMock()) is False
         pool.strike.assert_called_once()
 
     def test_peer_not_ahead_returns_false(self):
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
-        udp.request_sync.return_value = wrap_info(height=2)
+        udp.get_info.return_value = {"height": 2, "tip_hash": ""}
         local = chain_of(5)
         assert syncer.check_and_sync(local, apply_fn=MagicMock()) is False
 
     def test_fork_point_none_returns_false(self):
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
-        udp.request_sync.return_value = wrap_info(height=10)
+        udp.get_info.return_value = {"height": 10, "tip_hash": ""}
         with patch.object(syncer, "_find_fork_point", return_value=None):
             assert syncer.check_and_sync(chain_of(2), apply_fn=MagicMock()) is False
 
     def test_empty_tail_returns_false(self):
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
-        udp.request_sync.return_value = wrap_info(height=10)
+        udp.get_info.return_value = {"height": 10, "tip_hash": ""}
         with patch.object(syncer, "_find_fork_point", return_value=0):
             with patch.object(syncer, "_fetch_chain", return_value=None):
                 assert syncer.check_and_sync(chain_of(2), apply_fn=MagicMock()) is False
@@ -83,7 +83,7 @@ class TestCheckAndSync:
         local = chain_of(2)
         remote_tail = chain_of(5)[1:]
         apply_fn = MagicMock(return_value=True)
-        udp.request_sync.return_value = wrap_info(height=4)
+        udp.get_info.return_value = {"height": 4, "tip_hash": "aa" * 32}
         with patch.object(syncer, "_find_fork_point", return_value=1):
             with patch.object(syncer, "_fetch_chain", return_value=remote_tail):
                 result = syncer.check_and_sync(local, apply_fn=apply_fn)
