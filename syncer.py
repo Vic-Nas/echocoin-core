@@ -1,32 +1,27 @@
-"""Periodic chain sync. Compares local tip with a random peer,
-fetches their chain if they are ahead.
+"""Periodic chain sync over UDP.
 
-No threads of its own. Called by the node loop once per N cycles.
+Replaces the HTTP-based syncer. Uses UDPTransport.request_sync() which
+sends a GETSYNC message and waits for the chunked SYNC response.
+
+The sync logic (fork-point search, apply) is identical to before.
+Only the transport calls change.
 """
 
 import logging
 
-import requests
-
 log = logging.getLogger("ec.syncer")
 
-FETCH_CHAIN_MAX_BLOCKS = 50_000
+FETCH_CHUNK = 500   # blocks per GETSYNC request
 
 
 class Syncer:
 
-    def __init__(self, pool):
+    def __init__(self, pool, udp):
         self.pool = pool
+        self.udp  = udp
 
     def check_and_sync(self, local_chain, apply_fn):
-        """Pick a random peer, compare tip, sync if they have a better chain.
-
-        local_chain:  list of block dicts (the node's current chain)
-        apply_fn:     callable(chain) -> bool, called with the fetched chain
-
-        Finds the common ancestor by binary-searching the peer's chain using
-        the local tip hash, so only the differing tail is fetched rather than
-        the entire chain from block 0.
+        """Pick a random peer, compare tip, sync if they are ahead.
 
         Returns True if the chain was updated.
         """
@@ -34,22 +29,28 @@ class Syncer:
         if not peer:
             log.debug("[sync] no peers available")
             return False
-        try:
-            r = requests.get(f"http://{peer}/api/info", timeout=3)
-            if r.status_code != 200:
-                log.debug("[sync] info fetch failed  peer=%s  status=%d", peer, r.status_code)
-                return False
-            info = r.json()
-        except Exception as e:
-            log.debug("[sync] info fetch error  peer=%s  err=%s", peer, e)
+
+        # Ask peer for their tip info (height + hash of last block)
+        # request_sync returns the decoded payload dict: {"genesis": ..., "chain": ...}
+        resp = self.udp.request_sync(peer, from_h=-1, to_h=-1, timeout=5)
+        if resp is None:
+            log.debug("[sync] info request failed  peer=%s", peer)
             self.pool.strike(peer)
             return False
 
-        remote_height = info.get("height", 0)
-        local_height  = len(local_chain) - 1
+        info = resp.get("chain") if isinstance(resp, dict) else None
+        if isinstance(info, dict) and "height" in info:
+            remote_height = info["height"]
+        elif isinstance(info, list) and len(info) == 0:
+            return False
+        else:
+            log.debug("[sync] unexpected info response  peer=%s  resp=%s", peer, type(resp))
+            self.pool.strike(peer)
+            return False
 
-        if remote_height < local_height:
-            log.debug("[sync] peer not ahead  peer=%s  remote_h=%d  local_h=%d",
+        local_height = len(local_chain) - 1
+        if remote_height <= local_height:
+            log.debug("[sync] peer not ahead  peer=%s  remote=%d  local=%d",
                       peer, remote_height, local_height)
             return False
 
@@ -58,89 +59,59 @@ class Syncer:
             log.warning("[sync] fork point search failed  peer=%s", peer)
             return False
 
-        log.info("[sync] peer %s at height=%d  local=%d  fork_from=%d  fetching",
+        log.info("[sync] peer=%s remote=%d local=%d fork_from=%d fetching",
                  peer, remote_height, local_height, fork_from)
 
-        tail = self._fetch_chain(peer, from_h=fork_from)
+        tail = self._fetch_chain(peer, fork_from, remote_height)
         if not tail:
-            log.warning("[sync] chain fetch returned empty  peer=%s  from_h=%d", peer, fork_from)
+            log.warning("[sync] fetch returned empty  peer=%s", peer)
             return False
 
-        # Reconstruct the full chain: trusted local prefix + fetched tail.
         full_chain = local_chain[:fork_from] + tail
         return apply_fn(full_chain)
 
-    def _find_fork_point(self, peer_addr, local_chain):
-        """Return the height of the first block to fetch from the peer.
-
-        Binary-searches for the common ancestor: the highest height where
-        both chains share the same block hash. Returns that height + 1
-        (the first block we need from the peer), or 0 if genesis diverges.
-        Returns None on network error.
-
-        Cost: O(log n) round trips instead of O(n) for a deep reorg.
-        For a node that is just a few blocks behind, the first probe at
-        the local tip usually hits and costs exactly one round trip.
-        """
+    def _find_fork_point(self, peer, local_chain):
+        """Binary search for common ancestor. O(log n) round trips."""
         lo, hi = 0, len(local_chain) - 1
-        result = None   # highest confirmed common height
+        result = None
 
         while lo <= hi:
             mid = (lo + hi) // 2
             local_hash = local_chain[mid]["hash"]
-            try:
-                r = requests.get(
-                    f"http://{peer_addr}/api/chain",
-                    params={"from": mid, "to": mid},
-                    timeout=10,
-                )
-                if r.status_code != 200:
-                    log.debug("[sync] fork search HTTP error  peer=%s  height=%d  status=%d",
-                              peer_addr, mid, r.status_code)
-                    return None
-                page = r.json()
-                if not isinstance(page, list) or not page:
-                    log.debug("[sync] fork search bad response  peer=%s  height=%d", peer_addr, mid)
-                    return None
-            except Exception as e:
-                log.debug("[sync] fork search exception  peer=%s  height=%d  err=%s",
-                          peer_addr, mid, e)
+
+            resp = self.udp.request_sync(peer, from_h=mid, to_h=mid, timeout=10)
+            if resp is None:
+                log.debug("[sync] fork search failed  peer=%s  height=%d", peer, mid)
+                return None
+            page = resp.get("chain") if isinstance(resp, dict) else None
+            if not isinstance(page, list) or not page:
+                log.debug("[sync] fork search failed  peer=%s  height=%d", peer, mid)
                 return None
 
-            if page[0].get("hash") == local_hash:
-                result = mid   # this height is shared; look higher
+            if resp[0].get("hash") == local_hash:
+                result = mid
                 lo = mid + 1
             else:
-                hi = mid - 1   # diverged at or before mid; look lower
+                hi = mid - 1
 
-        # result is the highest shared height, or None if genesis diverges.
         return (result + 1) if result is not None else 0
 
-    def _fetch_chain(self, peer_addr, from_h=0):
-        """Paginated chain fetch starting from from_h. Returns list of block dicts or None."""
-        try:
-            chain = []
-            while True:
-                r = requests.get(
-                    f"http://{peer_addr}/api/chain",
-                    params={"from": from_h, "to": from_h + 499},
-                    timeout=30,
-                )
-                if r.status_code != 200:
-                    log.warning("[sync] fetch page HTTP error  peer=%s  from=%d  status=%d",
-                                peer_addr, from_h, r.status_code)
-                    break
-                page = r.json()
-                if not isinstance(page, list) or not page:
-                    log.debug("[sync] fetch page empty  peer=%s  from=%d", peer_addr, from_h)
-                    break
-                chain.extend(page)
-                if len(chain) >= FETCH_CHAIN_MAX_BLOCKS:
-                    break
-                if len(page) < 500:
-                    break
-                from_h += 500
-            return chain or None
-        except Exception as e:
-            log.warning("[sync] fetch chain exception  peer=%s  err=%s", peer_addr, e)
-            return None
+    def _fetch_chain(self, peer, from_h, remote_height):
+        """Fetch chain in FETCH_CHUNK-block pages."""
+        chain = []
+        h = from_h
+        while h <= remote_height:
+            to_h = min(h + FETCH_CHUNK - 1, remote_height)
+            resp = self.udp.request_sync(peer, from_h=h, to_h=to_h, timeout=30)
+            if resp is None:
+                log.warning("[sync] fetch page empty  peer=%s  from_h=%d", peer, h)
+                break
+            page = resp.get("chain") if isinstance(resp, dict) else None
+            if not isinstance(page, list) or not page:
+                log.warning("[sync] fetch page empty  peer=%s  from_h=%d", peer, h)
+                break
+            chain.extend(page)
+            if len(page) < FETCH_CHUNK:
+                break
+            h += FETCH_CHUNK
+        return chain or None

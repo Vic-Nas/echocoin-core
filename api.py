@@ -1,34 +1,34 @@
-"""HTTP API + node UI. Thin wrapper over node + pool. No HTML here.
+"""HTTP API + node UI. Browser-facing only — peer communication is now UDP.
 
-All endpoints are read-only except /api/submit_tx, /api/receive_tx, and
-/api/receive_block. Flask runs in multiple threads; all reads go through
-node.view (a GIL-atomic snapshot) or node.pool (thread-safe). Writes use
-node.submit_tx_from_api() which serialises through the node loop via a queue.
-
-Endpoint map:
+Endpoint map (public, port 8333):
   GET  /                         -- dashboard (HTML)
   GET  /explorer                 -- block explorer (HTML)
-  GET  /address/<addr>           -- address detail (HTML)
-  GET  /block/<hash_or_height>   -- block detail (HTML)
-  GET  /tx/<tx_hash>             -- tx detail (HTML)
+  GET  /explorer/block/<height>  -- block detail (HTML)
+  GET  /explorer/tx/<hash>       -- tx detail (HTML)
+  GET  /address                  -- address lookup (HTML)
   GET  /whitepaper               -- whitepaper (HTML)
-  GET  /burn                     -- burn leaderboard + form (HTML)
-  GET  /send                     -- send form (HTML)
   GET  /stats                    -- stats page (HTML)
-  GET  /api/info                 -- node info JSON (used by peers for genesis check)
-  GET  /api/chain                -- paginated chain JSON
-  GET  /api/peers                -- peer list JSON
-  GET  /api/mempool              -- pending txs JSON
-  POST /api/submit_tx            -- submit a signed tx
-  POST /api/receive_tx           -- inbound tx relay from a peer
-  POST /api/receive_block        -- inbound block from a peer
+  GET  /send                     -- disabled (grayed out on public port)
+  GET  /burn                     -- disabled (grayed out on public port)
+  GET  /api/info                 -- node info JSON (human/explorer use)
+  GET  /api/fee_rate             -- current fee rate
+  GET  /api/block/<height>       -- block JSON
+  GET  /api/tx/<hash>            -- tx JSON
+  GET  /api/address/<addr>/balance
+  GET  /api/address/<addr>/history
+  GET  /api/mempool              -- pending txs
+  GET  /api/stats                -- economics chart data
+  POST /api/tx/send              -- submit signed tx
+
+Private app (port 8334, 127.0.0.1 only):
+  Same UI pages + /send + /burn + /api/peers/add
 """
 
 import logging
 import os
 
 import markdown
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, redirect, render_template, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -38,6 +38,15 @@ import tx as tx_mod
 from params import POB_WINDOW, RINGS_PER_ECH, SUPPLY_CAP
 from pob import BURN_ADDRESS
 
+from pydantic import BaseModel, field_validator, model_validator
+from pydantic import ValidationError as PydanticValidationError
+
+log = logging.getLogger("ec.api")
+
+
+# ---------------------------------------------------------------------------
+# Formatting helpers
+# ---------------------------------------------------------------------------
 
 def fmt_balance(rings):
     ech = rings // RINGS_PER_ECH
@@ -46,7 +55,6 @@ def fmt_balance(rings):
 
 
 def fmt_score(score):
-    """Abbreviate large PoB scores for display: 3.01e26, 1.2e18, etc."""
     if score == 0:
         return "0"
     import math
@@ -64,45 +72,19 @@ def fmt_fee_rate(rings_per_byte):
     return f"{ech:.2e} ECH/byte"
 
 
-from pydantic import BaseModel, field_validator, model_validator
-from pydantic import ValidationError as PydanticValidationError
-
-log = logging.getLogger("ec.api")
-
-
-class _BlockIn(BaseModel):
-    model_config = {"extra": "allow"}
-    height: int
-    previous_hash: str
-    hash: str
-    timestamp: float
-    transactions: list
-    builder: str | None = None
-    fee_rate: int
-    vdf_output: str | None = None
-    vdf_proof: str | None = None
-
-    @field_validator("height")
-    @classmethod
-    def height_non_negative(cls, v):
-        if v < 0:
-            raise ValueError("height must be non-negative")
-        return v
-
-    @model_validator(mode="after")
-    def validate_transactions(self):
-        for t in self.transactions:
-            if not isinstance(t, dict) or not _TX_REQUIRED_FIELDS.issubset(t):
-                raise ValueError("malformed transaction in block")
-        return self
-
 # ---------------------------------------------------------------------------
-# Helpers
+# Validation models (used only for /api/tx/send now)
 # ---------------------------------------------------------------------------
 
-_TX_REQUIRED_FIELDS = {"from", "pubkey", "outputs", "nonce", "fee_height", "fee", "signature"}
+_TX_REQUIRED_FIELDS = {"from", "pubkey", "outputs", "nonce",
+                        "fee_height", "fee", "signature"}
+
+
+# ---------------------------------------------------------------------------
+# Shared helpers
+# ---------------------------------------------------------------------------
+
 def _get_address_history(addr, node):
-    """Return list of (height, tx_hash, direction, tx_dict) for addr."""
     v = node.view
     history = []
     for h_height, h in node.storage.get_tx_heights_for_addr(addr):
@@ -117,26 +99,32 @@ def _get_address_history(addr, node):
 
 
 def _parse_csv_outputs(outputs_raw):
-    """Parse 'address,amount' CSV lines. Returns (outputs, errors)."""
     outputs, errors = [], []
-    for i, line in enumerate(outputs_raw.splitlines()):
+    for i, line in enumerate(outputs_raw.strip().splitlines(), 1):
         line = line.strip()
         if not line or line.startswith("#"):
             continue
-        parts = [p.strip() for p in line.split(",")]
+        parts = line.split(",")
         if len(parts) != 2:
-            errors.append(f"line {i+1}: expected 'address,amount'")
+            errors.append(f"Line {i}: expected 'address,amount'")
+            continue
+        addr, amt_str = parts[0].strip(), parts[1].strip()
+        if not crypto_mod.is_valid_address(addr):
+            errors.append(f"Line {i}: invalid address")
             continue
         try:
-            outputs.append({"to": parts[0], "amount": int(parts[1])})
+            amt = int(amt_str)
+            if amt <= 0:
+                raise ValueError("must be positive")
         except ValueError:
-            errors.append(f"line {i+1}: amount must be an integer")
+            errors.append(f"Line {i}: invalid amount '{amt_str}'")
+            continue
+        outputs.append({"to": addr, "amount": amt})
     return outputs, errors
 
 
 def _submit_and_alert(node, outputs, passphrase, ctx):
-    """Build, sign, and submit a tx. Sets ctx alert_ok or alert_err in place."""
-    if not passphrase and not node.is_signing_active():
+    if not passphrase:
         ctx["alert_err"] = "Passphrase required (leave blank if mining loop is active)."
         return
     try:
@@ -151,50 +139,15 @@ def _submit_and_alert(node, outputs, passphrase, ctx):
         ctx["alert_err"] = f"Error: {e}"
 
 
-def _parse_sender(data):
-    port = data.get("sender_port")
-    if port is None:
-        return None
-    try:
-        port_int = int(port)
-        if not 1 <= port_int <= 65535:
-            return None
-        return f"{request.remote_addr}:{port_int}"
-    except (TypeError, ValueError):
-        return None
-
-
-def _register_sender(discovery, data):
-    addr = _parse_sender(data)
-    if addr:
-        discovery.enqueue_candidate(addr)
-
-
-def _strike_sender(pool, data):
-    addr = _parse_sender(data)
-    if addr:
-        pool.strike(addr)
-
-
-
-# ---------------------------------------------------------------------------
-# App factory
-# ---------------------------------------------------------------------------
-
-
-def create_app(node, pool, net_in_q, discovery, private_port=8334, public_port=8333):
-    app = Flask(__name__, template_folder="templates_html")
-    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate, fmt_score=fmt_score)
-    app.logger.setLevel(logging.WARNING)
-    # Enable werkzeug access log so requests appear in node output
-    logging.getLogger("werkzeug").setLevel(logging.INFO)
-
-    limiter = Limiter(get_remote_address, app=app, default_limits=[],
-                      storage_uri="memory://")
+def _shared_read_only_routes(app, node, pool, limiter,
+                              private_port, public_port, is_private):
+    """Register all read-only UI and API routes on app."""
 
     @app.context_processor
-    def inject_is_private():
-        return {"is_private": False, "private_port": private_port, "public_port": public_port}
+    def inject_ctx():
+        return {"is_private": is_private,
+                "private_port": private_port,
+                "public_port": public_port}
 
     # ---- UI pages --------------------------------------------------------
 
@@ -238,15 +191,16 @@ def create_app(node, pool, net_in_q, discovery, private_port=8334, public_port=8
         if not found:
             return render_template("error.html", title="Not found",
                 message="Transaction not found."), 404
-        location = f"Block {found_height}" if found_height is not None else "Mempool (unconfirmed)"
+        location = (f"Block {found_height}"
+                    if found_height is not None else "Mempool (unconfirmed)")
         return render_template("tx_detail.html", title="Transaction",
             tx_hash=tx_hash, tx=found, location=location)
 
     @app.route("/address", methods=["GET", "POST"])
     def address_lookup():
         addr = request.args.get("addr", "").strip()
-        ctx = dict(title="Address", addr=addr, alert_err="", history=None,
-                   balance=0, nonce=0)
+        ctx = dict(title="Address", addr=addr, alert_err="",
+                   history=None, balance=0, nonce=0)
         if addr and not crypto_mod.is_valid_address(addr):
             ctx["alert_err"] = "Invalid address format."
             ctx["addr"] = ""
@@ -259,42 +213,23 @@ def create_app(node, pool, net_in_q, discovery, private_port=8334, public_port=8
 
     @app.route("/whitepaper")
     def whitepaper():
-        base    = getattr(__import__("sys"), "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+        base    = getattr(__import__("sys"), "_MEIPASS",
+                          os.path.dirname(os.path.abspath(__file__)))
         wp_path = os.path.join(base, "docs", "whitepaper.md")
         try:
             with open(wp_path) as f:
-                rendered = markdown.markdown(f.read(), extensions=["fenced_code", "tables"])
+                rendered = markdown.markdown(
+                    f.read(), extensions=["fenced_code", "tables"])
         except FileNotFoundError:
             rendered = "<p>whitepaper.md not found.</p>"
-        return render_template("whitepaper.html", title="Whitepaper", rendered=rendered)
+        return render_template("whitepaper.html", title="Whitepaper",
+                               rendered=rendered)
 
     @app.route("/stats")
     def stats():
         return render_template("stats.html", title="Stats")
 
-    @app.route("/send")
-    def send_locked():
-        return render_template("error.html", title="Send",
-            message="Send is only available on the local interface."), 403
-
-    @app.route("/burn")
-    def burn_locked():
-        return render_template("error.html", title="Burn",
-            message="Burn is only available on the local interface."), 403
-
-    # ---- JSON API --------------------------------------------------------
-
-    @app.route("/api/stats")
-    def api_stats():
-        v  = node.view
-        sv = v.state
-        return jsonify({"points": node.stats.points, "totals": {
-            "minted":      sv.total_minted,
-            "burned_fees": sv.total_burnt,
-            "circulating": sv.total_minted - sv.total_burnt,
-            "can_mint":    max(0, SUPPLY_CAP - sv.total_minted + sv.total_burnt),
-            "rings_per_ech": RINGS_PER_ECH,
-        }})
+    # ---- JSON API (read-only) --------------------------------------------
 
     @app.route("/api/info")
     def api_info():
@@ -311,32 +246,6 @@ def create_app(node, pool, net_in_q, discovery, private_port=8334, public_port=8
         if 0 <= height < len(chain):
             return jsonify(chain[height])
         return jsonify({"error": "not found"}), 404
-
-    @app.route("/api/chain")
-    def api_chain():
-        try:
-            from_height = int(request.args.get("from", 0))
-            to_height   = int(request.args.get("to", from_height + 500))
-        except (TypeError, ValueError):
-            return jsonify({"error": "from and to must be integers"}), 400
-        to_height = min(to_height, from_height + 500)
-        chain = node.view.chain
-        return jsonify([b for b in chain if from_height <= b["height"] <= to_height])
-
-    @app.route("/api/chain/tip")
-    def api_chain_tip():
-        return jsonify(node.view.chain[-1])
-
-    @app.route("/api/tx/send", methods=["POST"])
-    @limiter.limit("20 per second")
-    def api_send_tx():
-        data = request.get_json()
-        if not data:
-            return jsonify({"ok": False, "error": "no JSON body"}), 400
-        ok, result = node.submit_tx_from_api(data)
-        if ok:
-            return jsonify({"ok": True, "tx_hash": result})
-        return jsonify({"ok": False, "error": result}), 400
 
     @app.route("/api/tx/<tx_hash_val>")
     def api_get_tx(tx_hash_val):
@@ -376,147 +285,87 @@ def create_app(node, pool, net_in_q, discovery, private_port=8334, public_port=8
             {"hash": tx_mod.tx_hash(t), "from": t["from"],
              "outputs": t["outputs"], "fee": t["fee"]} for t in txs]})
 
-    @app.route("/api/receive_block", methods=["POST"])
-    @limiter.limit("10 per second")
-    def api_recv_block():
-        data = request.get_json()
-        if not data or "block" not in data:
-            return jsonify({"ok": False, "error": "missing block"}), 400
-        try:
-            blk = _BlockIn.model_validate(data["block"]).model_dump()
-        except PydanticValidationError as e:
-            log.warning("[api] malformed block from %s: %s",
-                        request.remote_addr, str(e)[:120])
-            _strike_sender(pool, data)
-            return jsonify({"ok": False, "error": "malformed block"}), 400
-        net_in_q.put({"type": "block", "block": blk})
-        _register_sender(discovery, data)
-        return jsonify({"ok": True})
+    @app.route("/api/stats")
+    def api_stats():
+        v  = node.view
+        sv = v.state
+        return jsonify({"points": node.stats.points, "totals": {
+            "minted":      sv.total_minted,
+            "burned_fees": sv.total_burnt,
+            "circulating": sv.total_minted - sv.total_burnt,
+            "can_mint":    max(0, SUPPLY_CAP - sv.total_minted + sv.total_burnt),
+            "rings_per_ech": RINGS_PER_ECH,
+        }})
 
-    @app.route("/api/receive_tx", methods=["POST"])
+    @app.route("/api/tx/send", methods=["POST"])
     @limiter.limit("20 per second")
-    def api_recv_tx():
-        # Validated and enqueued via node loop; errors logged there.
+    def api_send_tx():
         data = request.get_json()
-        if not data or "tx" not in data:
-            return jsonify({"ok": False, "error": "missing tx"}), 400
-        tx_dict = data.get("tx")
-        if not isinstance(tx_dict, dict):
-            return jsonify({"ok": False, "error": "invalid tx"}), 400
-        h = tx_mod.tx_hash(tx_dict)
-        if node.mark_tx_seen(h):
-            return jsonify({"ok": True})
-        net_in_q.put({"type": "tx", "tx": tx_dict,
-                      "relay_type": data.get("type", "tx_fluff"),
-                      "remaining_hops": data.get("remaining_hops", 0)})
-        return jsonify({"ok": True})
+        if not data:
+            return jsonify({"ok": False, "error": "no JSON body"}), 400
+        ok, result = node.submit_tx_from_api(data)
+        if ok:
+            return jsonify({"ok": True, "tx_hash": result})
+        return jsonify({"ok": False, "error": result}), 400
 
-    @app.route("/api/peers")
-    def api_peers():
-        addrs = pool.all_addrs()
-        return jsonify({"count": len(addrs), "peers": addrs})
+
+# ---------------------------------------------------------------------------
+# Public app factory  (port 8333)
+# ---------------------------------------------------------------------------
+
+def create_app(node, pool, private_port=8334, public_port=8333):
+    app = Flask(__name__, template_folder="templates_html")
+    app.jinja_env.globals.update(
+        fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate, fmt_score=fmt_score)
+    app.logger.setLevel(logging.WARNING)
+    logging.getLogger("werkzeug").setLevel(logging.INFO)
+
+    limiter = Limiter(get_remote_address, app=app, default_limits=[],
+                      storage_uri="memory://")
+
+    _shared_read_only_routes(app, node, pool, limiter,
+                             private_port, public_port, is_private=False)
+
+    # Send/Burn disabled on public port — show locked page
+    @app.route("/send")
+    def send_locked():
+        return render_template("error.html", title="Send",
+            message=f"Send is only available on the local interface "
+                    f"(localhost:{private_port})."), 403
+
+    @app.route("/burn")
+    def burn_locked():
+        return render_template("error.html", title="Burn",
+            message=f"Burn is only available on the local interface "
+                    f"(localhost:{private_port})."), 403
 
     return app
 
 
 # ---------------------------------------------------------------------------
-# Private app  —  bind to 127.0.0.1 only, never exposed via Funnel
+# Private app factory  (port 8334, 127.0.0.1 only)
 # ---------------------------------------------------------------------------
 
 def create_private_app(node, pool, private_port=8334, public_port=8333):
-    """Full-featured Flask app for local use. Must only be bound to 127.0.0.1.
-    Serves all read-only pages plus Send/Burn so the owner never has to switch ports."""
+    """Full-featured app for local use. Never expose via Funnel or public port."""
     app = Flask(__name__, template_folder="templates_html")
-    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate, fmt_score=fmt_score)
+    app.jinja_env.globals.update(
+        fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate, fmt_score=fmt_score)
     app.logger.setLevel(logging.WARNING)
 
-    @app.context_processor
-    def inject_is_private():
-        return {"is_private": True, "private_port": private_port, "public_port": public_port}
+    limiter = Limiter(get_remote_address, app=app, default_limits=[],
+                      storage_uri="memory://")
 
-    # ---- Read-only UI pages (same as public app) -------------------------
-
-    @app.route("/")
-    def dashboard():
-        info = node.get_info()
-        chain = node.view.chain
-        return render_template("dashboard.html", title="Dashboard",
-            info=info, tip=chain[-1], recent_blocks=chain[-10:][::-1])
-
-    @app.route("/explorer")
-    def explorer():
-        return render_template("explorer.html", title="Explorer",
-            recent=node.view.chain[-20:][::-1])
-
-    @app.route("/explorer/block/<int:height>")
-    def block_detail(height):
-        chain = node.view.chain
-        if height < 0 or height >= len(chain):
-            return render_template("error.html", title="Not found",
-                message="Block not found."), 404
-        b = chain[height]
-        tx_rows = [(tx_mod.tx_hash(t), t, sum(o["amount"] for o in t["outputs"]))
-                   for t in b["transactions"]]
-        return render_template("block_detail.html", title=f"Block {height}",
-            b=b, tx_rows=tx_rows, has_next=height + 1 < len(chain))
-
-    @app.route("/explorer/tx/<tx_hash>")
-    def tx_detail(tx_hash):
-        found = found_height = None
-        height = node.storage.get_tx_height(tx_hash)
-        if height is not None:
-            chain = node.view.chain
-            if 0 <= height < len(chain):
-                for t in chain[height]["transactions"]:
-                    if tx_mod.tx_hash(t) == tx_hash:
-                        found, found_height = t, height
-                        break
-        if not found:
-            found = node.mempool.get(tx_hash)
-        if not found:
-            return render_template("error.html", title="Not found",
-                message="Transaction not found."), 404
-        location = f"Block {found_height}" if found_height is not None else "Mempool (unconfirmed)"
-        return render_template("tx_detail.html", title="Transaction",
-            tx_hash=tx_hash, tx=found, location=location)
-
-    @app.route("/address", methods=["GET", "POST"])
-    def address_lookup():
-        addr = request.args.get("addr", "").strip()
-        ctx = dict(title="Address", addr=addr, alert_err="", history=None,
-                   balance=0, nonce=0)
-        if addr and not crypto_mod.is_valid_address(addr):
-            ctx["alert_err"] = "Invalid address format."
-            ctx["addr"] = ""
-        elif addr:
-            v = node.view
-            ctx["balance"] = v.state.get_balance(addr)
-            ctx["nonce"]   = v.state.get_nonce(addr)
-            ctx["history"] = _get_address_history(addr, node)
-        return render_template("address.html", **ctx)
-
-    @app.route("/whitepaper")
-    def whitepaper():
-        base    = getattr(__import__("sys"), "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-        wp_path = os.path.join(base, "docs", "whitepaper.md")
-        try:
-            with open(wp_path) as f:
-                rendered = markdown.markdown(f.read(), extensions=["fenced_code", "tables"])
-        except FileNotFoundError:
-            rendered = "<p>whitepaper.md not found.</p>"
-        return render_template("whitepaper.html", title="Whitepaper", rendered=rendered)
-
-    @app.route("/stats")
-    def stats():
-        return render_template("stats.html", title="Stats")
-
-    # ---- Wallet pages ----------------------------------------------------
+    _shared_read_only_routes(app, node, pool, limiter,
+                             private_port, public_port, is_private=True)
 
     @app.route("/send", methods=["GET", "POST"])
     def send():
         v = node.view
-        ctx = dict(title="Send", from_addr=node.addr, balance=v.state.get_balance(node.addr),
-                   nonce=v.state.get_nonce(node.addr) + 1, fee_rate=v.tip["fee_rate"],
+        ctx = dict(title="Send", from_addr=node.addr,
+                   balance=v.state.get_balance(node.addr),
+                   nonce=v.state.get_nonce(node.addr) + 1,
+                   fee_rate=v.tip["fee_rate"],
                    alert_ok="", alert_err="")
         if request.method == "POST":
             outputs_raw = request.form.get("outputs", "").strip()
@@ -565,7 +414,8 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
                 if burn_rings > balance:
                     ctx["alert_err"] = "Insufficient balance."
                 else:
-                    beneficiary = request.form.get("beneficiary", "").strip() or node.addr
+                    beneficiary = (request.form.get("beneficiary", "").strip()
+                                   or node.addr)
                     if not crypto_mod.is_valid_address(beneficiary):
                         beneficiary = node.addr
                     burn_out = {"to": BURN_ADDRESS, "amount": burn_rings}
@@ -573,20 +423,6 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
                         burn_out["beneficiary"] = beneficiary
                     _submit_and_alert(node, [burn_out], passphrase, ctx)
         return render_template("burn.html", **ctx)
-
-    # ---- Private API -----------------------------------------------------
-
-    @app.route("/api/stats")
-    def api_stats():
-        v  = node.view
-        sv = v.state
-        return jsonify({"points": node.stats.points, "totals": {
-            "minted":      sv.total_minted,
-            "burned_fees": sv.total_burnt,
-            "circulating": sv.total_minted - sv.total_burnt,
-            "can_mint":    max(0, SUPPLY_CAP - sv.total_minted + sv.total_burnt),
-            "rings_per_ech": RINGS_PER_ECH,
-        }})
 
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():

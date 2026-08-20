@@ -1,15 +1,12 @@
-"""Outbound message broadcasting and Dandelion tx relay.
+"""Outbound block/tx broadcasting over UDP.
 
-Reads PeerPool for peer addresses. Does HTTP POSTs. No queues,
-no threads of its own (uses short-lived thread pools for fan-out).
+Replaces HTTP POST gossip. Uses UDPTransport.send_block() and send_tx().
+Dandelion stem/fluff logic is unchanged — only the transport differs.
 """
 
 import logging
 import threading
 from cachetools import LRUCache
-from concurrent.futures import ThreadPoolExecutor
-
-import requests
 
 import tx as tx_mod
 
@@ -17,25 +14,20 @@ log = logging.getLogger("ec.gossip")
 
 STEM_HOPS          = 4
 SEEN_TX_CACHE_SIZE = 50_000
-BROADCAST_TIMEOUT  = 2
 
 
 class Gossip:
 
-    def __init__(self, pool, port):
+    def __init__(self, pool, udp):
         self.pool     = pool
-        self.port     = port
+        self.udp      = udp
         self._seen_tx = LRUCache(maxsize=SEEN_TX_CACHE_SIZE)
         self._lock    = threading.Lock()
 
     # ---- Public API (called by Node) ----
 
     def broadcast_block(self, block):
-        self._broadcast("/api/receive_block", {
-            "type":        "block",
-            "block":       block,
-            "sender_port": self.port,
-        })
+        self.udp.send_block(block)
 
     def relay_tx(self, tx_dict):
         h = tx_mod.tx_hash(tx_dict)
@@ -59,34 +51,7 @@ class Gossip:
         if remaining_hops > 0:
             peer = self.pool.random()
             if peer:
-                self._send(peer, "/api/receive_tx", {
-                    "type": "tx_stem", "tx": tx_dict,
-                    "remaining_hops": remaining_hops - 1,
-                })
+                self.udp.send_tx(tx_dict, peers=[peer])
                 return
-        self._broadcast("/api/receive_tx", {"type": "tx_fluff", "tx": tx_dict})
-
-    # ---- Internals ----
-
-    def _broadcast(self, endpoint, data):
-        peers = self.pool.get_all()
-        if not peers:
-            return
-        with ThreadPoolExecutor(max_workers=min(len(peers), 64)) as ex:
-            for p in peers:
-                ex.submit(self._send, p, endpoint, data)
-
-    def _send(self, peer_addr, endpoint, data):
-        try:
-            requests.post(
-                f"http://{peer_addr}{endpoint}", json=data, timeout=BROADCAST_TIMEOUT
-            )
-            self.pool.touch(peer_addr)
-        except requests.exceptions.Timeout:
-            log.debug("[gossip] send timed out  peer=%s", peer_addr)
-            self.pool.strike(peer_addr)
-        except requests.exceptions.ConnectionError:
-            log.debug("[gossip] connection refused  peer=%s", peer_addr)
-            self.pool.strike(peer_addr)
-        except Exception:
-            log.debug("[gossip] send error  peer=%s", peer_addr, exc_info=True)
+        # Fluff: broadcast to all
+        self.udp.send_tx(tx_dict)

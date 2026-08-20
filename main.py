@@ -1,4 +1,4 @@
-"""Entry point. Creates PeerPool, Discovery, Gossip, Syncer, Node, API."""
+"""Entry point. Creates PeerPool, UDPTransport, Discovery, Gossip, Syncer, Node, API."""
 
 import argparse
 import getpass
@@ -16,6 +16,7 @@ from discovery import Discovery
 from gossip import Gossip
 from node import Node
 from params import DB_PATH
+from peer_udp import UDPTransport
 from peerpool import PeerPool
 from syncer import Syncer
 
@@ -26,10 +27,14 @@ logging.basicConfig(
 logging.getLogger("ec").setLevel(logging.INFO)
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
+
 class _WerkzeugFilter(logging.Filter):
     def filter(self, record):
         msg = record.getMessage()
-        return "BitTorrent" not in msg and "Bad request version" not in msg and "Bad HTTP" not in msg
+        return ("BitTorrent" not in msg and
+                "Bad request version" not in msg and
+                "Bad HTTP" not in msg)
+
 
 logging.getLogger("werkzeug").addFilter(_WerkzeugFilter())
 logging.getLogger("urllib3").setLevel(logging.WARNING)
@@ -37,11 +42,6 @@ log = logging.getLogger("ec.main")
 
 
 def _resolve_passphrase(prompt):
-    """Return a passphrase string from ECHOCOIN_PASSPHRASE env var or interactive prompt.
-    Non-interactive deployments (Docker, systemd) set ECHOCOIN_PASSPHRASE.
-    Interactive sessions are prompted via getpass (no shell-history exposure).
-    --passphrase CLI flag has been removed; it was visible in process listings.
-    """
     env_pass = os.environ.get("ECHOCOIN_PASSPHRASE")
     if env_pass:
         return env_pass
@@ -49,9 +49,6 @@ def _resolve_passphrase(prompt):
 
 
 def _load_or_create_key(keyfile):
-    """Load or create a FALCON-512 keypair. Returns (public_key_bytes, kek).
-    The KEK (key-encryption key) is kept in memory; the passphrase is dropped.
-    """
     if not os.path.exists(keyfile):
         print("No key file found. Creating new FALCON-512 keypair.")
         passphrase = _resolve_passphrase("New passphrase: ")
@@ -73,7 +70,6 @@ def _load_or_create_key(keyfile):
         del sk_test
     except ValueError as e:
         sys.exit(f"Error: {e}")
-    addr = crypto.public_key_to_address(pk)
     log.info("[startup] key loaded  file=%s", keyfile)
     del passphrase
     return pk, kek
@@ -88,31 +84,70 @@ def main():
     parser.add_argument("--peer",       action="append", default=[])
     parser.add_argument(
         "--private-port", type=int, default=None,
-        help="Port for private API (send/burn). Defaults to --port+1. Never expose via Funnel.",
+        help="Port for private API (send/burn). Defaults to --port+1.",
     )
     parser.add_argument(
         "--max-peers", type=int, default=params.MAX_PEERS,
-        help="Hard cap on peer table size (default %(default)s).",
     )
     parser.add_argument(
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
-        help="Logging verbosity (default: INFO).",
     )
     args = parser.parse_args()
     logging.getLogger("ec").setLevel(getattr(logging, args.log_level))
 
     pk, kek = _load_or_create_key(args.keyfile)
-
     genesis  = block_mod.create_genesis()
     pk_hex   = pk.hex()
 
-    pool      = PeerPool(args.host, args.port, max_peers=args.max_peers)
-    gossip    = Gossip(pool, args.port)
-    syncer    = Syncer(pool)
-    net_in_q  = queue.Queue()
-    discovery = Discovery(pool, genesis["hash"], args.port, pk_hex)
+    pool     = PeerPool(args.host, args.port, max_peers=args.max_peers)
+    net_in_q = queue.Queue()
+
+    # ------------------------------------------------------------------
+    # UDP transport — single socket for all peer communication
+    # ------------------------------------------------------------------
+    def on_block(block, sender_addr):
+        net_in_q.put({"type": "block", "block": block, "sender": sender_addr})
+
+    def on_tx(tx, sender_addr, msg_id):
+        net_in_q.put({"type": "tx", "tx": tx,
+                      "relay_type": "tx_fluff", "remaining_hops": 0})
+
+    def on_peers(peer_list, sender_addr):
+        for p in peer_list:
+            if isinstance(p, str) and ":" in p:
+                discovery.enqueue_candidate(p)
+        pool.touch(sender_addr)
+
+    udp = UDPTransport(
+        port=args.port,
+        genesis_hash=genesis["hash"],
+        on_block=on_block,
+        on_tx=on_tx,
+        on_peers=on_peers,
+        pool=pool,
+    )
+    udp.start()
+    log.info("[startup] UDP transport on port %d", args.port)
+
+    # ------------------------------------------------------------------
+    # Gossip, Syncer, Discovery, Node
+    # ------------------------------------------------------------------
+    gossip    = Gossip(pool, udp)
+    syncer    = Syncer(pool, udp)
+    discovery = Discovery(udp, pool, genesis["hash"], args.port, pk_hex)
     node      = Node(args.keyfile, pk, gossip, syncer, pool, net_in_q, db_path=args.db)
+
+    def _chain_provider(from_h, to_h):
+        if from_h == -1:
+            # Info request — return tip metadata only
+            chain = node.view.chain
+            return {"height": len(chain) - 1, "tip_hash": chain[-1]["hash"]}
+        chain = node.view.chain
+        end = (to_h + 1) if to_h is not None else None
+        return chain[from_h:end]
+
+    udp.set_chain_provider(_chain_provider)
 
     for peer in args.peer:
         parts = peer.split(":")
@@ -121,21 +156,26 @@ def main():
 
     threading.Thread(target=discovery.run, daemon=True).start()
 
+    # ------------------------------------------------------------------
+    # HTTP servers — browser UI only, no peer routes
+    # ------------------------------------------------------------------
     private_port = args.private_port if args.private_port else args.port + 1
 
-    app = create_app(node, pool, net_in_q, discovery, private_port=private_port, public_port=args.port)
+    app = create_app(node, pool,
+                     private_port=private_port, public_port=args.port)
     threading.Thread(
         target=lambda: app.run(host=args.host, port=args.port, threaded=True),
         daemon=True,
     ).start()
     log.info("[startup] public API on http://%s:%d", args.host, args.port)
 
-    private_app = create_private_app(node, pool, private_port=private_port, public_port=args.port)
+    private_app = create_private_app(node, pool,
+                                     private_port=private_port, public_port=args.port)
     threading.Thread(
         target=lambda: private_app.run(host="127.0.0.1", port=private_port, threaded=True),
         daemon=True,
     ).start()
-    log.info("[startup] private API on http://127.0.0.1:%d (send/burn/peers)", private_port)
+    log.info("[startup] private API on http://127.0.0.1:%d (send/burn)", private_port)
     log.info("[startup] genesis=%s", genesis["hash"][:12])
 
     if pool.count() > 0:
@@ -149,6 +189,7 @@ def main():
     except KeyboardInterrupt:
         log.info("[shutdown] stopped")
         node.stop()
+        udp.stop()
 
 
 def _prompt_new_passphrase(first=None):
