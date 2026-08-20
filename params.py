@@ -35,10 +35,19 @@ INITIAL_FEE_RATE = 10     # rings/byte; low start, fee formula rises under load
 POB_WINDOW = 500
 
 # VDF iteration count tuned to ~120 seconds of sequential computation on
-# commodity hardware. Must be calibrated empirically before genesis and
-# cannot change after launch without breaking chain identity.
+# commodity hardware. Must be calibrated empirically before genesis.
 # Placeholder: replace with measured value before mainnet.
 VDF_ITERATIONS = 170_000_000  # calibrated: ~120s
+
+# VDF difficulty adjustment. The iteration count can only increase over time
+# as hardware gets faster. Adjustment happens every VDF_ADJUST_INTERVAL blocks
+# using the median reported evaluation time across that window.
+# If median < VDF_ADJUST_MIN_SECONDS, iterations increase by VDF_ADJUST_FACTOR.
+# Iterations never decrease -- faster hardware means shorter block times until
+# the next upward adjustment, never a security regression.
+VDF_ADJUST_INTERVAL    = 1000   # blocks between adjustments
+VDF_ADJUST_MIN_SECONDS = 100    # trigger increase if median falls below this
+VDF_ADJUST_FACTOR      = 1.02   # max 2% increase per adjustment period
 
 # Genesis message. Embedded in block 0 and hashed into the genesis block hash.
 # Cannot change after launch without breaking network identity.

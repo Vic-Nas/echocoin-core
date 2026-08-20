@@ -343,19 +343,25 @@ class Node:
         # to tx submissions and peer messages during the ~120s evaluation.
         import concurrent.futures as _cf
         accumulated_blocks = []
+        iterations = block_mod.get_vdf_iterations(cs.chain)
         with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-            _fut = _pool.submit(vdf_mod.evaluate, bytes.fromhex(cs.tip["hash"]))
+            _fut = _pool.submit(vdf_mod.evaluate,
+                                bytes.fromhex(cs.tip["hash"]), iterations)
             while not _fut.done():
                 accumulated_blocks += self._drain_queue(timeout=1)
-            vdf_out, vdf_proof = _fut.result()
-        log.info("[vdf] proof ready  height=%d", cs.height + 1)
+            vdf_out, vdf_proof, vdf_seconds = _fut.result()
+        log.info("[vdf] proof ready  height=%d  seconds=%.1f  iterations=%d",
+                 cs.height + 1, vdf_seconds, iterations)
 
         fee_rate   = block_mod.compute_expected_fee_rate(cs.chain)
         sorted_txs = tx_mod.sort_txs(self.mempool.all_txs())
-        candidate  = block_mod.assemble(cs.tip, sorted_txs, self.addr, fee_rate)
-        candidate["vdf_output"] = vdf_out
-        candidate["vdf_proof"]  = vdf_proof
-        candidate["hash"]       = block_mod.block_hash(candidate)
+        candidate  = block_mod.assemble(cs.tip, sorted_txs, self.addr,
+                                        fee_rate, chain=cs.chain)
+        candidate["vdf_output"]    = vdf_out
+        candidate["vdf_proof"]     = vdf_proof
+        candidate["vdf_seconds"]   = round(vdf_seconds, 2)
+        candidate["vdf_iterations"] = iterations
+        candidate["hash"]          = block_mod.block_hash(candidate)
         self.gossip.broadcast_block(candidate)
 
         # Drain anything that arrived just as VDF completed, then pick winner.

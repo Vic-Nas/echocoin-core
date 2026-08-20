@@ -49,58 +49,62 @@ VDF_ITERATIONS must be measured on the target hardware before genesis:
 Cannot change after genesis without breaking chain identity.
 """
 
+import time
+
 import chiavdf
 
 from params import VDF_ITERATIONS
 
 # chiavdf constants for 1024-bit discriminant.
 DISC_SIZE_BITS = 1024
-FORM_SIZE      = 100        # BQFC_FORM_SIZE = (1024+31)//32*3+4
-N_WESOLOWSKI   = 0          # 0 = standard single Wesolowski proof, what prove() produces.
-                            # Values > 0 expect a recursively composed proof that prove()
-                            # does not emit -- using 2 was the bug causing "invalid VDF proof".
+FORM_SIZE      = 100
+N_WESOLOWSKI   = 0
 
-# Identity element in BQFC compressed form:
-# first byte = 0x04 (BQFC_IS_1 flag), remaining 99 bytes = 0x00.
-# Passed as raw bytes to both prove() and verify_n_wesolowski().
-_IDENTITY = b"\x04" + b"\x00" * (FORM_SIZE - 1)
+_IDENTITY = b"\\x04" + b"\\x00" * (FORM_SIZE - 1)
 
 
-def evaluate(challenge: bytes) -> tuple[bytes, bytes]:
+def evaluate(challenge: bytes,
+             iterations: int = VDF_ITERATIONS) -> tuple[bytes, bytes, float]:
     """Run the VDF. Blocks for approximately BLOCK_CYCLE_SECONDS.
 
-    challenge: raw bytes of the previous block hash (32 bytes).
-    Returns (output_hex, proof_hex) where each encodes FORM_SIZE=100 bytes.
-    Store both in the block; pass both to verify().
+    challenge:  raw bytes of the previous block hash (32 bytes).
+    iterations: number of sequential squarings. Defaults to VDF_ITERATIONS
+                but callers should pass the chain-determined value from
+                block.get_vdf_iterations(chain).
+    Returns (output_hex, proof_hex, elapsed_seconds).
+    Store output_hex and proof_hex in the block; elapsed_seconds goes into
+    vdf_seconds (informational, used for difficulty adjustment).
     """
+    t0     = time.monotonic()
     result = chiavdf.prove(
         challenge,
         _IDENTITY,
         DISC_SIZE_BITS,
-        VDF_ITERATIONS,
-        "",             # shutdown_file: "" = run to completion
+        iterations,
+        "",
     )
-    # result = SerializeForm(y) || SerializeForm(proof) = 200 bytes
-    output = result[:FORM_SIZE]
-    proof  = result[FORM_SIZE:]
-    return output.hex(), proof.hex()
+    elapsed = time.monotonic() - t0
+    output  = result[:FORM_SIZE]
+    proof   = result[FORM_SIZE:]
+    return output.hex(), proof.hex(), elapsed
 
 
-def verify(challenge: bytes, output: str, proof: str) -> bool:
+def verify(challenge: bytes, output: str, proof: str,
+           iterations: int = VDF_ITERATIONS) -> bool:
     """Verify a VDF proof. Returns in milliseconds.
 
-    challenge: raw bytes of the previous block hash.
+    challenge:  raw bytes of the previous block hash.
     output, proof: hex strings from evaluate() stored in the block.
-    Returns True if valid, False otherwise.
+    iterations: must match what was used during evaluate().
     """
     try:
         disc       = chiavdf.create_discriminant(challenge, DISC_SIZE_BITS)
-        proof_blob = bytes.fromhex(output) + bytes.fromhex(proof)   # must stay as bytes
+        proof_blob = bytes.fromhex(output) + bytes.fromhex(proof)
         return chiavdf.verify_n_wesolowski(
             disc,
             _IDENTITY,
             proof_blob,
-            VDF_ITERATIONS,
+            iterations,
             DISC_SIZE_BITS,
             N_WESOLOWSKI,
         )
