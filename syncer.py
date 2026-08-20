@@ -32,19 +32,16 @@ class Syncer:
 
         # Ask peer for their tip info (height + hash of last block)
         # request_sync returns the decoded payload dict: {"genesis": ..., "chain": ...}
-        resp = self.udp.request_sync(peer, from_h=-1, to_h=-1, timeout=5)
-        if resp is None:
+        info = self.udp.get_info(peer)
+        if info is None:
             log.debug("[sync] info request failed  peer=%s", peer)
             self.pool.strike(peer)
             return False
 
-        info = resp.get("chain") if isinstance(resp, dict) else None
         if isinstance(info, dict) and "height" in info:
             remote_height = info["height"]
-        elif isinstance(info, list) and len(info) == 0:
-            return False
         else:
-            log.debug("[sync] unexpected info response  peer=%s  resp=%s", peer, type(resp))
+            log.debug("[sync] unexpected info response  peer=%s  resp=%s", peer, type(info))
             self.pool.strike(peer)
             return False
 

@@ -61,6 +61,8 @@ MT_SYNC      = 0x07
 MT_ACK       = 0x08
 MT_PUNCH_REQ = 0x09
 MT_PUNCH_GO  = 0x0A
+MT_GETINFO   = 0x0B   # request peer tip info (height + hash)
+MT_INFO      = 0x0C   # response: {"height": N, "tip_hash": "..."}
 
 MAX_CHUNK_SIZE   = 1400   # bytes, safe below MTU
 RECV_TIMEOUT     = 2.0    # seconds select/recvfrom timeout
@@ -181,6 +183,9 @@ class UDPTransport:
         self._pong_events: dict[tuple, threading.Event] = {}
         self._pong_addrs: dict[tuple, str] = {}  # (addr, msg_id) -> observed addr
         self._pong_lock   = threading.Lock()
+        self._info_events: dict[int, threading.Event] = {}  # msg_id -> event
+        self._info_results: dict[int, dict] = {}            # msg_id -> info dict
+        self._info_lock   = threading.Lock()
 
         self.our_external_addr: str | None = None  # set from PONG responses
         self._ext_addr_votes: dict[str, int] = {}  # addr -> vote count
@@ -188,6 +193,7 @@ class UDPTransport:
         self._seen_lock = threading.Lock()
         self._executor  = ThreadPoolExecutor(max_workers=16, thread_name_prefix="udp-cb")
         self._on_punch_go = None  # set by discovery after init
+        self._get_tip_fn  = None  # set by main after node init
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -246,8 +252,7 @@ class UDPTransport:
         peers = self._pool.get_all()
         if not peers:
             return
-        log.debug("[udp] send_block height=%s to %d peers",
-                  block.get("height"), len(peers))
+        log.debug("[udp] send_block height=%s to %d peers", block.get("height"), len(peers))
         payload = _encode({"genesis": self.genesis_hash, "block": block})
         msg_id = self._new_msg_id()
         self._mark_seen(msg_id)
@@ -292,6 +297,24 @@ class UDPTransport:
             return pending.result
         with self._sync_lock:
             self._pending_sync.pop(msg_id, None)
+        return None
+
+    def get_info(self, addr: str, timeout: float = 8.0) -> dict | None:
+        """Request tip info from peer. Returns {"height": N, "tip_hash": "..."} or None."""
+        msg_id = self._new_msg_id()
+        ev     = threading.Event()
+        with self._info_lock:
+            self._info_events[msg_id] = ev
+        self._send_one(MT_GETINFO, msg_id,
+                       {"genesis": self.genesis_hash},
+                       self._addr_tuple(addr))
+        if ev.wait(timeout):
+            with self._info_lock:
+                result = self._info_results.pop(msg_id, None)
+                self._info_events.pop(msg_id, None)
+            return result
+        with self._info_lock:
+            self._info_events.pop(msg_id, None)
         return None
 
     def punch_via(self, relay_addr: str, target_addr: str):
@@ -392,7 +415,6 @@ class UDPTransport:
                     log.debug("[udp] recv_block height=%s from=%s",
                               block.get("height"), sender_addr)
                     self._on_block(block, sender_addr)
-                    # Re-broadcast to other peers
                     self._rebroadcast(MT_BLOCK, msg_id, data, exclude=sender_addr)
 
         elif msg_type == MT_TX:
@@ -414,7 +436,6 @@ class UDPTransport:
             target = data.get("target", "")
             if target:
                 log.debug("[udp] punch_go -> %s", target)
-                # Fire several UDP packets to open our NAT hole simultaneously
                 tgt = self._addr_tuple(target)
                 for _ in range(8):
                     try:
@@ -423,10 +444,27 @@ class UDPTransport:
                     except Exception:
                         pass
                     time.sleep(0.05)
-                # Notify discovery to immediately ping this target now that
-                # both NAT holes should be open
                 if self._on_punch_go:
                     self._on_punch_go(target)
+
+        elif msg_type == MT_GETINFO:
+            # Peer requesting our tip info — respond with height + tip hash
+            if self._get_tip_fn:
+                height, tip_hash = self._get_tip_fn()
+                self._send_one(MT_INFO, msg_id,
+                               {"genesis": self.genesis_hash,
+                                "height":   height,
+                                "tip_hash": tip_hash},
+                               sender)
+
+        elif msg_type == MT_INFO:
+            with self._info_lock:
+                if msg_id in self._info_events:
+                    self._info_results[msg_id] = {
+                        "height":   data.get("height"),
+                        "tip_hash": data.get("tip_hash", ""),
+                    }
+                    self._info_events[msg_id].set()
 
     def _handle_getsync(self, msg_id: int, data: dict, sender: tuple):
         """Serve a chain segment request. Calls back on_sync_request if set."""
@@ -492,6 +530,10 @@ class UDPTransport:
     def set_chain_provider(self, fn):
         """fn(from_h, to_h) -> list[block_dict]. Set by Node after init."""
         self._get_chain_fn = fn
+
+    def set_tip_provider(self, fn):
+        """fn() -> (height, tip_hash). Used for lightweight MT_GETINFO responses."""
+        self._get_tip_fn = fn
 
     def set_punch_go_callback(self, fn):
         """fn(addr) called when PUNCH_GO received — discovery should ping immediately."""

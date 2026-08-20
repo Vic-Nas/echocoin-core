@@ -32,7 +32,7 @@ VDF_ITERATIONS in params.py must be measured on target hardware before genesis:
 
   import chiavdf, hashlib, time
   challenge  = hashlib.sha256(b"echocoin_genesis").digest()
-  initial_el = b"\\x04" + b"\\x00" * 99
+  initial_el = bytes([0x04]) + bytes(99)
   t0         = time.time()
   chiavdf.prove(challenge, initial_el, 1024, 10_000, "")
   elapsed    = time.time() - t0

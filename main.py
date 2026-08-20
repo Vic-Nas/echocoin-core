@@ -139,15 +139,17 @@ def main():
     node      = Node(args.keyfile, pk, gossip, syncer, pool, net_in_q, db_path=args.db)
 
     def _chain_provider(from_h, to_h):
-        if from_h == -1:
-            # Info request — return tip metadata only
-            chain = node.view.chain
-            return {"height": len(chain) - 1, "tip_hash": chain[-1]["hash"]}
         chain = node.view.chain
-        end = (to_h + 1) if to_h is not None else None
+        end   = (to_h + 1) if to_h is not None else None
         return chain[from_h:end]
 
+    def _tip_provider():
+        chain = node.view.chain
+        tip   = chain[-1]
+        return tip.get("height", 0), tip.get("hash", "")
+
     udp.set_chain_provider(_chain_provider)
+    udp.set_tip_provider(_tip_provider)
 
     for peer in args.peer:
         parts = peer.split(":")
