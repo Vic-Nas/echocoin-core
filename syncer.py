@@ -49,10 +49,20 @@ class Syncer:
             return False
 
         local_height = len(local_chain) - 1
-        if remote_height <= local_height:
+        local_tip    = local_chain[-1]["hash"] if local_chain else ""
+
+        if remote_height < local_height:
             log.debug("[sync] peer not ahead  peer=%s  remote=%d  local=%d",
                       peer, remote_height, local_height)
             return False
+
+        if remote_height == local_height:
+            remote_tip = info.get("tip_hash", "")
+            if remote_tip == local_tip:
+                log.debug("[sync] already in sync  peer=%s  height=%d", peer, local_height)
+                return False
+            # Same height, different tip — competing chains, sync to compare
+            log.debug("[sync] same height different tip  peer=%s  height=%d", peer, local_height)
 
         fork_from = self._find_fork_point(peer, local_chain)
         if fork_from is None:

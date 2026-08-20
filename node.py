@@ -33,7 +33,7 @@ from storage import Storage
 log = logging.getLogger("ec.node")
 _rng = _secrets.SystemRandom()
 
-SYNC_EVERY_N_CYCLES = 3
+SYNC_EVERY_N_CYCLES = 1
 
 
 # ---------------------------------------------------------------------------
