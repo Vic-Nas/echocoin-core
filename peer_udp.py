@@ -183,6 +183,7 @@ class UDPTransport:
         self._pong_lock   = threading.Lock()
 
         self.our_external_addr: str | None = None  # set from PONG responses
+        self._ext_addr_votes: dict[str, int] = {}  # addr -> vote count
         self._seen_msg: dict[int, float] = {}      # msg_id -> ts for dedup
         self._seen_lock = threading.Lock()
         self._executor  = ThreadPoolExecutor(max_workers=16, thread_name_prefix="udp-cb")
@@ -228,6 +229,13 @@ class UDPTransport:
             with self._pong_lock:
                 result = self._pong_addrs.pop((target, msg_id), None)
                 self._pong_events.pop((target, msg_id), None)
+            # Vote on our external address — require 2 agreements before committing
+            if result:
+                self._ext_addr_votes[result] = self._ext_addr_votes.get(result, 0) + 1
+                if self._ext_addr_votes[result] >= 2:
+                    self.our_external_addr = result
+                elif self.our_external_addr is None:
+                    self.our_external_addr = result  # tentative until confirmed
             return result
         with self._pong_lock:
             self._pong_events.pop((target, msg_id), None)
@@ -238,6 +246,8 @@ class UDPTransport:
         peers = self._pool.get_all()
         if not peers:
             return
+        log.debug("[udp] send_block height=%s to %d peers",
+                  block.get("height"), len(peers))
         payload = _encode({"genesis": self.genesis_hash, "block": block})
         msg_id = self._new_msg_id()
         self._mark_seen(msg_id)
@@ -363,10 +373,7 @@ class UDPTransport:
                                sender)
 
         elif msg_type == MT_PONG:
-            # Update our external address from what peers see
             observed = data.get("observed", "")
-            if observed:
-                self.our_external_addr = observed
             with self._pong_lock:
                 key = (sender, msg_id)
                 if key in self._pong_events:
@@ -382,6 +389,8 @@ class UDPTransport:
                 self._pool.touch(sender_addr)
                 block = data.get("block")
                 if block:
+                    log.debug("[udp] recv_block height=%s from=%s",
+                              block.get("height"), sender_addr)
                     self._on_block(block, sender_addr)
                     # Re-broadcast to other peers
                     self._rebroadcast(MT_BLOCK, msg_id, data, exclude=sender_addr)
