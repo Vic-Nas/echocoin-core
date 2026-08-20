@@ -182,3 +182,25 @@ class TestFetchChain:
                                      remote_height=FETCH_CHUNK + 2)
         assert result is not None
         assert len(result) == FETCH_CHUNK + 3
+
+    def test_force_compare_fetches_even_when_peer_behind(self):
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        local = chain_of(3)  # local at height 2
+        remote_tail = chain_of(2)[1:]  # peer at height 1, different chain
+        apply_fn = MagicMock(return_value=True)
+        udp.get_info.return_value = {"height": 1, "tip_hash": "bb" * 32}
+        with patch.object(syncer, "_find_fork_point", return_value=0):
+            with patch.object(syncer, "_fetch_chain", return_value=remote_tail):
+                result = syncer.check_and_sync(local, apply_fn=apply_fn,
+                                               force_compare=True)
+        apply_fn.assert_called_once()
+
+    def test_no_force_compare_skips_when_peer_behind(self):
+        syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
+        local = chain_of(3)
+        apply_fn = MagicMock()
+        udp.get_info.return_value = {"height": 1, "tip_hash": "bb" * 32}
+        result = syncer.check_and_sync(local, apply_fn=apply_fn,
+                                       force_compare=False)
+        apply_fn.assert_not_called()
+        assert result is False

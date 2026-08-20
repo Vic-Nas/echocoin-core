@@ -370,10 +370,20 @@ class Node:
         # whatever is already in the queue without blocking.
         peer_blocks = accumulated_blocks + self._drain_queue()
         # Pass cs explicitly — self.cs may have advanced during drain if syncer fired.
-        winner, relay = self._pick_winner(cs, candidate, peer_blocks)
+        winner, relay, has_competing_tip = self._pick_winner(cs, candidate, peer_blocks)
         if winner is None:
             return
         self._commit(winner, relay=relay)
+
+        # If we saw a competing block at our current height, sync immediately
+        # to compare cumulative scores — don't wait for the next cycle.
+        if has_competing_tip:
+            log.debug("[vdf] competing tip seen — triggering immediate sync")
+            self.syncer.check_and_sync(
+                self.cs.chain,
+                lambda chain: self.apply_better_chain(chain)[0],
+                force_compare=True,
+            )
 
     def _pick_winner(self, cs, candidate, peer_blocks):
         """Return (best_block, relay). relay=True means it came from a peer.
@@ -386,8 +396,13 @@ class Node:
         pending = self.mempool.pending_hashes()
 
         valid_peers = []
+        has_competing_tip = False
         for blk in peer_blocks:
             if blk.get("height") != tip["height"] + 1:
+                # Block at current committed height with different hash = competing chain
+                if (blk.get("height") == tip["height"] and
+                        blk.get("hash") != tip["hash"]):
+                    has_competing_tip = True
                 continue
             if blk.get("previous_hash") != tip["hash"]:
                 continue
@@ -407,7 +422,7 @@ class Node:
 
         if candidate.get("previous_hash") != tip["hash"]:
             log.warning("[vdf] candidate stale (tip advanced during drain) — skipping cycle")
-            return None, False
+            return None, False, False
 
         all_valid = valid_peers + [candidate]
         tip_hash_int = pob_mod._tip_hash_int(cs.chain)
@@ -417,7 +432,7 @@ class Node:
         is_peer = winner is not candidate
         log.info("[vdf] winner  hash=%s  peer=%s  candidates=%d  peer_candidates=%d",
                  winner["hash"][:12], is_peer, len(all_valid), len(valid_peers))
-        return winner, is_peer
+        return winner, is_peer, has_competing_tip
 
     def _commit(self, blk, relay=False):
         """Append a validated block: update ChainState, persist, publish view."""

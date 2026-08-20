@@ -1,10 +1,7 @@
 """Periodic chain sync over UDP.
 
-Replaces the HTTP-based syncer. Uses UDPTransport.request_sync() which
-sends a GETSYNC message and waits for the chunked SYNC response.
-
-The sync logic (fork-point search, apply) is identical to before.
-Only the transport calls change.
+Uses UDPTransport.get_info() for lightweight tip comparison and
+UDPTransport.request_sync() for fetching chain segments.
 """
 
 import logging
@@ -20,9 +17,11 @@ class Syncer:
         self.pool = pool
         self.udp  = udp
 
-    def check_and_sync(self, local_chain, apply_fn):
-        """Pick a random peer, compare tip, sync if they are ahead.
+    def check_and_sync(self, local_chain, apply_fn, force_compare=False):
+        """Pick a random peer, compare tip, sync if they have a better chain.
 
+        force_compare: skip height check and always fetch+compare scores.
+        Used when a competing tip at the current height has been detected.
         Returns True if the chain was updated.
         """
         peer = self.pool.random()
@@ -30,36 +29,32 @@ class Syncer:
             log.debug("[sync] no peers available")
             return False
 
-        # Ask peer for their tip info (height + hash of last block)
-        # request_sync returns the decoded payload dict: {"genesis": ..., "chain": ...}
         info = self.udp.get_info(peer)
         if info is None:
             log.debug("[sync] info request failed  peer=%s", peer)
-            self.pool.strike(peer)
             return False
 
-        if isinstance(info, dict) and "height" in info:
-            remote_height = info["height"]
-        else:
-            log.debug("[sync] unexpected info response  peer=%s  resp=%s", peer, type(info))
-            self.pool.strike(peer)
+        if not isinstance(info, dict) or "height" not in info:
+            log.debug("[sync] unexpected info response  peer=%s", peer)
             return False
 
-        local_height = len(local_chain) - 1
-        local_tip    = local_chain[-1]["hash"] if local_chain else ""
+        remote_height = info["height"]
+        local_height  = len(local_chain) - 1
+        local_tip     = local_chain[-1]["hash"] if local_chain else ""
 
-        if remote_height < local_height:
-            log.debug("[sync] peer not ahead  peer=%s  remote=%d  local=%d",
-                      peer, remote_height, local_height)
-            return False
-
-        if remote_height == local_height:
-            remote_tip = info.get("tip_hash", "")
-            if remote_tip == local_tip:
-                log.debug("[sync] already in sync  peer=%s  height=%d", peer, local_height)
+        if not force_compare:
+            if remote_height < local_height:
+                log.debug("[sync] peer not ahead  peer=%s  remote=%d  local=%d",
+                          peer, remote_height, local_height)
                 return False
-            # Same height, different tip — competing chains, sync to compare
-            log.debug("[sync] same height different tip  peer=%s  height=%d", peer, local_height)
+            if remote_height == local_height:
+                if info.get("tip_hash", "") == local_tip:
+                    log.debug("[sync] already in sync  peer=%s  height=%d", peer, local_height)
+                    return False
+                log.debug("[sync] same height different tip  peer=%s  height=%d", peer, local_height)
+        else:
+            log.debug("[sync] force compare  peer=%s  remote=%d  local=%d",
+                      peer, remote_height, local_height)
 
         fork_from = self._find_fork_point(peer, local_chain)
         if fork_from is None:
