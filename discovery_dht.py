@@ -183,7 +183,7 @@ class DHTDiscovery:
         settings["enable_lsd"]    = False
         settings["enable_upnp"]   = False
         settings["enable_natpmp"] = False
-        settings["listen_interfaces"] = f"0.0.0.0:{self.port + 2}"
+        settings["listen_interfaces"] = f"0.0.0.0:{self.port + 3}"
         settings["alert_mask"] = (
             lt.alert.category_t.dht_notification
             | lt.alert.category_t.status_notification

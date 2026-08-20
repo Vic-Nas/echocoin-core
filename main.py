@@ -159,7 +159,7 @@ def main():
     # ------------------------------------------------------------------
     # HTTP servers — browser UI only, no peer routes
     # ------------------------------------------------------------------
-    private_port = args.private_port if args.private_port else args.port + 1
+    private_port = args.private_port if args.private_port else args.port + 2
 
     app = create_app(node, pool,
                      private_port=private_port, public_port=args.port)

@@ -35,9 +35,11 @@ Echocoin runs two HTTP servers:
 | Port | Interface | Purpose |
 |---|---|---|
 | `8333` (or `--port`) | `0.0.0.0` | Public node UI and peer API. Safe to expose. Send and Burn are disabled. |
-| `port+1` (or `--private-port`) | `127.0.0.1` | Private wallet UI. Never expose this. Full access including Send and Burn. |
+| `port+2` (or `--private-port`) | `127.0.0.1` | Private wallet UI. Never expose this. Full access including Send and Burn. |
 
-Open `http://localhost:8334` for your personal wallet interface. Open `http://localhost:8333` (or your public address) for the block explorer. The private port is always one above the public port unless overridden with `--private-port`.
+Open `http://localhost:8335` for your personal wallet interface. Open `http://localhost:8333` (or your public address) for the block explorer. The private port is always two above the public port unless overridden with `--private-port`.
+
+Note: port+1 is reserved by the DHT subsystem (libtorrent) and port+3 for its internal use. Do not bind other services to these ports.
 
 ## Passphrase
 
@@ -68,7 +70,7 @@ The `--passphrase` CLI flag has been removed. It was visible in process listings
 |---|---|---|
 | `--host` | `0.0.0.0` | Interface to bind for the public port |
 | `--port` | `8333` | Public port for HTTP API and peer connections |
-| `--private-port` | `port+1` | Private port for wallet UI. Always bound to 127.0.0.1. |
+| `--private-port` | `port+2` | Private port for wallet UI. Always bound to 127.0.0.1. |
 | `--keyfile` | `echocoin_key.json` | Path to encrypted keypair |
 | `--db` | `echocoin_chain.db` | Path to SQLite chain database |
 | `--peer host:port` | - | Bootstrap peer (repeatable) |
