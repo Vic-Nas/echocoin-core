@@ -342,10 +342,11 @@ class Node:
         # Run VDF in a background thread so the node loop stays responsive
         # to tx submissions and peer messages during the ~120s evaluation.
         import concurrent.futures as _cf
+        accumulated_blocks = []
         with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
             _fut = _pool.submit(vdf_mod.evaluate, bytes.fromhex(cs.tip["hash"]))
             while not _fut.done():
-                self._drain_queue(timeout=1)
+                accumulated_blocks += self._drain_queue(timeout=1)
             vdf_out, vdf_proof = _fut.result()
         log.info("[vdf] proof ready  height=%d", cs.height + 1)
 
@@ -357,7 +358,11 @@ class Node:
         candidate["hash"]       = block_mod.block_hash(candidate)
         self.gossip.broadcast_block(candidate)
 
-        peer_blocks = self._drain_queue(timeout=5) + self._drain_queue()
+        # Drain anything that arrived just as VDF completed, then pick winner.
+        # All peer candidates should already be in accumulated_blocks since VDFs
+        # take roughly the same time. _drain_queue() with no timeout flushes
+        # whatever is already in the queue without blocking.
+        peer_blocks = accumulated_blocks + self._drain_queue()
         # Pass cs explicitly — self.cs may have advanced during drain if syncer fired.
         winner, relay = self._pick_winner(cs, candidate, peer_blocks)
         if winner is None:
