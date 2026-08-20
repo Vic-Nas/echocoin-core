@@ -303,14 +303,14 @@ class TestPickWinner:
     def test_own_candidate_wins_when_no_peers(self, node_env):
         node, *_ = node_env
         candidate = self._make_candidate(node.cs)
-        winner, relay = node._pick_winner(node.cs, candidate, [])
+        winner, relay, _ = node._pick_winner(node.cs, candidate, [])
         assert winner is candidate
         assert relay is False
 
     def test_stale_candidate_returns_none(self, node_env):
         node, *_ = node_env
         candidate = make_block(1, "00" * 32, [])  # wrong previous_hash
-        winner, relay = node._pick_winner(node.cs, candidate, [])
+        winner, relay, _ = node._pick_winner(node.cs, candidate, [])
         assert winner is None
 
     def test_invalid_peer_block_ignored(self, node_env):
@@ -318,7 +318,7 @@ class TestPickWinner:
         candidate = self._make_candidate(node.cs)
         # Peer block with wrong height
         bad_peer = make_block(99, node.cs.tip["hash"], [])
-        winner, relay = node._pick_winner(node.cs, candidate, [bad_peer])
+        winner, relay, _ = node._pick_winner(node.cs, candidate, [bad_peer])
         assert winner is candidate
 
     def test_peer_block_accepted_when_lower_score(self, node_env):
@@ -327,7 +327,7 @@ class TestPickWinner:
         g = node.cs.tip
         peer_blk = make_block(1, g["hash"], [], builder_index=1)
         candidate = make_block(1, g["hash"], [], builder_index=0)
-        winner, relay = node._pick_winner(node.cs, candidate, [peer_blk])
+        winner, relay, _ = node._pick_winner(node.cs, candidate, [peer_blk])
         # Winner is whichever has lower PoB score; relay should match
         assert winner in (candidate, peer_blk)
         assert relay == (winner is peer_blk)

@@ -57,7 +57,7 @@ class TestCheckAndSync:
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
         udp.get_info.return_value = None
         assert syncer.check_and_sync(chain_of(3), apply_fn=MagicMock()) is False
-        pool.strike.assert_called_once()
+        pool.strike.assert_not_called()
 
     def test_peer_not_ahead_returns_false(self):
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
