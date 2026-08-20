@@ -142,6 +142,8 @@ def _submit_and_alert(node, outputs, passphrase, ctx):
 def _shared_read_only_routes(app, node, pool, limiter,
                               private_port, public_port, is_private):
     """Register all read-only UI and API routes on app."""
+    # Use a prefix so public and private apps don't collide on endpoint names
+    pfx = "priv_" if is_private else "pub_"
 
     @app.context_processor
     def inject_ctx():
@@ -151,19 +153,19 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     # ---- UI pages --------------------------------------------------------
 
-    @app.route("/")
+    @app.route("/", endpoint=pfx+"dashboard")
     def dashboard():
         info = node.get_info()
         chain = node.view.chain
         return render_template("dashboard.html", title="Dashboard",
             info=info, tip=chain[-1], recent_blocks=chain[-10:][::-1])
 
-    @app.route("/explorer")
+    @app.route("/explorer", endpoint=pfx+"explorer")
     def explorer():
         return render_template("explorer.html", title="Explorer",
             recent=node.view.chain[-20:][::-1])
 
-    @app.route("/explorer/block/<int:height>")
+    @app.route("/explorer/block/<int:height>", endpoint=pfx+"block_detail")
     def block_detail(height):
         chain = node.view.chain
         if height < 0 or height >= len(chain):
@@ -175,7 +177,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return render_template("block_detail.html", title=f"Block {height}",
             b=b, tx_rows=tx_rows, has_next=height + 1 < len(chain))
 
-    @app.route("/explorer/tx/<tx_hash>")
+    @app.route("/explorer/tx/<tx_hash>", endpoint=pfx+"tx_detail")
     def tx_detail(tx_hash):
         found = found_height = None
         height = node.storage.get_tx_height(tx_hash)
@@ -196,7 +198,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return render_template("tx_detail.html", title="Transaction",
             tx_hash=tx_hash, tx=found, location=location)
 
-    @app.route("/address", methods=["GET", "POST"])
+    @app.route("/address", methods=["GET", "POST"], endpoint=pfx+"address_lookup")
     def address_lookup():
         addr = request.args.get("addr", "").strip()
         ctx = dict(title="Address", addr=addr, alert_err="",
@@ -211,43 +213,52 @@ def _shared_read_only_routes(app, node, pool, limiter,
             ctx["history"] = _get_address_history(addr, node)
         return render_template("address.html", **ctx)
 
-    @app.route("/whitepaper")
+    @app.route("/whitepaper", endpoint=pfx+"whitepaper")
     def whitepaper():
-        base    = getattr(__import__("sys"), "_MEIPASS",
-                          os.path.dirname(os.path.abspath(__file__)))
-        wp_path = os.path.join(base, "docs", "whitepaper.md")
-        try:
-            with open(wp_path) as f:
-                rendered = markdown.markdown(
-                    f.read(), extensions=["fenced_code", "tables"])
-        except FileNotFoundError:
-            rendered = "<p>whitepaper.md not found.</p>"
+        import sys
+        base = getattr(sys, "_MEIPASS", None) or os.path.dirname(os.path.abspath(__file__))
+        # Also try one level up in case api.py is in a subdirectory
+        for candidate in [
+            os.path.join(base, "docs", "whitepaper.md"),
+            os.path.join(os.path.dirname(base), "docs", "whitepaper.md"),
+            os.path.join(os.getcwd(), "docs", "whitepaper.md"),
+        ]:
+            if os.path.isfile(candidate):
+                try:
+                    with open(candidate) as f:
+                        rendered = markdown.markdown(
+                            f.read(), extensions=["fenced_code", "tables"])
+                    return render_template("whitepaper.html", title="Whitepaper",
+                                           rendered=rendered)
+                except Exception:
+                    break
+        rendered = "<p>whitepaper.md not found.</p>"
         return render_template("whitepaper.html", title="Whitepaper",
                                rendered=rendered)
 
-    @app.route("/stats")
+    @app.route("/stats", endpoint=pfx+"stats")
     def stats():
         return render_template("stats.html", title="Stats")
 
     # ---- JSON API (read-only) --------------------------------------------
 
-    @app.route("/api/info")
+    @app.route("/api/info", endpoint=pfx+"api_info")
     def api_info():
         return jsonify(node.get_info())
 
-    @app.route("/api/fee_rate")
+    @app.route("/api/fee_rate", endpoint=pfx+"api_fee_rate")
     def api_fee_rate():
         v = node.view
         return jsonify({"fee_rate": v.tip["fee_rate"], "height": v.height})
 
-    @app.route("/api/block/<int:height>")
+    @app.route("/api/block/<int:height>", endpoint=pfx+"api_block")
     def api_block(height):
         chain = node.view.chain
         if 0 <= height < len(chain):
             return jsonify(chain[height])
         return jsonify({"error": "not found"}), 404
 
-    @app.route("/api/tx/<tx_hash_val>")
+    @app.route("/api/tx/<tx_hash_val>", endpoint=pfx+"api_get_tx")
     def api_get_tx(tx_hash_val):
         t = node.mempool.get(tx_hash_val)
         if t:
@@ -261,7 +272,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
                         return jsonify(t)
         return jsonify({"error": "not found"}), 404
 
-    @app.route("/api/address/<addr>/balance")
+    @app.route("/api/address/<addr>/balance", endpoint=pfx+"api_balance")
     def api_balance(addr):
         if not crypto_mod.is_valid_address(addr):
             return jsonify({"error": "invalid address"}), 400
@@ -269,7 +280,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return jsonify({"address": addr, "balance_rings": balance,
                         "balance_ech": balance / RINGS_PER_ECH})
 
-    @app.route("/api/address/<addr>/history")
+    @app.route("/api/address/<addr>/history", endpoint=pfx+"api_history")
     def api_history(addr):
         if not crypto_mod.is_valid_address(addr):
             return jsonify({"error": "invalid address"}), 400
@@ -278,14 +289,14 @@ def _shared_read_only_routes(app, node, pool, limiter,
             for h, th, d, t in _get_address_history(addr, node)
         ])
 
-    @app.route("/api/mempool")
+    @app.route("/api/mempool", endpoint=pfx+"api_mempool")
     def api_mempool():
         txs = node.mempool.all_txs()
         return jsonify({"size": len(txs), "transactions": [
             {"hash": tx_mod.tx_hash(t), "from": t["from"],
              "outputs": t["outputs"], "fee": t["fee"]} for t in txs]})
 
-    @app.route("/api/stats")
+    @app.route("/api/stats", endpoint=pfx+"api_stats")
     def api_stats():
         v  = node.view
         sv = v.state
@@ -297,7 +308,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "rings_per_ech": RINGS_PER_ECH,
         }})
 
-    @app.route("/api/tx/send", methods=["POST"])
+    @app.route("/api/tx/send", methods=["POST"], endpoint=pfx+"api_send_tx")
     @limiter.limit("20 per second")
     def api_send_tx():
         data = request.get_json()

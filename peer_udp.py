@@ -186,6 +186,7 @@ class UDPTransport:
         self._seen_msg: dict[int, float] = {}      # msg_id -> ts for dedup
         self._seen_lock = threading.Lock()
         self._executor  = ThreadPoolExecutor(max_workers=16, thread_name_prefix="udp-cb")
+        self._on_punch_go = None  # set by discovery after init
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -404,15 +405,19 @@ class UDPTransport:
             target = data.get("target", "")
             if target:
                 log.debug("[udp] punch_go -> %s", target)
-                # Fire several UDP packets to open the NAT hole
-                for _ in range(5):
+                # Fire several UDP packets to open our NAT hole simultaneously
+                tgt = self._addr_tuple(target)
+                for _ in range(8):
                     try:
                         self._send_one(MT_PING, self._new_msg_id(),
-                                       {"genesis": self.genesis_hash},
-                                       self._addr_tuple(target))
+                                       {"genesis": self.genesis_hash}, tgt)
                     except Exception:
                         pass
                     time.sleep(0.05)
+                # Notify discovery to immediately ping this target now that
+                # both NAT holes should be open
+                if self._on_punch_go:
+                    self._on_punch_go(target)
 
     def _handle_getsync(self, msg_id: int, data: dict, sender: tuple):
         """Serve a chain segment request. Calls back on_sync_request if set."""
@@ -478,6 +483,10 @@ class UDPTransport:
     def set_chain_provider(self, fn):
         """fn(from_h, to_h) -> list[block_dict]. Set by Node after init."""
         self._get_chain_fn = fn
+
+    def set_punch_go_callback(self, fn):
+        """fn(addr) called when PUNCH_GO received — discovery should ping immediately."""
+        self._on_punch_go = fn
 
     def _get_chain_fn(self, from_h, to_h):  # default no-op before Node sets it
         return []

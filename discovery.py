@@ -32,6 +32,7 @@ import json
 import logging
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 
 from discovery_dht import DHTDiscovery, PUT_REFRESH_INTERVAL
 
@@ -62,6 +63,7 @@ class Discovery:
 
         self._dht   = DHTDiscovery(self.enqueue_candidate, genesis_hash,
                                    port, node_pubkey_hex)
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="disc")
 
     # ------------------------------------------------------------------
     # Public interface
@@ -97,6 +99,13 @@ class Discovery:
         ses, my_slot, my_offset = self._dht.start()
         alert_event = threading.Event()
         ses.set_alert_notify(alert_event.set)
+
+        # When we receive PUNCH_GO, ping the target immediately while the hole is open
+        def _on_punch_go(addr):
+            log.debug("[peer] punch_go received, pinging immediately  addr=%s", addr)
+            self._executor.submit(self._ping_and_admit, addr)
+
+        self.udp.set_punch_go_callback(_on_punch_go)
 
         log.info("[dht] started, bootstrapping")
         time.sleep(15)
