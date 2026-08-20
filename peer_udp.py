@@ -284,11 +284,23 @@ class UDPTransport:
         return None
 
     def punch_via(self, relay_addr: str, target_addr: str):
-        """Ask relay to coordinate a hole punch toward target."""
+        """Ask relay to coordinate a hole punch toward target.
+        Simultaneously fire UDP packets toward target to open our NAT hole
+        before the relay tells the target to do the same."""
         self._send_one(MT_PUNCH_REQ, self._new_msg_id(),
                        {"genesis": self.genesis_hash,
                         "target": target_addr},
                        self._addr_tuple(relay_addr))
+        # Fire simultaneously from our side — this is the key to hole punching:
+        # both sides must send toward each other at roughly the same time.
+        target = self._addr_tuple(target_addr)
+        for _ in range(8):
+            try:
+                self._send_one(MT_PING, self._new_msg_id(),
+                               {"genesis": self.genesis_hash}, target)
+            except Exception:
+                pass
+            time.sleep(0.05)
 
     # ------------------------------------------------------------------
     # Receive loop

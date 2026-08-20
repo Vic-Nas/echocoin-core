@@ -44,7 +44,7 @@ STAGE_FLUSH_INTERVAL = 15
 PUT_DELAY_LOCAL      = 30
 
 PUNCH_ATTEMPTS       = 3     # how many relays to try when direct ping fails
-PUNCH_WAIT           = 1.5   # seconds to wait after punch before re-pinging
+PUNCH_WAIT           = 2.5   # seconds to wait after punch before re-pinging
 
 
 class Discovery:
@@ -162,7 +162,9 @@ class Discovery:
             self._candidates.clear()
 
         known = set(self.pool.all_addrs())
-        fresh = [a for a in batch if a not in known]
+        # Also exclude our own external address to avoid self-connection
+        own = self.udp.our_external_addr or ""
+        fresh = [a for a in batch if a not in known and a != own]
         if not fresh:
             return
 

@@ -64,7 +64,7 @@ _all_binaries = [
 ]
 _all_datas = [
     ("bip39_english.txt", "."),
-    ("docs/whitepaper.md", "."),
+    ("docs/whitepaper.md", "docs"),
     ("echocoin.svg",       "."),
     ("echocoin.png",       "."),
     ("favicon.ico",        "."),

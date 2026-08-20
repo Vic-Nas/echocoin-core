@@ -88,7 +88,7 @@ class Syncer:
                 log.debug("[sync] fork search failed  peer=%s  height=%d", peer, mid)
                 return None
 
-            if resp[0].get("hash") == local_hash:
+            if page[0].get("hash") == local_hash:
                 result = mid
                 lo = mid + 1
             else:
