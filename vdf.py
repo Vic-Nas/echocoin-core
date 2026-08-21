@@ -49,8 +49,16 @@ DISC_SIZE_BITS = 1024
 FORM_SIZE      = 100
 N_WESOLOWSKI   = 0
 
-# Identity element: first byte 0x04 (BQFC_IS_1), remaining 99 bytes 0x00.
+# Identity element in BQFC compressed form (first byte 0x04).
+# NOT used as starting element — the identity is a fixed point:
+# identity^(2^T) = identity, making every block's VDF output identical.
 _IDENTITY = bytes([0x04]) + bytes(FORM_SIZE - 1)
+
+# Generator element: first byte 0x08, remaining bytes 0x00.
+# This is a valid non-identity BQFC form that produces unique VDF output
+# per challenge. Verified empirically: chiavdf.prove(challenge, _GENERATOR, ...)
+# produces a non-identity, challenge-dependent output.
+_GENERATOR = bytes([0x08]) + bytes(FORM_SIZE - 1)
 
 
 def evaluate(challenge: bytes,
@@ -64,7 +72,7 @@ def evaluate(challenge: bytes,
     t0     = time.monotonic()
     result = chiavdf.prove(
         challenge,
-        _IDENTITY,
+        _GENERATOR,
         DISC_SIZE_BITS,
         iterations,
         "",
@@ -88,7 +96,7 @@ def verify(challenge: bytes, output: str, proof: str,
         proof_blob = bytes.fromhex(output) + bytes.fromhex(proof)
         return chiavdf.verify_n_wesolowski(
             disc,
-            _IDENTITY,
+            _GENERATOR,
             proof_blob,
             iterations,
             DISC_SIZE_BITS,

@@ -33,7 +33,8 @@ from storage import Storage
 log = logging.getLogger("ec.node")
 _rng = _secrets.SystemRandom()
 
-SYNC_EVERY_N_CYCLES = 1
+SYNC_EVERY_N_CYCLES     = 3   # when in sync with peers
+SYNC_EVERY_N_CYCLES_NEW = 1   # when behind or no peers yet
 
 
 # ---------------------------------------------------------------------------
@@ -327,11 +328,16 @@ class Node:
         self._cycle_count += 1
         self._drain_queue()
 
-        if self._cycle_count % SYNC_EVERY_N_CYCLES == 0:
-            self.syncer.check_and_sync(
+        # Sync every cycle when no peers yet or when the syncer last updated
+        # the chain (meaning we were behind). Every 3 cycles when in sync.
+        in_sync = self.pool.count() > 0 and not getattr(self, '_last_sync_updated', False)
+        sync_interval = SYNC_EVERY_N_CYCLES if in_sync else SYNC_EVERY_N_CYCLES_NEW
+        if self._cycle_count % sync_interval == 0:
+            updated = self.syncer.check_and_sync(
                 self.cs.chain,
                 lambda chain: self.apply_better_chain(chain)[0],
             )
+            self._last_sync_updated = bool(updated)
 
         cs = self.cs   # local alias -- can change under sync
         pruned = self.mempool.prune_stale(cs.height, cs.state)
@@ -370,20 +376,10 @@ class Node:
         # whatever is already in the queue without blocking.
         peer_blocks = accumulated_blocks + self._drain_queue()
         # Pass cs explicitly — self.cs may have advanced during drain if syncer fired.
-        winner, relay, has_competing_tip = self._pick_winner(cs, candidate, peer_blocks)
+        winner, relay = self._pick_winner(cs, candidate, peer_blocks)
         if winner is None:
             return
         self._commit(winner, relay=relay)
-
-        # If we saw a competing block at our current height, sync immediately
-        # to compare cumulative scores — don't wait for the next cycle.
-        if has_competing_tip:
-            log.debug("[vdf] competing tip seen — triggering immediate sync")
-            self.syncer.check_and_sync(
-                self.cs.chain,
-                lambda chain: self.apply_better_chain(chain)[0],
-                force_compare=True,
-            )
 
     def _pick_winner(self, cs, candidate, peer_blocks):
         """Return (best_block, relay). relay=True means it came from a peer.
@@ -396,13 +392,8 @@ class Node:
         pending = self.mempool.pending_hashes()
 
         valid_peers = []
-        has_competing_tip = False
         for blk in peer_blocks:
             if blk.get("height") != tip["height"] + 1:
-                # Block at current committed height with different hash = competing chain
-                if (blk.get("height") == tip["height"] and
-                        blk.get("hash") != tip["hash"]):
-                    has_competing_tip = True
                 continue
             if blk.get("previous_hash") != tip["hash"]:
                 continue
@@ -422,7 +413,7 @@ class Node:
 
         if candidate.get("previous_hash") != tip["hash"]:
             log.warning("[vdf] candidate stale (tip advanced during drain) — skipping cycle")
-            return None, False, False
+            return None, False
 
         all_valid = valid_peers + [candidate]
         tip_hash_int = pob_mod._tip_hash_int(cs.chain)
@@ -432,7 +423,7 @@ class Node:
         is_peer = winner is not candidate
         log.info("[vdf] winner  hash=%s  peer=%s  candidates=%d  peer_candidates=%d",
                  winner["hash"][:12], is_peer, len(all_valid), len(valid_peers))
-        return winner, is_peer, has_competing_tip
+        return winner, is_peer
 
     def _commit(self, blk, relay=False):
         """Append a validated block: update ChainState, persist, publish view."""
@@ -557,7 +548,7 @@ class Node:
             log.warning("[sync] chain replay failed: %s", e)
             return False, f"chain replay error: {e}", None, None, None
 
-        if not remote_cs.is_better_than(self.cs):
+        if not remote_cs.is_better_than(self.cs, fork_point=fork_point):
             log.debug("[sync] remote chain not better  remote_h=%d  local_h=%d  remote_score=%d  local_score=%d",
                       remote_cs.height, self.cs.height,
                       remote_cs.cumulative_score, self.cs.cumulative_score)

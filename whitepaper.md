@@ -81,25 +81,21 @@ A builder who has never burned any coins receives `denominator = 1`, making thei
 { "to": "burn", "amount": N, "beneficiary": <address> }
 ```
 
-When omitted, the beneficiary defaults to the sender. Burns tagged to a beneficiary accumulate that beneficiary's block-building weight and entitle every contributor to a proportional share of the block reward when that beneficiary wins a slot:
+When omitted, the beneficiary defaults to the sender. Burns tagged to a beneficiary accumulate that beneficiary's block-building weight and entitle every contributor to a proportional share of the block reward when that beneficiary wins a slot. The block builder always receives a guaranteed 2% base cut to protect them from being locked out of their own reward by pool contributors:
 
 ```
-contributor_share = reward * contributor_burns / total_burns_to_beneficiary
+builder_cut       = max(1, reward * 2 / 100)
+remainder         = reward - builder_cut
+contributor_share = remainder * contributor_burns / total_burns_to_beneficiary
 ```
 
-This enables voluntary burn pools without any protocol-level pooling mechanism: contributors choose a beneficiary they trust to run a well-connected node, burn on their behalf, and receive rewards proportional to their contribution when that node wins. Crucially, burn weight is address-specific and non-transferable -- a pool operator cannot aggregate the scores of members or redirect burn weight to another address. The block reward is split among actual contributors, not concentrated at the operator. A participant who distrusts the operator can stop tagging burns at any time; their weight expires out of the 500-block window within ~17 hours.
+The builder's guaranteed cut merges with their proportional contributor share if they also contributed burns to themselves. This enables voluntary burn pools without any protocol-level pooling mechanism: contributors choose a beneficiary they trust to run a well-connected node, burn on their behalf, and receive rewards proportional to their contribution when that node wins. Crucially, burn weight is address-specific and non-transferable -- a pool operator cannot aggregate the scores of members or redirect burn weight to another address. A participant who distrusts the operator can stop tagging burns at any time; their weight expires out of the 500-block window within ~17 hours.
 
 **Fork resolution.** Two nodes may complete the VDF at roughly the same time and broadcast competing blocks for the same slot. Both blocks may be structurally valid. Nodes select the block whose builder has the lower PoB score. This is deterministic and locally computable without coordination. If scores are equal (hash coincidence), the lower block hash breaks the tie.
 
-When two valid chains of equal height compete, nodes adopt the one with the lower **cumulative score** -- the sum of all block scores from genesis:
+When two valid chains diverge, nodes adopt the one with the lower **average suffix score per block** from the fork point onward. See Section 7a for the full fork choice rule.
 
-```
-cumulative_score(chain) = sum of score(builder_i) for all blocks i > 0
-```
-
-A chain built by nodes with real burn commitments will always have a lower cumulative score than one built by a botnet whose denominator stays at 1. The attacker's chain is objectively and locally rejectable, with no voting or peer trust required.
-
-**History rewriting.** An attacker wishing to rewrite block N must recompute the VDF sequentially for every block from N to the present -- that takes as long in real time as the honest network took. They must also produce competitive PoB scores for each rewritten block, which requires burning real coins proportional to the honest network's burn history. Both constraints must be overcome simultaneously.
+**History rewriting.** An attacker wishing to rewrite block N must recompute the VDF sequentially for every block from N to the present — that takes as long in real time as the honest network took. The VDF is the binding constraint: no amount of parallelism or capital can compress it. PoB scores on a private fork can be freely manipulated using coins minted on that fork, so they do not add independent protection against rewriting.
 
 Every valid block received from a peer is immediately rebroadcast to all other peers. This ensures that nodes behind NAT or with limited connectivity participate in propagation through well-connected peers.
 
@@ -150,21 +146,42 @@ Addresses are twelve-word phrases derived from the public key hash, resistant to
 
 Nodes discover peers through the BitTorrent mainline DHT using BEP44 mutable items. The 256 discovery slots are deterministic and fixed for the lifetime of the chain: each slot's signing key is derived from the genesis hash and the slot index, so every node computes the same keys independently. Each node claims one slot (derived from its own public key) and re-announces its address to that slot every hour. An attacker trying to displace honest peers must continuously overwrite all 256 slots -- at least once per hour, indefinitely -- or honest nodes will simply re-announce and reclaim their positions on the next cycle.
 
-When no UPnP gateway is available, nodes query a public IP service to determine their externally routable address before announcing to the DHT. This ensures nodes behind NAT, mobile hotspots, or restrictive firewalls advertise a reachable address.
-
-When a candidate peer is found, the connecting node fetches its `/api/info` and checks that the genesis hash matches. Any peer on a different chain is rejected immediately without fetching chain data.
+All peer communication uses UDP with NAT hole punching via relay-assisted simultaneous send. Nodes behind NAT are reachable without port forwarding. When a candidate peer is found via DHT, the connecting node sends a UDP PING and checks that the returned genesis hash matches. Any peer on a different chain is rejected immediately.
 
 The full block history is stored permanently. Balance state is always recoverable by replaying from genesis. The genesis block hash is hardcoded, so any chain with a different block 0 is rejected outright.
+
+## 7a. Fork Choice Rule
+
+When two valid chains diverge, nodes select the canonical chain by comparing average PoB score per block in the suffix after the fork point. Formally:
+
+```
+fork_point   = highest block where both chains share identical hashes
+suffix_score = sum of PoB scores for all blocks after fork_point
+suffix_len   = number of blocks after fork_point
+average      = suffix_score / suffix_len
+```
+
+The chain with lower average suffix score wins, regardless of chain length.
+
+**Why average suffix score, not total or height:**
+
+- Height-wins (longer chain always wins) breaks PoB: a node that builds faster ignores all competing blocks permanently. Burns become irrelevant once a node is one block ahead.
+- Total score-wins is vulnerable to private chain attacks: an attacker who builds a shorter private chain with massive burns could accumulate a lower total score than a longer honest chain.
+- Average suffix score is robust to both: building more blocks alone does not help if those blocks have worse average scores. The honest network, with multiple nodes competing at each block, statistically produces lower per-block averages than a solo attacker with no competition.
+
+**Tiebreak:** when average suffix scores are equal, the chain with the lexicographically smaller tip hash wins. This is deterministic and unbiasable.
+
+**Security note:** the VDF time cost and the fork choice rule are independent protections. The VDF ensures history cannot be rewritten faster than real time. The fork choice rule ensures that among valid chains of any length, the one representing the most genuine economic competition wins.
 
 ## 8. Security Analysis
 
 **Competing chain against an active network.** A botnet that attempts to build an alternative chain without burning real coins produces blocks with `denominator = 1` and therefore very large scores. The honest network, whose participants have accumulated burn weight over 500-block windows, produces blocks with far lower scores. The honest chain's cumulative score is always lower, and every node independently rejects the botnet's chain without coordination.
 
-**Majority VDF attack.** VDF sequentiality means a majority of nodes produce blocks at the same rate as a single honest node. Acquiring a majority of sequential compute does not help an attacker rewrite history faster. Combined with PoB, any rewritten chain also requires proportional real burns, making the attack doubly costly.
+**Majority VDF attack.** VDF sequentiality means a majority of nodes produce blocks at the same rate as a single honest node. Acquiring a majority of sequential compute does not help an attacker rewrite history faster. The VDF time cost is the sole binding constraint on history rewriting.
 
 **Transaction censorship.** Even a majority of burners only wins roughly that fraction of slots by score lottery. The honest minority wins the remaining slots and includes censored transactions. The probabilistic acceptance mechanism further penalizes repeated exclusion.
 
-**Deep history rewriting offline.** VDF makes all history equally costly to rewrite per block. An attacker working offline against an old fork point must recompute one VDF per block sequentially, plus produce competitive burns for each rewritten block -- an insurmountable cost for any chain of meaningful length.
+**Deep history rewriting offline.** VDF makes all history equally costly to rewrite per block. An attacker working offline against an old fork point must recompute one VDF per block sequentially — an insurmountable time cost for any chain of meaningful length. The honest chain keeps advancing during any rewrite attempt, so the attacker can never catch up without a faster VDF implementation than commodity hardware.
 
 **Whale dominance and the decay window.** A participant who burns a large amount early cannot hold a permanent advantage. Burns older than 500 blocks (~17 hours) fall out of the scoring window. Sustained block-building priority requires sustained burning, aligning incentives with ongoing network participation rather than one-time capital expenditure.
 

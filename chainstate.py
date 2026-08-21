@@ -157,10 +157,74 @@ class ChainState:
     # Fork choice
     # ------------------------------------------------------------------
 
-    def is_better_than(self, other):
-        """Return True if self should replace other (longer or heavier chain)."""
-        if self.height != other.height:
-            return self.height > other.height
-        if self.cumulative_score != other.cumulative_score:
-            return self.cumulative_score < other.cumulative_score
+    def is_better_than(self, other, fork_point=None):
+        """Return True if self should replace other.
+
+        Compares average PoB score per block in the suffix after fork_point.
+        The shared prefix is identical on both chains so only the suffix
+        matters. The chain with lower average suffix score made better
+        choices after the fork — regardless of how many blocks each built.
+
+        fork_point: index of first differing block. If None, defaults to
+        min(self.height, other.height) — the length of the shorter chain,
+        which is correct when one chain simply extends the other.
+
+        This prevents height-racing and history rewrite attacks:
+        - Racing: building more blocks alone doesn't help if average score
+          is worse than the competing suffix
+        - History rewrite: attacker built alone after fork with no competition,
+          so their per-block score reflects a single node's luck, not the
+          minimum achievable across competing nodes
+
+        Uses cross-multiplication to avoid float precision issues.
+        Tiebreak on tip hash for determinism.
+        """
+        # Resolve fork_point from chains when not explicitly provided
+        if fork_point is None:
+            fork_point = min(self.height + 1, other.height + 1)
+
+        # height is 0-based block index; fork_point is array index of first
+        # differing block. Suffix length = number of blocks after fork_point.
+        self_suffix_len  = (self.height  + 1) - fork_point
+        other_suffix_len = (other.height + 1) - fork_point
+
+        self_suffix_len  = max(self_suffix_len,  0)
+        other_suffix_len = max(other_suffix_len, 0)
+
+        if self_suffix_len <= 0 and other_suffix_len <= 0:
+            # No blocks after fork point — compare cumulative scores directly
+            if self.cumulative_score != other.cumulative_score:
+                return self.cumulative_score < other.cumulative_score
+            return self.tip["hash"] < other.tip["hash"]
+        if self_suffix_len <= 0:
+            return False
+        if other_suffix_len <= 0:
+            return True
+
+        self_suffix_score  = self.cumulative_score  - self._prefix_score(fork_point)
+        other_suffix_score = other.cumulative_score - other._prefix_score(fork_point)
+
+        # Compare self_suffix_score/self_suffix_len < other_suffix_score/other_suffix_len
+        # via cross-multiplication (exact, no floats)
+        self_cross  = self_suffix_score  * other_suffix_len
+        other_cross = other_suffix_score * self_suffix_len
+        if self_cross != other_cross:
+            return self_cross < other_cross
         return self.tip["hash"] < other.tip["hash"]
+
+    def _prefix_score(self, fork_point):
+        """Cumulative score of blocks 0..fork_point (shared prefix)."""
+        # Both chains are identical up to fork_point so we can compute
+        # from self.chain. Called only during sync comparison, not hot path.
+        import pob as pob_mod
+        score = 0
+        bw = pob_mod.BurnWindow()
+        for i in range(min(fork_point, len(self.chain))):
+            blk = self.chain[i]
+            bw.add_block(blk)
+            if i > 0:
+                builder = blk.get("builder")
+                if builder:
+                    phi = pob_mod._tip_hash_int([self.chain[i - 1]])
+                    score += bw.score(phi, builder)
+        return score
