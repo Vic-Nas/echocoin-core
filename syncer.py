@@ -80,13 +80,11 @@ class Syncer:
             local_hash = local_chain[mid]["hash"]
 
             resp = self.udp.request_sync(peer, from_h=mid, to_h=mid, timeout=10)
-            if resp is None:
-                log.debug("[sync] fork search failed  peer=%s  height=%d", peer, mid)
-                return None
             page = resp.get("chain") if isinstance(resp, dict) else None
             if not isinstance(page, list) or not page:
-                log.debug("[sync] fork search failed  peer=%s  height=%d", peer, mid)
-                return None
+                # Peer doesn't have this height — their chain is shorter, search lower.
+                hi = mid - 1
+                continue
 
             if page[0].get("hash") == local_hash:
                 result = mid
