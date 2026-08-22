@@ -131,7 +131,7 @@ class DHTDiscovery:
 
     def torrent_announce(self, ses):
         try:
-            ses.dht_announce(self._genesis_info_hash(), self.port)
+            ses.dht_announce(self._genesis_info_hash(), self.port, 0)
             log.debug("[dht] torrent announced  port=%d", self.port)
         except Exception:
             log.debug("[dht] torrent announce failed", exc_info=True)
