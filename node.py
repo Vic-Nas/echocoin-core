@@ -27,7 +27,7 @@ import pob as pob_mod
 import tx as tx_mod
 import vdf as vdf_mod
 from chainstate import ChainState
-from params import BLOCK_SIZE_LIMIT, DB_PATH
+from params import BLOCK_CYCLE_SECONDS, BLOCK_SIZE_LIMIT, DB_PATH
 from storage import Storage
 
 log = logging.getLogger("ec.node")
@@ -358,6 +358,14 @@ class Node:
             vdf_out, vdf_proof, vdf_seconds = _fut.result()
         log.info("[vdf] proof ready  height=%d  seconds=%.1f  iterations=%d",
                  cs.height + 1, vdf_seconds, iterations)
+
+        # Wait until parent_timestamp + BLOCK_CYCLE_SECONDS so faster hardware
+        # doesn't produce blocks with timestamps below the minimum gap.
+        min_ts = cs.tip.get("timestamp", 0) + BLOCK_CYCLE_SECONDS
+        wait = min_ts - time.time()
+        if wait > 0:
+            log.info("[vdf] waiting %.1fs for min block interval", wait)
+            accumulated_blocks += self._drain_queue(timeout=wait)
 
         fee_rate   = block_mod.compute_expected_fee_rate(cs.chain)
         sorted_txs = tx_mod.sort_txs(self.mempool.all_txs())
