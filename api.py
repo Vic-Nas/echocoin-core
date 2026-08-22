@@ -300,12 +300,16 @@ def _shared_read_only_routes(app, node, pool, limiter,
     def api_stats():
         v  = node.view
         sv = v.state
-        return jsonify({"points": node.stats.points, "totals": {
-            "minted":      sv.total_minted,
-            "burned_fees": sv.total_burnt,
-            "circulating": sv.total_minted - sv.total_burnt,
-            "can_mint":    max(0, SUPPLY_CAP - sv.total_minted + sv.total_burnt),
-            "rings_per_ech": RINGS_PER_ECH,
+        pts = node.stats.points
+        net_last = pts[-1]["net_emission"] if pts else 0
+        return jsonify({"points": pts, "totals": {
+            "minted":           sv.total_minted,
+            "burned_fees":      sv.total_burnt,
+            "circulating":      sv.total_minted - sv.total_burnt,
+            "can_mint":         max(0, SUPPLY_CAP - sv.total_minted + sv.total_burnt),
+            "supply_cap":       SUPPLY_CAP,
+            "net_emission_last": net_last,
+            "rings_per_ech":    RINGS_PER_ECH,
         }})
 
     @app.route("/api/tx/send", methods=["POST"], endpoint=pfx+"api_send_tx")

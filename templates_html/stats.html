@@ -12,11 +12,20 @@
       <span><span class="legend-dot" style="background:var(--accent)"></span>Cumulative minted</span>
     </div>
   </div>
+  <div class="chart-wrap" style="margin-top:1.5rem">
+    <div class="chart-title">Mint vs burn (cumulative)</div>
+    <svg id="chart-mintburn" viewBox="0 0 800 220" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div class="legend">
+      <span><span class="legend-dot" style="background:var(--accent)"></span>Minted</span>
+      <span><span class="legend-dot" style="background:var(--red)"></span>Burned fees</span>
+    </div>
+  </div>
 </div>
 <script>
-const RINGS_PER_ECH = 100_000_000;
+let RINGS_PER_ECH = 100_000_000;
+let SUPPLY_CAP_RINGS = 21_000_000 * RINGS_PER_ECH;
 const fmt = rings => (rings / RINGS_PER_ECH).toFixed(4) + ' ECH';
-const fmtRings = n => n.toLocaleString() + ' rings';
+const fmtPct = (a, b) => b ? (a / b * 100).toFixed(2) + '%' : '0%';
 
 function polyline(points, xKey, yKey, W, H, PAD, maxX, maxY) {
   if (!points.length) return '';
@@ -66,17 +75,24 @@ fetch('/api/stats')
     document.getElementById('stats-loading').style.display = 'none';
     document.getElementById('stats-content').style.display = '';
     const t = data.totals;
+    RINGS_PER_ECH = t.rings_per_ech || RINGS_PER_ECH;
+    SUPPLY_CAP_RINGS = t.supply_cap || SUPPLY_CAP_RINGS;
+
+    const circPct = fmtPct(t.circulating, SUPPLY_CAP_RINGS);
     const netLast = t.net_emission_last || 0;
     const netColor = netLast >= 0 ? 'var(--green)' : 'var(--red)';
-    const netLabel = netLast >= 0 ? '+' + fmt(netLast) + '/block' : fmt(netLast) + '/block';
+    const netSign = netLast >= 0 ? '+' : '';
+    const netLabel = `<span style="color:${netColor}">${netSign}${fmt(netLast)}/block</span>`;
+
     const cards = [
-      ['Circulating', fmt(t.circulating)],
-      ['Total minted', fmt(t.minted)],
-      ['Net emission (last block)', `<span style="color:${netColor}">${netLabel}</span>`],
+      ['Circulating', `${fmt(t.circulating)}<br><span style="color:var(--muted);font-size:.8rem">${circPct} of 21M cap</span>`],
+      ['Burned fees', fmt(t.burned_fees)],
+      ['Net emission (last block)', netLabel],
     ];
     document.getElementById('stat-cards').innerHTML = cards.map(([label, val]) =>
       `<div class="stat"><div class="stat-label">${label}</div><div class="stat-value" style="font-size:1rem">${val}</div></div>`
     ).join('');
+
     const pts = data.points;
     if (!pts.length) return;
     const maxX = pts[pts.length - 1].height;
@@ -85,6 +101,12 @@ fetch('/api/stats')
       {key: 'minted',      color: 'var(--accent)', width: 1},
       {key: 'circulating', color: 'var(--green)',  width: 2},
     ], maxX, maxY);
+
+    const maxYBurn = Math.max(...pts.map(p => p.minted)) * 1.05 || 1;
+    drawChart('chart-mintburn', pts, [
+      {key: 'minted',      color: 'var(--accent)', width: 2},
+      {key: 'burned_fees', color: 'var(--red)',    width: 2},
+    ], maxX, maxYBurn);
   })
   .catch(() => {
     document.getElementById('stats-loading').textContent = 'Failed to load stats.';
