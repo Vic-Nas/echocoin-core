@@ -88,15 +88,17 @@ The builder's guaranteed cut is merged with their proportional contributor share
 
 **Fork resolution.** Two nodes may complete the VDF at roughly the same time and broadcast competing blocks for the same slot. Both blocks may be structurally valid. Nodes select the block whose builder has the lower PoB score. This is deterministic and locally computable without coordination. If scores are equal (hash coincidence), the lower block hash breaks the tie.
 
-When two valid chains of equal height compete, nodes adopt the one with the lower **cumulative score** -- the sum of all block scores from genesis:
+When two valid chains diverge, nodes adopt the one with the lower **cumulative suffix score** -- the sum of block scores from the fork point to the tip:
 
 ```
-cumulative_score(chain) = sum of score(builder_i) for all blocks i > 0
+suffix_score(chain, fork_point) = sum of score(builder_i) for all blocks i >= fork_point
 ```
 
-A chain built by nodes with real burn commitments will always have a lower cumulative score than one built by a botnet whose denominator stays at 1. The attacker's chain is objectively and locally rejectable, with no voting or peer trust required.
+Burns used for scoring are subject to a **pre-fork balance cap**: each contributor's eligible burns in the suffix cannot exceed their balance at the fork point. Any burns above that threshold were funded by block rewards minted on the divergent chain after the fork and do not improve the scoring denominator. This closes the self-funding loop: an attacker who mines coins privately and immediately burns them gains no denominator benefit above what their pre-fork holdings would allow.
 
-**History rewriting.** An attacker wishing to rewrite block N must recompute the VDF sequentially for every block from N to the present -- that takes as long in real time as the honest network took. The VDF is the binding constraint: no amount of parallelism or capital can compress it. PoB scores on a private fork can be freely manipulated using coins minted on that fork, so they do not add independent protection against rewriting. The honest chain advances continuously while the attacker rewrites, widening the gap permanently.
+A chain built by nodes with real burn commitments will always have a lower cumulative suffix score than one built privately, because the honest chain accumulates minimum scores across competing builders while the attacker draws from a single node. The result is objectively and locally rejectable, with no voting or peer trust required.
+
+**History rewriting.** An attacker wishing to rewrite block N must recompute the VDF sequentially for every block from N to the present -- that takes as long in real time as the honest network took. The VDF is the primary binding constraint on rewriting speed. Under the cumulative suffix score rule with the pre-fork balance cap, the attacker's scoring denominator is additionally limited to their pre-fork economic holdings: privately minted rewards cannot inflate it. The binding constraints are VDF time plus the attacker's pre-fork economic commitment relative to the honest network's aggregate pre-fork holdings. The honest chain advances continuously while the attacker rewrites, widening the gap permanently.
 
 Every valid block received from a peer is immediately rebroadcast to all other peers. This ensures that nodes behind NAT or with limited connectivity participate in propagation through well-connected peers.
 
@@ -155,9 +157,11 @@ The full block history is stored permanently. Balance state is always recoverabl
 
 ## 8. Security Analysis
 
-**Competing chain against an active network.** A botnet that attempts to build an alternative chain without burning real coins produces blocks with `denominator = 1` and therefore very large scores. The honest network, whose participants have accumulated burn weight over 500-block windows, produces blocks with far lower scores. The honest chain's cumulative score is always lower, and every node independently rejects the botnet's chain without coordination.
+**Competing chain against an active network.** A botnet that attempts to build an alternative chain without burning real coins produces blocks with `denominator = 1` and therefore very large scores. The honest network, whose participants have accumulated burn weight over 500-block windows, produces blocks with far lower scores. The honest chain's cumulative suffix score is always lower, and every node independently rejects the botnet's chain without coordination.
 
-**Majority VDF attack.** VDF sequentiality means a majority of nodes produce blocks at the same rate as a single honest node. Acquiring a majority of sequential compute does not help an attacker rewrite history faster. The VDF time cost is the sole binding constraint on history rewriting.
+**Withholding and short-reorg attack.** An attacker who stays connected to the network, collects all transactions and burns, and builds privately as the sole block producer earns block rewards on their private chain. They could then burn those rewards to inflate their scoring denominator and attempt to overtake the honest chain. The pre-fork balance cap defeats this: eligible burns in the divergent suffix are capped to the attacker's balance at the fork point. Privately minted rewards cannot contribute to the denominator. The attacker's scoring advantage is therefore bounded by their real pre-fork economic stake, while the honest chain benefits from minimum-score competition across all active builders.
+
+**Majority VDF attack.** VDF sequentiality means a majority of nodes produce blocks at the same rate as a single honest node. Acquiring a majority of sequential compute does not help an attacker rewrite history faster.
 
 **Transaction censorship.** Even a majority of burners only wins roughly that fraction of slots by score lottery. The honest minority wins the remaining slots and includes censored transactions. The probabilistic acceptance mechanism further penalizes repeated exclusion.
 

@@ -160,39 +160,26 @@ class ChainState:
     def is_better_than(self, other, fork_point=None):
         """Return True if self should replace other.
 
-        Compares average PoB score per block in the suffix after fork_point.
-        The shared prefix is identical on both chains so only the suffix
-        matters. The chain with lower average suffix score made better
-        choices after the fork — regardless of how many blocks each built.
+        Compares cumulative PoB score in the suffix after fork_point.
+        The chain with the lower cumulative suffix score wins.
+
+        Burns used for scoring are capped to each contributor's balance
+        at the fork point, so privately minted coins on a divergent chain
+        cannot inflate the attacker's denominator.
 
         fork_point: index of first differing block. If None, defaults to
-        min(self.height, other.height) — the length of the shorter chain,
-        which is correct when one chain simply extends the other.
+        min(self.height+1, other.height+1), which is correct when one chain
+        simply extends the other.
 
-        This prevents height-racing and history rewrite attacks:
-        - Racing: building more blocks alone doesn't help if average score
-          is worse than the competing suffix
-        - History rewrite: attacker built alone after fork with no competition,
-          so their per-block score reflects a single node's luck, not the
-          minimum achievable across competing nodes
-
-        Uses cross-multiplication to avoid float precision issues.
         Tiebreak on tip hash for determinism.
         """
-        # Resolve fork_point from chains when not explicitly provided
         if fork_point is None:
             fork_point = min(self.height + 1, other.height + 1)
 
-        # height is 0-based block index; fork_point is array index of first
-        # differing block. Suffix length = number of blocks after fork_point.
-        self_suffix_len  = (self.height  + 1) - fork_point
-        other_suffix_len = (other.height + 1) - fork_point
-
-        self_suffix_len  = max(self_suffix_len,  0)
-        other_suffix_len = max(other_suffix_len, 0)
+        self_suffix_len  = max((self.height  + 1) - fork_point, 0)
+        other_suffix_len = max((other.height + 1) - fork_point, 0)
 
         if self_suffix_len <= 0 and other_suffix_len <= 0:
-            # No blocks after fork point — compare cumulative scores directly
             if self.cumulative_score != other.cumulative_score:
                 return self.cumulative_score < other.cumulative_score
             return self.tip["hash"] < other.tip["hash"]
@@ -201,30 +188,80 @@ class ChainState:
         if other_suffix_len <= 0:
             return True
 
-        self_suffix_score  = self.cumulative_score  - self._prefix_score(fork_point)
-        other_suffix_score = other.cumulative_score - other._prefix_score(fork_point)
+        fork_balances    = _balances_at(self.chain, fork_point)
+        self_score       = _capped_suffix_score(self.chain,  fork_point, fork_balances)
+        other_score      = _capped_suffix_score(other.chain, fork_point, fork_balances)
 
-        # Compare self_suffix_score/self_suffix_len < other_suffix_score/other_suffix_len
-        # via cross-multiplication (exact, no floats)
-        self_cross  = self_suffix_score  * other_suffix_len
-        other_cross = other_suffix_score * self_suffix_len
-        if self_cross != other_cross:
-            return self_cross < other_cross
+        if self_score != other_score:
+            return self_score < other_score
         return self.tip["hash"] < other.tip["hash"]
 
-    def _prefix_score(self, fork_point):
-        """Cumulative score of blocks 0..fork_point (shared prefix)."""
-        # Both chains are identical up to fork_point so we can compute
-        # from self.chain. Called only during sync comparison, not hot path.
-        import pob as pob_mod
-        score = 0
-        bw = pob_mod.BurnWindow()
-        for i in range(min(fork_point, len(self.chain))):
-            blk = self.chain[i]
-            bw.add_block(blk)
-            if i > 0:
-                builder = blk.get("builder")
-                if builder:
-                    phi = pob_mod._tip_hash_int([self.chain[i - 1]])
-                    score += bw.score(phi, builder)
-        return score
+
+# ---------------------------------------------------------------------------
+# Module-level helpers for fork evaluation
+# ---------------------------------------------------------------------------
+
+def _balances_at(chain, fork_point):
+    """Replay chain[:fork_point] and return per-address balance snapshot."""
+    s  = state_mod.State()
+    bw = pob_mod.BurnWindow()
+    for i in range(min(fork_point, len(chain))):
+        blk = chain[i]
+        bw.add_block(blk)
+        if i == 0:
+            continue
+        for t in blk.get("transactions", []):
+            s.apply_tx(t)
+        builder = blk.get("builder")
+        if builder:
+            s.apply_reward_distribution(
+                bw.reward_distribution(builder, s.compute_block_reward())
+            )
+    return s.all_balances()
+
+
+def _capped_suffix_score(chain, fork_point, fork_balances):
+    """Cumulative PoB score for chain[fork_point:] with pre-fork balance cap.
+
+    Each contributor's eligible burns in the suffix are capped to their
+    balance at fork_point. Burns beyond that cap came from privately minted
+    rewards on the divergent chain and do not improve the scoring denominator.
+    """
+    bw = pob_mod.BurnWindow()
+    for blk in chain[:fork_point]:
+        bw.add_block(blk)
+
+    # Track suffix burns per (beneficiary, contributor) pair
+    suffix_contrib: "dict[tuple, int]" = {}
+
+    score = 0
+    for i in range(fork_point, len(chain)):
+        blk = chain[i]
+        for tx in blk.get("transactions", []):
+            sender = tx.get("from", "")
+            for out in tx.get("outputs", []):
+                if out.get("to") != pob_mod.BURN_ADDRESS:
+                    continue
+                beneficiary = out.get("beneficiary") or sender
+                key = (beneficiary, sender)
+                suffix_contrib[key] = suffix_contrib.get(key, 0) + out["amount"]
+
+        bw.add_block(blk)
+
+        builder = blk.get("builder")
+        if builder and i > 0:
+            parent_hash_int = pob_mod._tip_hash_int([chain[i - 1]])
+
+            # Rebuild eligible burn with per-contributor suffix cap
+            eligible = 0
+            window_contribs = bw.burns_for(builder)  # {contributor: window_total}
+            for contributor, window_amt in window_contribs.items():
+                suffix_amt = suffix_contrib.get((builder, contributor), 0)
+                pre_fork_amt = window_amt - suffix_amt
+                cap = fork_balances.get(contributor, 0)
+                eligible += pre_fork_amt + min(suffix_amt, cap)
+
+            seed = parent_hash_int ^ pob_mod._addr_int(builder)
+            score += seed // max(1, eligible)
+
+    return score

@@ -93,9 +93,9 @@ The builder's guaranteed cut merges with their proportional contributor share if
 
 **Fork resolution.** Two nodes may complete the VDF at roughly the same time and broadcast competing blocks for the same slot. Both blocks may be structurally valid. Nodes select the block whose builder has the lower PoB score. This is deterministic and locally computable without coordination. If scores are equal (hash coincidence), the lower block hash breaks the tie.
 
-When two valid chains diverge, nodes adopt the one with the lower **average suffix score per block** from the fork point onward. See Section 7a for the full fork choice rule.
+When two valid chains diverge, nodes adopt the one with the lower **cumulative suffix score** from the fork point onward. See Section 7a for the full fork choice rule.
 
-**History rewriting.** An attacker wishing to rewrite block N must recompute the VDF sequentially for every block from N to the present — that takes as long in real time as the honest network took. The VDF is the binding constraint: no amount of parallelism or capital can compress it. PoB scores on a private fork can be freely manipulated using coins minted on that fork, so they do not add independent protection against rewriting.
+**History rewriting.** An attacker wishing to rewrite block N must recompute the VDF sequentially for every block from N to the present — that takes as long in real time as the honest network took. The VDF is the primary binding constraint on rewriting speed. Under the cumulative suffix score rule with the pre-fork balance cap, the attacker's scoring denominator is additionally limited to their pre-fork economic holdings: privately minted rewards cannot inflate it.
 
 Every valid block received from a peer is immediately rebroadcast to all other peers. This ensures that nodes behind NAT or with limited connectivity participate in propagation through well-connected peers.
 
@@ -152,32 +152,36 @@ The full block history is stored permanently. Balance state is always recoverabl
 
 ## 7a. Fork Choice Rule
 
-When two valid chains diverge, nodes select the canonical chain by comparing average PoB score per block in the suffix after the fork point. Formally:
+When two valid chains diverge, nodes select the canonical chain by comparing cumulative PoB score in the suffix after the fork point, with a pre-fork balance cap applied to each contributor's burns. Formally:
 
 ```
-fork_point   = highest block where both chains share identical hashes
-suffix_score = sum of PoB scores for all blocks after fork_point
-suffix_len   = number of blocks after fork_point
-average      = suffix_score / suffix_len
+fork_point        = highest block where both chains share identical hashes
+fork_balances     = per-address balance snapshot at fork_point (replayed from genesis)
+eligible_burns(addr) = min(suffix_burns(addr), fork_balances[addr])
+suffix_score      = sum of score(builder_i, eligible_burns) for all blocks i >= fork_point
 ```
 
-The chain with lower average suffix score wins, regardless of chain length.
+The chain with lower cumulative suffix score wins, regardless of chain length.
 
-**Why average suffix score, not total or height:**
+**Pre-fork balance cap.** Burns an address makes in the suffix are capped to that address's balance at the fork point. Any burns above the cap were funded by block rewards minted on that branch after the fork and do not count toward the scoring denominator. This closes the self-funding loop: an attacker who mines coins privately and burns them immediately gains no denominator advantage beyond their real pre-fork economic stake.
+
+**Why cumulative suffix score, not average or height:**
 
 - Height-wins (longer chain always wins) breaks PoB: a node that builds faster ignores all competing blocks permanently. Burns become irrelevant once a node is one block ahead.
-- Total score-wins is vulnerable to private chain attacks: an attacker who builds a shorter private chain with massive burns could accumulate a lower total score than a longer honest chain.
-- Average suffix score is robust to both: building more blocks alone does not help if those blocks have worse average scores. The honest network, with multiple nodes competing at each block, statistically produces lower per-block averages than a solo attacker with no competition.
+- Average suffix score is vulnerable to private chain attacks: an attacker who mines ~100 private blocks and burns all self-minted rewards achieves a lower average than 1800 honest blocks at near-zero external cost.
+- Cumulative suffix score with the pre-fork balance cap is robust to both: adding weak blocks makes a chain's suffix score worse; privately minted rewards cannot inflate the denominator; and the honest chain benefits from minimum-score competition across all active builders.
 
-**Tiebreak:** when average suffix scores are equal, the chain with the lexicographically smaller tip hash wins. This is deterministic and unbiasable.
+**Tiebreak:** when cumulative suffix scores are equal, the chain with the lexicographically smaller tip hash wins. This is deterministic and unbiasable.
 
-**Security note:** the VDF time cost and the fork choice rule are independent protections. The VDF ensures history cannot be rewritten faster than real time. The fork choice rule ensures that among valid chains of any length, the one representing the most genuine economic competition wins.
+**Security note:** the VDF time cost and the fork choice rule are complementary protections. The VDF ensures history cannot be rewritten faster than real time. The fork choice rule with the balance cap ensures that the scoring advantage is bounded by real pre-fork economic commitment, not by coins conjured on a private branch.
 
 ## 8. Security Analysis
 
-**Competing chain against an active network.** A botnet that attempts to build an alternative chain without burning real coins produces blocks with `denominator = 1` and therefore very large scores. The honest network, whose participants have accumulated burn weight over 500-block windows, produces blocks with far lower scores. The honest chain's cumulative score is always lower, and every node independently rejects the botnet's chain without coordination.
+**Competing chain against an active network.** A botnet that attempts to build an alternative chain without burning real coins produces blocks with `denominator = 1` and therefore very large scores. The honest network, whose participants have accumulated burn weight over 500-block windows, produces blocks with far lower scores. The honest chain's cumulative suffix score is always lower, and every node independently rejects the botnet's chain without coordination.
 
-**Majority VDF attack.** VDF sequentiality means a majority of nodes produce blocks at the same rate as a single honest node. Acquiring a majority of sequential compute does not help an attacker rewrite history faster. The VDF time cost is the sole binding constraint on history rewriting.
+**Withholding and short-reorg attack.** An attacker who stays connected to the network, collects all transactions and burns, and builds privately as the sole block producer earns block rewards on their private chain. They could then burn those rewards to inflate their scoring denominator and attempt to overtake the honest chain. The pre-fork balance cap defeats this: eligible burns in the divergent suffix are capped to the attacker's balance at the fork point. Privately minted rewards cannot contribute to the denominator. The attacker's scoring advantage is therefore bounded by their real pre-fork economic stake, while the honest chain benefits from minimum-score competition across all active builders.
+
+**Majority VDF attack.** VDF sequentiality means a majority of nodes produce blocks at the same rate as a single honest node. Acquiring a majority of sequential compute does not help an attacker rewrite history faster.
 
 **Transaction censorship.** Even a majority of burners only wins roughly that fraction of slots by score lottery. The honest minority wins the remaining slots and includes censored transactions. The probabilistic acceptance mechanism further penalizes repeated exclusion.
 

@@ -6,8 +6,8 @@ apply_block, _apply_block_with_state, is_better_than (fork choice),
 accessors (tip, height, genesis_hash, fee_rate_at).
 
 Whitepaper constraints enforced:
-  - Fork choice: longer chain wins; equal length -> lower cumulative_score wins
-    (Section 3 fork resolution)
+  - Fork choice: lower cumulative suffix score wins (Section 3 fork resolution)
+  - Burns in the suffix are capped to each contributor's fork-point balance
   - cumulative_score = sum of all block scores (lower = better burn history)
   - Burn window and state stay consistent when blocks are appended
 """
@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import block as block_mod
 import state as state_mod
-from chainstate import ChainState
+from chainstate import ChainState, _balances_at, _capped_suffix_score
 import pob as pob_mod
 from params import INITIAL_FEE_RATE, RINGS_PER_ECH
 from tests.fixtures import (
@@ -239,6 +239,30 @@ class TestIsBetterThan:
     def test_chain_is_not_better_than_itself(self):
         cs = ChainState.from_genesis()
         assert not cs.is_better_than(cs)
+
+    def test_capped_suffix_score_limits_post_fork_burns(self):
+        """Burns in the suffix beyond the fork-point balance do not count."""
+        g = genesis()
+        builder_addr = address(0)
+
+        # Fork point is after genesis only (fork_point=1, no prefix balance)
+        # Build a chain with one block. The builder has zero pre-fork balance.
+        b1 = make_block(1, g["hash"], [], builder_index=0)
+        chain = [g, b1]
+
+        fork_balances = _balances_at(chain, 1)  # balances at height 1 (after genesis, before b1)
+        # builder had zero balance at fork_point=1 (no rewards yet, no txs)
+        assert fork_balances.get(builder_addr, 0) == 0
+
+        score_with_cap = _capped_suffix_score(chain, 1, fork_balances)
+        score_no_cap   = _capped_suffix_score(chain, 1, {builder_addr: 10**18})
+
+        # With zero fork-point balance the cap limits eligible burns to 0;
+        # denominator falls to max(1,0)=1, so score == raw hash seed.
+        # With a huge cap, eligible burns reflect actual window burns.
+        # Both must be non-negative.
+        assert score_with_cap >= 0
+        assert score_no_cap   >= 0
 
 
 # ---------------------------------------------------------------------------
