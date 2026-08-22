@@ -3,9 +3,9 @@
 Uses UDPTransport.get_info() for lightweight tip comparison and
 UDPTransport.request_sync() for fetching chain segments.
 
-Fork choice: average suffix score per block from the fork point onward.
-The chain whose participants made better average scoring choices after
-the fork wins, regardless of height. See ChainState.is_better_than().
+Fork choice: cumulative suffix score from the fork point onward, with a
+pre-fork balance cap on each contributor's burns. Lower cumulative score
+wins, regardless of height. See ChainState.is_better_than().
 """
 
 import logging
@@ -24,8 +24,8 @@ class Syncer:
     def check_and_sync(self, local_chain, apply_fn):
         """Pick a random peer and sync if they have a better chain.
 
-        Compares by average suffix score from the fork point — the chain
-        with lower average score after divergence wins regardless of height.
+        Compares by cumulative suffix score from the fork point (with
+        pre-fork balance cap) — lower total score wins regardless of height.
         Returns True if the chain was updated.
         """
         peer = self.pool.random()
