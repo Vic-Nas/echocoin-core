@@ -28,15 +28,18 @@ verify_n_wesolowski() signature:
 
 Calibration
 -----------
-VDF_ITERATIONS in params.py must be measured on target hardware before genesis:
+VDF_ITERATIONS in params.py must be measured on target hardware before genesis.
+Use at least 500_000 iterations (~15 s) so OS scheduling jitter doesn't dominate.
+Run 3 times and take the median:
 
   import chiavdf, hashlib, time
+  N          = 500_000
   challenge  = hashlib.sha256(b"echocoin_genesis").digest()
-  initial_el = bytes([0x04]) + bytes(99)
-  t0         = time.time()
-  chiavdf.prove(challenge, initial_el, 1024, 10_000, "")
-  elapsed    = time.time() - t0
-  print(int(120 * 10_000 / elapsed))
+  initial_el = bytes([0x08]) + bytes(99)
+  t0         = time.monotonic()
+  chiavdf.prove(challenge, initial_el, 1024, N, "")
+  elapsed    = time.monotonic() - t0
+  print(f"elapsed {elapsed:.2f}s  VDF_ITERATIONS = {int(120 * N / elapsed)}")
 """
 
 import time
