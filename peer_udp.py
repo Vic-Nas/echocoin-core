@@ -180,8 +180,8 @@ class UDPTransport:
         self._reassembler = _Reassembler()
         self._pending_sync: dict[int, _PendingSync] = {}  # msg_id -> _PendingSync
         self._sync_lock   = threading.Lock()
-        self._pong_events: dict[tuple, threading.Event] = {}
-        self._pong_addrs: dict[tuple, str] = {}  # (addr, msg_id) -> observed addr
+        self._pong_events: dict[int, threading.Event] = {}
+        self._pong_addrs: dict[int, str] = {}  # msg_id -> observed addr
         self._pong_lock   = threading.Lock()
         self._info_events: dict[int, threading.Event] = {}  # msg_id -> event
         self._info_results: dict[int, dict] = {}            # msg_id -> info dict
@@ -230,15 +230,15 @@ class UDPTransport:
         msg_id = self._new_msg_id()
         ev = threading.Event()
         with self._pong_lock:
-            self._pong_events[(target, msg_id)] = ev
+            self._pong_events[msg_id] = ev
         payload = {"genesis": self.genesis_hash}
         if self.our_external_addr:
             payload["from"] = self.our_external_addr
         self._send_one(MT_PING, msg_id, payload, target)
         if ev.wait(timeout):
             with self._pong_lock:
-                result = self._pong_addrs.pop((target, msg_id), None)
-                self._pong_events.pop((target, msg_id), None)
+                result = self._pong_addrs.pop(msg_id, None)
+                self._pong_events.pop(msg_id, None)
             # Vote on our external address — require 2 agreements before committing
             if result:
                 self._ext_addr_votes[result] = self._ext_addr_votes.get(result, 0) + 1
@@ -248,7 +248,7 @@ class UDPTransport:
                     self.our_external_addr = result  # tentative until confirmed
             return result
         with self._pong_lock:
-            self._pong_events.pop((target, msg_id), None)
+            self._pong_events.pop(msg_id, None)
         return None
 
     def send_block(self, block: dict):
@@ -425,12 +425,11 @@ class UDPTransport:
         elif msg_type == MT_PONG:
             observed = data.get("observed", "")
             with self._pong_lock:
-                key = (sender, msg_id)
-                matched = key in self._pong_events
+                matched = msg_id in self._pong_events
                 log.debug("[udp] PONG from %s  msg_id=%d  matched=%s", sender_addr, msg_id, matched)
                 if matched:
-                    self._pong_addrs[key] = observed
-                    self._pong_events[key].set()
+                    self._pong_addrs[msg_id] = observed
+                    self._pong_events[msg_id].set()
 
         elif msg_type == MT_PEERS:
             peers = data.get("peers", [])
