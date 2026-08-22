@@ -230,7 +230,10 @@ class UDPTransport:
         ev = threading.Event()
         with self._pong_lock:
             self._pong_events[(target, msg_id)] = ev
-        self._send_one(MT_PING, msg_id, {"genesis": self.genesis_hash}, target)
+        payload = {"genesis": self.genesis_hash}
+        if self.our_external_addr:
+            payload["from"] = self.our_external_addr
+        self._send_one(MT_PING, msg_id, payload, target)
         if ev.wait(timeout):
             with self._pong_lock:
                 result = self._pong_addrs.pop((target, msg_id), None)
@@ -322,10 +325,12 @@ class UDPTransport:
         No relay needed — both nodes do this simultaneously when they
         discover each other via DHT."""
         target = self._addr_tuple(target_addr)
+        payload = {"genesis": self.genesis_hash}
+        if self.our_external_addr:
+            payload["from"] = self.our_external_addr
         for _ in range(8):
             try:
-                self._send_one(MT_PING, self._new_msg_id(),
-                               {"genesis": self.genesis_hash}, target)
+                self._send_one(MT_PING, self._new_msg_id(), payload, target)
             except Exception:
                 pass
             time.sleep(0.05)
@@ -405,16 +410,20 @@ class UDPTransport:
         sender_addr = f"{sender[0]}:{sender[1]}"
 
         if msg_type == MT_PING:
-            # Reply with PONG including sender's observed address
             peer_genesis = data.get("genesis")
-            log.debug("[udp] PING from %s  genesis_match=%s", sender_addr, peer_genesis == self.genesis_hash)
             if peer_genesis == self.genesis_hash:
                 self._pool.touch(sender_addr)
+                # If sender included their announced address, PONG there instead of
+                # the recvfrom source (which may be NAT-looped to our own external IP)
+                announced = data.get("from", "")
+                pong_target = sender
+                if announced and ":" in announced and announced != sender_addr:
+                    h, p = announced.rsplit(":", 1)
+                    pong_target = (h, int(p))
                 self._send_one(MT_PONG, msg_id,
                                {"observed": sender_addr,
                                 "genesis": self.genesis_hash},
-                               sender)
-                log.debug("[udp] PONG sent to %s", sender_addr)
+                               pong_target)
 
         elif msg_type == MT_PONG:
             observed = data.get("observed", "")

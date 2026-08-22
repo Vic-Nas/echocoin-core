@@ -108,6 +108,14 @@ class Discovery:
         self.udp.set_punch_go_callback(_on_punch_go)
 
         log.info("[dht] started, bootstrapping")
+        # Seed our external address early so PINGs we send include "from" field.
+        # This lets NAT-loopback peers send PONG to our real IP instead of the
+        # hairpinned source address.
+        if not self.udp.our_external_addr:
+            ip = self._fallback_ip()
+            if ip:
+                self.udp.our_external_addr = f"{ip}:{self.port}"
+                log.info("[peer] external addr seeded from HTTP  addr=%s:%d", ip, self.port)
         time.sleep(15)
 
         put_delay = PUT_DELAY_LOCAL + my_offset % 300
