@@ -367,8 +367,12 @@ class UDPTransport:
     def _handle_datagram(self, data: bytes, sender: tuple):
         unpacked = _unpack(data)
         if unpacked is None:
+            log.debug("[udp] _unpack FAILED from %s:%s  len=%d  raw=%s",
+                      sender[0], sender[1], len(data), data[:16].hex())
             return
         msg_type, msg_id, chunk_idx, chunk_total, payload_bytes = unpacked
+        log.debug("[udp] recv from %s:%s  type=0x%02x  msg_id=%d  chunk=%d/%d  payload_len=%d",
+                  sender[0], sender[1], msg_type, msg_id, chunk_idx, chunk_total, len(payload_bytes))
 
         # Reassemble chunked messages
         if msg_type in (MT_SYNC,):
