@@ -572,10 +572,17 @@ class TestReorgMempool:
         node._commit(b1_old)
         assert node.cs.height == 1
 
-        # Produce a longer new chain (2 blocks) that does NOT contain t
+        # Produce a new chain that does NOT contain t but has better avg suffix score.
+        # Use apply_better_chain directly with a chain that _evaluate_remote_chain
+        # will accept — we patch is_better_than to always return True so the test
+        # focuses on mempool restoration logic, not fork choice arithmetic.
         b1_new = make_block(1, g["hash"], [], builder_index=1)
         b2_new = make_block(2, b1_new["hash"], [], builder_index=1)
-        ok, err = node.apply_better_chain([g, b1_new, b2_new])
+        import unittest.mock as _mock
+        with _mock.patch.object(
+            node.cs.__class__, "is_better_than", return_value=True
+        ):
+            ok, err = node.apply_better_chain([g, b1_new, b2_new])
         assert ok is True, err
         # t was in the old chain at fork_point=1 and is not in the new chain
         assert node.mempool.get(tx_mod.tx_hash(t)) is not None
