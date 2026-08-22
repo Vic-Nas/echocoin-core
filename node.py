@@ -334,11 +334,15 @@ class Node:
         in_sync = self.pool.count() > 0 and not self._last_sync_updated
         sync_interval = SYNC_EVERY_N_CYCLES if in_sync else SYNC_EVERY_N_CYCLES_NEW
         if self._cycle_count % sync_interval == 0:
+            had_peers = self.pool.count() > 0
             updated = self.syncer.check_and_sync(
                 self.cs.chain,
                 lambda chain: self.apply_better_chain(chain)[0],
             )
-            self._last_sync_updated = bool(updated)
+            # Only flip the flag when we actually talked to a peer.
+            # "No peers available" must not be treated as "already in sync".
+            if had_peers:
+                self._last_sync_updated = bool(updated)
 
         cs = self.cs   # local alias -- can change under sync
         pruned = self.mempool.prune_stale(cs.height, cs.state)
