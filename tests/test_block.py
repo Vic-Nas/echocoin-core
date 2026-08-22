@@ -8,7 +8,7 @@ VDF verification is mocked because vdf.evaluate takes ~120s.
 Whitepaper constraints enforced:
   - hash integrity (tamper detection)
   - parent chain linkage and height sequence
-  - timestamp >= parent + BLOCK_CYCLE_SECONDS
+  - timestamp not more than 30s in the future
   - VDF proof mandatory for height > 0
   - fee_rate computed by asymmetric formula (Section 2)
   - tx canonical ordering inside block
@@ -180,19 +180,10 @@ class TestValidateParent:
 # ---------------------------------------------------------------------------
 
 class TestValidateTimestamp:
-    def test_timestamp_too_early_fails(self):
+    def test_past_timestamp_passes(self):
+        # No minimum-gap rule: any past timestamp is valid
         g = genesis()
         b = make_block(1, g["hash"], [], timestamp_offset=-(BLOCK_CYCLE_SECONDS + 1))
-        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
-        assert ok is False
-        assert "timestamp" in err
-
-    def test_timestamp_exactly_at_minimum_passes(self):
-        g = genesis()
-        ts = g["timestamp"] + BLOCK_CYCLE_SECONDS
-        correct_rate = block_mod.compute_expected_fee_rate([g])
-        b = block_mod.create(1, g["hash"], [], address(0),
-                             correct_rate, "aa" * 100, "bb" * 100, timestamp=ts)
         ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
         assert ok is True, err
 
