@@ -191,7 +191,8 @@ class Node:
         self.running      = False
         self._kek         = None
         self._loop_thread = None
-        self._cycle_count = 0
+        self._cycle_count      = 0
+        self._last_sync_updated = True   # treat first cycle as "just updated" → sync every cycle until caught up
 
         self._censorship_tracker = CensorshipTracker()
 
@@ -330,7 +331,7 @@ class Node:
 
         # Sync every cycle when no peers yet or when the syncer last updated
         # the chain (meaning we were behind). Every 3 cycles when in sync.
-        in_sync = self.pool.count() > 0 and not getattr(self, '_last_sync_updated', False)
+        in_sync = self.pool.count() > 0 and not self._last_sync_updated
         sync_interval = SYNC_EVERY_N_CYCLES if in_sync else SYNC_EVERY_N_CYCLES_NEW
         if self._cycle_count % sync_interval == 0:
             updated = self.syncer.check_and_sync(
