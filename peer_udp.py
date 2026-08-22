@@ -402,7 +402,7 @@ class UDPTransport:
 
         if msg_type == MT_PING:
             # Reply with PONG including sender's observed address
-            if parsed.get("genesis") == self.genesis_hash:
+            if data.get("genesis") == self.genesis_hash:
                 self._pool.touch(sender_addr)
                 self._send_one(MT_PONG, msg_id,
                                {"observed": sender_addr,
