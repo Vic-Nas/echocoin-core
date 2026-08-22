@@ -402,18 +402,23 @@ class UDPTransport:
 
         if msg_type == MT_PING:
             # Reply with PONG including sender's observed address
-            if data.get("genesis") == self.genesis_hash:
+            peer_genesis = data.get("genesis")
+            log.debug("[udp] PING from %s  genesis_match=%s", sender_addr, peer_genesis == self.genesis_hash)
+            if peer_genesis == self.genesis_hash:
                 self._pool.touch(sender_addr)
                 self._send_one(MT_PONG, msg_id,
                                {"observed": sender_addr,
                                 "genesis": self.genesis_hash},
                                sender)
+                log.debug("[udp] PONG sent to %s", sender_addr)
 
         elif msg_type == MT_PONG:
             observed = data.get("observed", "")
             with self._pong_lock:
                 key = (sender, msg_id)
-                if key in self._pong_events:
+                matched = key in self._pong_events
+                log.debug("[udp] PONG from %s  msg_id=%d  matched=%s", sender_addr, msg_id, matched)
+                if matched:
                     self._pong_addrs[key] = observed
                     self._pong_events[key].set()
 
