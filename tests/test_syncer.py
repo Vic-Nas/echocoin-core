@@ -126,17 +126,21 @@ class TestFindForkPoint:
         fp = syncer._find_fork_point("1.2.3.4:9000", local)
         assert fp == 1
 
-    def test_request_fails_returns_none(self):
+    def test_request_fails_syncs_from_genesis(self):
+        # When peer returns nothing for every probe, treat as shorter chain.
+        # Binary search converges to 0, returning sync-from-genesis (0).
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
         udp.request_sync.return_value = None
         fp = syncer._find_fork_point("1.2.3.4:9000", chain_of(3))
-        assert fp is None
+        assert fp == 0
 
-    def test_empty_chain_in_response_returns_none(self):
+    def test_empty_chain_in_response_syncs_from_genesis(self):
+        # Empty chain in every response means peer has no matching history;
+        # search converges to 0, returning sync-from-genesis.
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
         udp.request_sync.return_value = wrap_chain([])
         fp = syncer._find_fork_point("1.2.3.4:9000", chain_of(2))
-        assert fp is None
+        assert fp == 0
 
     def test_genesis_only_shared_returns_one(self):
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
