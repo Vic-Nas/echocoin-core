@@ -49,7 +49,7 @@ Every node continuously assembles candidate blocks from its local mempool and br
 
 **The chain is its own clock.** Block timing is enforced not by wall clock but by a Verifiable Delay Function (VDF). Each block must include a valid VDF proof computed over the previous block's hash. The VDF is tuned to take approximately 120 seconds of sequential computation on commodity hardware. Because VDF evaluation is strictly sequential, no amount of parallelism accelerates it. The chain advances at real elapsed time.
 
-**VDF difficulty adjustment.** As hardware improves over time, VDF evaluation will naturally become faster, shrinking block time below the 120-second target. To compensate, the iteration count used by the VDF adjusts upward every 1000 blocks based on observed evaluation times. Each block header includes `vdf_seconds` — the wall clock time the builder took to evaluate — and `vdf_iterations` — the iteration count used. Every 1000 blocks, all nodes independently compute the median `vdf_seconds` across that window from chain data and apply the same deterministic rule:
+**VDF difficulty adjustment.** As hardware improves over time, VDF evaluation will naturally become faster, reducing `vdf_seconds` below the 120-second target. To compensate, the iteration count used by the VDF adjusts upward every 1000 blocks based on observed evaluation times. Each block header includes `vdf_seconds` — the wall clock time the builder took to evaluate the VDF — and `vdf_iterations` — the iteration count used. Every 1000 blocks, all nodes independently compute the median `vdf_seconds` across that window from chain data and apply the same deterministic rule:
 
 ```
 if median_vdf_seconds < 100:
@@ -58,7 +58,7 @@ else:
     new_iterations = current_iterations               # no change
 ```
 
-The iteration count never decreases. Faster hardware causes block times to shorten gradually until the next upward adjustment, never permanently. Because the adjustment is computed identically by all nodes from committed chain data, no coordination is needed and no node can lie about it. A single attacker reporting false `vdf_seconds` values cannot meaningfully skew a 1000-block median.
+The iteration count never decreases. Faster hardware causes `vdf_seconds` to fall below the target, triggering an upward adjustment at the next interval. Block timestamps are set to the real wall-clock time the proof completes; nodes with faster hardware produce blocks sooner and fork choice resolves competing chains. The adjustment is computed identically by all nodes from committed chain data, so no coordination is needed. A `vdf_seconds` value is self-reported by the block builder and can be falsified, but a single node cannot meaningfully skew a 1000-block median.
 
 When a node completes the VDF for the current slot, it assembles its best candidate block, attaches the VDF proof, and broadcasts immediately. Other nodes verify the proof in milliseconds -- verification is fast even though computation is slow -- and accept the block if valid.
 

@@ -37,7 +37,7 @@ POB_WINDOW = 500
 # VDF iteration count tuned to ~120 seconds of sequential computation on
 # commodity hardware. Must be calibrated empirically before genesis.
 # Placeholder: replace with measured value before mainnet.
-VDF_ITERATIONS = 6_100_000  # calibrated: ~120s
+VDF_ITERATIONS = 12_200_000  # calibrated: ~120s on target hardware
 
 # VDF difficulty adjustment. The iteration count can only increase over time
 # as hardware gets faster. Adjustment happens every VDF_ADJUST_INTERVAL blocks

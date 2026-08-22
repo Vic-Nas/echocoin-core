@@ -8,7 +8,6 @@ from crypto import canonical_json
 import tx as tx_mod
 import vdf as vdf_mod
 from params import (
-    BLOCK_CYCLE_SECONDS,
     BLOCK_SIZE_LIMIT,
     BLOCK_SIZE_TARGET_BYTES,
     FEE_RATE_WINDOW,
@@ -76,7 +75,7 @@ def create_genesis():
     """
     Create the genesis block (block 0). Hardcoded and deterministic.
     GENESIS_TIMESTAMP anchors block 0. Every subsequent block carries its own
-    timestamp, validated as at least BLOCK_CYCLE_SECONDS after its parent.
+    timestamp, validated as not more than 30 s in the future.
     """
     blk = {
         "height":           0,
@@ -165,15 +164,6 @@ def _check_timestamp(blk, chain):
         return False, "block missing timestamp"
     if ts > _time.time() + 30:
         return False, f"block timestamp {ts} is too far in the future"
-    if height > 0:
-        parent_ts = chain[-1].get("timestamp")
-        if not isinstance(parent_ts, (int, float)):
-            return False, "parent block missing timestamp"
-        if ts < parent_ts + BLOCK_CYCLE_SECONDS:
-            return False, (
-                f"block timestamp {ts} is less than "
-                f"parent {parent_ts} + {BLOCK_CYCLE_SECONDS}s"
-            )
     return True, None
 
 
