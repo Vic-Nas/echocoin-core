@@ -192,8 +192,9 @@ class UDPTransport:
         self._seen_msg: dict[int, float] = {}      # msg_id -> ts for dedup
         self._seen_lock = threading.Lock()
         self._executor  = ThreadPoolExecutor(max_workers=16, thread_name_prefix="udp-cb")
-        self._on_punch_go = None  # set by discovery after init
-        self._get_tip_fn  = None  # set by main after node init
+        self._on_punch_go   = None  # set by discovery after init
+        self._get_tip_fn    = None  # set by main after node init
+        self._on_peer_hint  = None  # set by discovery; called when PING includes "from"
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -424,6 +425,10 @@ class UDPTransport:
                                {"observed": sender_addr,
                                 "genesis": self.genesis_hash},
                                pong_target)
+                # Let discovery know about the announced address so it can
+                # try a direct ping back (needed when NAT hides the real sender)
+                if announced and self._on_peer_hint:
+                    self._on_peer_hint(announced)
 
         elif msg_type == MT_PONG:
             observed = data.get("observed", "")

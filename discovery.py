@@ -106,6 +106,7 @@ class Discovery:
             self._executor.submit(self._ping_and_admit, addr)
 
         self.udp.set_punch_go_callback(_on_punch_go)
+        self.udp._on_peer_hint = self.enqueue_candidate
 
         log.info("[dht] started, bootstrapping")
         # Seed our external address early so PINGs we send include "from" field.
