@@ -86,7 +86,6 @@ fetch('/api/stats')
 
     const cards = [
       ['Circulating', `${fmt(t.circulating)}<br><span style="color:var(--muted);font-size:.8rem">${circPct} of 21M cap</span>`],
-      ['Burned fees', fmt(t.burned_fees)],
       ['Net emission (last block)', netLabel],
     ];
     document.getElementById('stat-cards').innerHTML = cards.map(([label, val]) =>
