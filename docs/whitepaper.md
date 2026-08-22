@@ -47,9 +47,22 @@ All fees are burned, reducing circulating supply. Burnt fees are added back into
 
 Every node continuously assembles candidate blocks from its local mempool and broadcasts them to peers. There is no designated assembler and no artificial barrier to participation.
 
-**The chain is its own clock.** Block timing is enforced not by wall clock but by a Verifiable Delay Function (VDF). Each block must include a valid VDF proof computed over the previous block's hash. The VDF is tuned to take approximately 120 seconds of sequential computation on commodity hardware. Because VDF evaluation is strictly sequential, no amount of parallelism accelerates it. The chain advances at real elapsed time.
+**The chain is its own clock.** Block timing is enforced by a Verifiable Delay Function (VDF). Each block must include a valid VDF proof computed over the previous block's hash. The VDF is tuned to take approximately 120 seconds of sequential computation on target hardware. Because VDF evaluation is strictly sequential — each squaring depends on the previous result — no amount of parallelism accelerates it. A node that finishes the VDF in less than 120 seconds on faster hardware broadcasts its block immediately; the block is valid, and fork choice resolves any competition with blocks from slower peers.
 
-When a node completes the VDF for the current slot, it assembles its best candidate block, attaches the VDF proof, and broadcasts immediately. Other nodes verify the proof in milliseconds -- verification is fast even though computation is slow -- and accept the block if valid.
+There is no timestamp minimum-gap rule. Block timestamps record real wall-clock time and are only checked for being too far in the future (> 30 seconds ahead of the verifying node's clock). The VDF proof is the sole enforcer of sequential elapsed time.
+
+When a node completes the VDF for the current slot, it assembles its best candidate block, attaches the VDF proof, and broadcasts immediately. Other nodes verify the proof in milliseconds — verification is fast even though computation is slow — and accept the block if valid.
+
+**VDF difficulty adjustment.** As hardware improves, VDF evaluation will naturally become faster, shrinking the time between blocks. To compensate, the iteration count adjusts upward every 1000 blocks based on reported evaluation times. Each block header includes `vdf_seconds` — the wall-clock time the builder took to evaluate — and `vdf_iterations` — the iteration count used. Every 1000 blocks, all nodes independently compute the median `vdf_seconds` across that window and apply the same rule:
+
+```
+if median_vdf_seconds < 100:
+    new_iterations = int(current_iterations * 1.02)   # up to 2% increase
+else:
+    new_iterations = current_iterations               # no change
+```
+
+The iteration count never decreases. `vdf_seconds` is self-reported by the block builder and cannot be verified externally. A single node falsifying its reported time cannot meaningfully skew a 1000-block median.
 
 **Proof-of-Burn block score.** Every builder has a score derived from their recent burn history:
 
