@@ -414,19 +414,11 @@ class UDPTransport:
             peer_genesis = data.get("genesis")
             if peer_genesis == self.genesis_hash:
                 self._pool.touch(sender_addr)
-                # If sender included their announced address, PONG there instead of
-                # the recvfrom source (which may be NAT-looped to our own external IP)
-                announced = data.get("from", "")
-                pong_target = sender
-                if announced and ":" in announced and announced != sender_addr:
-                    h, p = announced.rsplit(":", 1)
-                    pong_target = (h, int(p))
                 self._send_one(MT_PONG, msg_id,
                                {"observed": sender_addr,
                                 "genesis": self.genesis_hash},
-                               pong_target)
-                # Let discovery know about the announced address so it can
-                # try a direct ping back (needed when NAT hides the real sender)
+                               sender)
+                announced = data.get("from", "")
                 if announced and self._on_peer_hint:
                     self._on_peer_hint(announced)
 
