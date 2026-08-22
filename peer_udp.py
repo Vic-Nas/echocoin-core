@@ -390,6 +390,7 @@ class UDPTransport:
         if msg_type == MT_PING:
             # Reply with PONG including sender's observed address
             if data.get("genesis") == self.genesis_hash:
+                self._pool.touch(sender_addr)
                 self._send_one(MT_PONG, msg_id,
                                {"observed": sender_addr,
                                 "genesis": self.genesis_hash},
@@ -449,6 +450,7 @@ class UDPTransport:
 
         elif msg_type == MT_GETINFO:
             # Peer requesting our tip info — respond with height + tip hash
+            self._pool.touch(sender_addr)
             if self._get_tip_fn:
                 height, tip_hash = self._get_tip_fn()
                 self._send_one(MT_INFO, msg_id,
@@ -458,6 +460,7 @@ class UDPTransport:
                                sender)
 
         elif msg_type == MT_INFO:
+            self._pool.touch(sender_addr)
             with self._info_lock:
                 if msg_id in self._info_events:
                     self._info_results[msg_id] = {
@@ -468,6 +471,8 @@ class UDPTransport:
 
     def _handle_getsync(self, msg_id: int, data: dict, sender: tuple):
         """Serve a chain segment request. Calls back on_sync_request if set."""
+        sender_addr = f"{sender[0]}:{sender[1]}"
+        self._pool.touch(sender_addr)
         from_h = data.get("from_h", 0)
         to_h   = data.get("to_h")
         chain  = self._get_chain_fn(from_h, to_h) if self._get_chain_fn else []
