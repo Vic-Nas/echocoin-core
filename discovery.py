@@ -196,7 +196,17 @@ class Discovery:
                     punched = True
                     break
             if not punched:
-                log.debug("[peer] unreachable (no punch)  addr=%s", addr)
+                # No relay available — fire UDP bursts directly and re-ping.
+                # Both nodes discover each other via DHT simultaneously, so
+                # both will fire toward each other at roughly the same time,
+                # which is sufficient to open symmetric NAT holes without a relay.
+                log.debug("[peer] no relay, direct punch  addr=%s", addr)
+                self.udp.punch_direct(addr)
+                time.sleep(PUNCH_WAIT)
+                if self._ping_and_admit(addr):
+                    admitted += 1
+                else:
+                    log.debug("[peer] unreachable (no punch)  addr=%s", addr)
 
         if admitted:
             log.info("[peer] admitted %d peers  pool=%d", admitted, self.pool.count())

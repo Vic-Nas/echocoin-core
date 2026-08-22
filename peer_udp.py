@@ -317,6 +317,19 @@ class UDPTransport:
             self._info_events.pop(msg_id, None)
         return None
 
+    def punch_direct(self, target_addr: str):
+        """Fire UDP bursts toward target to open our NAT hole.
+        No relay needed — both nodes do this simultaneously when they
+        discover each other via DHT."""
+        target = self._addr_tuple(target_addr)
+        for _ in range(8):
+            try:
+                self._send_one(MT_PING, self._new_msg_id(),
+                               {"genesis": self.genesis_hash}, target)
+            except Exception:
+                pass
+            time.sleep(0.05)
+
     def punch_via(self, relay_addr: str, target_addr: str):
         """Ask relay to coordinate a hole punch toward target.
         Simultaneously fire UDP packets toward target to open our NAT hole
