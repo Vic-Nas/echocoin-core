@@ -367,12 +367,12 @@ class UDPTransport:
     def _handle_datagram(self, data: bytes, sender: tuple):
         unpacked = _unpack(data)
         if unpacked is None:
-            log.warning("[udp] _unpack FAILED from %s:%s  len=%d  raw=%s",
-                        sender[0], sender[1], len(data), data[:16].hex())
+            log.debug("[udp] _unpack FAILED from %s:%s  len=%d  raw=%s",
+                      sender[0], sender[1], len(data), data[:16].hex())
             return
         msg_type, msg_id, chunk_idx, chunk_total, payload_bytes = unpacked
-        log.info("[udp] recv from %s:%s  type=0x%02x  chunk=%d/%d",
-                 sender[0], sender[1], msg_type, chunk_idx, chunk_total)
+        log.debug("[udp] recv from %s:%s  type=0x%02x  msg_id=%d  chunk=%d/%d  payload_len=%d",
+                  sender[0], sender[1], msg_type, msg_id, chunk_idx, chunk_total, len(payload_bytes))
 
         # Reassemble chunked messages
         if msg_type in (MT_SYNC,):
@@ -407,21 +407,21 @@ class UDPTransport:
         if msg_type == MT_PING:
             # Reply with PONG including sender's observed address
             peer_genesis = data.get("genesis")
-            log.info("[udp] PING from %s  genesis_match=%s", sender_addr, peer_genesis == self.genesis_hash)
+            log.debug("[udp] PING from %s  genesis_match=%s", sender_addr, peer_genesis == self.genesis_hash)
             if peer_genesis == self.genesis_hash:
                 self._pool.touch(sender_addr)
                 self._send_one(MT_PONG, msg_id,
                                {"observed": sender_addr,
                                 "genesis": self.genesis_hash},
                                sender)
-                log.info("[udp] PONG sent to %s", sender_addr)
+                log.debug("[udp] PONG sent to %s", sender_addr)
 
         elif msg_type == MT_PONG:
             observed = data.get("observed", "")
             with self._pong_lock:
                 key = (sender, msg_id)
                 matched = key in self._pong_events
-                log.info("[udp] PONG from %s  msg_id=%d  matched=%s", sender_addr, msg_id, matched)
+                log.debug("[udp] PONG from %s  msg_id=%d  matched=%s", sender_addr, msg_id, matched)
                 if matched:
                     self._pong_addrs[key] = observed
                     self._pong_events[key].set()
