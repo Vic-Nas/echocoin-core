@@ -67,7 +67,7 @@ MT_INFO      = 0x0C   # response: {"height": N, "tip_hash": "..."}
 MAX_CHUNK_SIZE   = 1400   # bytes, safe below MTU
 RECV_TIMEOUT     = 2.0    # seconds select/recvfrom timeout
 SYNC_TIMEOUT     = 30.0   # seconds to wait for a full sync response
-PING_TIMEOUT     = 3.0    # seconds to wait for PONG
+PING_TIMEOUT     = 8.0    # seconds to wait for PONG
 
 # Header: 1 (type) + 4 (msg_id) + 2 (chunk_idx) + 2 (chunk_total) = 9 bytes
 HDR_FMT  = "!BIHh"  # note: chunk_total signed so -1 = ACK special
