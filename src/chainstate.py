@@ -194,6 +194,9 @@ class ChainState:
 
         if self_score != other_score:
             return self_score < other_score
+        # Equal PoB scores (e.g. no burns yet): prefer longer chain, then tip hash.
+        if self_suffix_len != other_suffix_len:
+            return self_suffix_len > other_suffix_len
         return self.tip["hash"] < other.tip["hash"]
 
 
@@ -261,7 +264,8 @@ def _capped_suffix_score(chain, fork_point, fork_balances):
                 cap = fork_balances.get(contributor, 0)
                 eligible += pre_fork_amt + min(suffix_amt, cap)
 
-            seed = parent_hash_int ^ pob_mod._addr_int(builder)
-            score += seed // max(1, eligible)
+            if eligible > 0:
+                seed = parent_hash_int ^ pob_mod._addr_int(builder)
+                score += seed // eligible
 
     return score
