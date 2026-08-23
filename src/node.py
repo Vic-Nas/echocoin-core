@@ -272,7 +272,9 @@ class Node:
             raise ValueError("passphrase is required to sign a transaction")
         kek        = crypto.derive_kek(self.keyfile, passphrase)
         v          = self.view
-        nonce      = v.state.get_nonce(self.addr) + 1
+        committed  = v.state.get_nonce(self.addr)
+        pending    = self.mempool.pending_nonce(self.addr)
+        nonce      = max(committed, pending) + 1
         fee_height = v.height
         fee        = tx_mod.compute_fee(self.addr, self.pk_hex, to_outputs,
                                          nonce, fee_height, v.tip["fee_rate"])

@@ -46,6 +46,12 @@ class Mempool:
     def all_txs(self):
         return [tx for tx, _ in self._pool.values()]
 
+    def pending_nonce(self, addr):
+        """Highest nonce in the mempool for addr, or 0 if none."""
+        nonces = [t["nonce"] for t, _ in self._pool.values()
+                  if t.get("from") == addr]
+        return max(nonces) if nonces else 0
+
     def pending_hashes(self):
         return frozenset(self._pool.keys())
 
