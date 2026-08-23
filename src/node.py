@@ -506,7 +506,7 @@ class Node:
             return False, f"chain replay error: {e}", None, None, None
 
         if not remote_cs.is_better_than(self.cs, fork_point=fork_point):
-            log.info("[sync] remote chain not better  remote_h=%d  local_h=%d  remote_score=%d  local_score=%d",
+            log.debug("[sync] remote chain not better  remote_h=%d  local_h=%d  remote_score=%d  local_score=%d",
                       remote_cs.height, self.cs.height,
                       remote_cs.cumulative_score, self.cs.cumulative_score)
             return False, "remote chain not better", fork_point, tail, None
