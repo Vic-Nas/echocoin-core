@@ -1,0 +1,21 @@
+# Generated icons (produced by make icons from echocoin.svg)
+echocoin.png
+favicon.ico
+
+# Build artifacts
+build/
+dist/
+AppDir/
+*.spec.bak
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Runtime data
+echocoin_chain.db
+echocoin_chain.db-shm
+echocoin_chain.db-wal
+echocoin_key.json

@@ -1,0 +1,306 @@
+name: Release
+
+on:
+  push:
+    paths:
+      - VERSION
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag:      ${{ steps.read.outputs.tag }}
+      prev_ver: ${{ steps.read.outputs.prev_ver }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+
+      - name: Read VERSION and previous VERSION
+        id: read
+        run: |
+          VERSION=$(cat VERSION | tr -d '[:space:]')
+          if ! echo "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "ERROR: VERSION must be semver (e.g. 1.2.3), got: $VERSION"
+            exit 1
+          fi
+          PREV=$(git show HEAD~1:VERSION 2>/dev/null | tr -d '[:space:]' || echo "")
+          echo "tag=v$VERSION"  >> "$GITHUB_OUTPUT"
+          echo "prev_ver=$PREV" >> "$GITHUB_OUTPUT"
+
+      - name: Check tag does not already exist
+        run: |
+          TAG=${{ steps.read.outputs.tag }}
+          if git ls-remote --tags origin | grep -q "refs/tags/$TAG$"; then
+            echo "ERROR: tag $TAG already exists"
+            exit 1
+          fi
+
+
+  set-genesis:
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set GENESIS_TIMESTAMP if TESTNET=True
+        if: ${{ vars.TESTNET == 'True' }}
+        run: |
+          TIMESTAMP=$(python3 -c "import time; print(int(time.time()))")
+          sed -i "s/^GENESIS_TIMESTAMP = .*/GENESIS_TIMESTAMP = $TIMESTAMP/" params.py
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add params.py
+          git commit -m "chore: set GENESIS_TIMESTAMP=$TIMESTAMP for ${{ needs.version.outputs.tag }}"
+          git push origin main
+
+  test:
+    needs: set-genesis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install liboqs system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build libssl-dev
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run tests
+        run: pytest tests/ -v
+
+  build-linux:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y cmake ninja-build libssl-dev libcairo2-dev pkg-config python3-dev
+
+      - name: Build and install liboqs system-wide
+        run: |
+          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git /tmp/liboqs
+          cmake -S /tmp/liboqs -B /tmp/liboqs/build \
+            -DOQS_ALGS_ENABLED=STD \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --build /tmp/liboqs/build -j$(nproc)
+          sudo cmake --install /tmp/liboqs/build
+          sudo ldconfig
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller cairosvg Pillow
+
+      - name: Install appimagetool
+        run: |
+          wget -qL https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage -O appimagetool
+          chmod +x appimagetool
+          sudo mv appimagetool /usr/local/bin/appimagetool
+
+      - name: Build AppImage
+        run: make linux
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: echocoin-linux
+          path: dist/echocoin.AppImage
+
+  build-windows:
+    needs: test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install liboqs system dependencies
+        run: |
+          choco install cmake ninja openssl --no-progress -y
+          echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
+        shell: pwsh
+
+      - name: Build and install liboqs system-wide
+        shell: pwsh
+        run: |
+          git clone --depth 1 https://github.com/open-quantum-safe/liboqs.git C:/liboqs
+          cmake -S C:/liboqs -B C:/liboqs/build `
+            -G Ninja `
+            -DOQS_ALGS_ENABLED=STD `
+            -DBUILD_SHARED_LIBS=ON `
+            -DCMAKE_BUILD_TYPE=Release `
+            -DCMAKE_INSTALL_PREFIX="C:/liboqs/install"
+          cmake --build C:/liboqs/build -j4
+          cmake --install C:/liboqs/build
+          echo "C:\liboqs\install\bin" >> $env:GITHUB_PATH
+
+      - name: Install Visual C++ redistributable
+        run: choco install vcredist140 --no-progress -y
+        shell: pwsh
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pyinstaller cairosvg Pillow
+
+      - name: Generate icons
+        shell: pwsh
+        run: >-
+          python -c
+          'import cairosvg,io; from PIL import Image;
+          imgs=[Image.open(io.BytesIO(cairosvg.svg2png(url="echocoin.svg",output_width=s,output_height=s))).convert("RGBA") for s in [16,32,48]];
+          imgs[0].save("favicon.ico",format="ICO",sizes=[(16,16),(32,32),(48,48)],append_images=imgs[1:]);
+          open("echocoin.png","wb").write(cairosvg.svg2png(url="echocoin.svg",output_width=512,output_height=512));
+          print("icons generated")'
+
+      - name: Build
+        run: pyinstaller --clean --noconfirm echocoin.spec
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: echocoin-windows
+          path: dist/echocoin.exe
+
+  release:
+    needs: [version, build-linux, build-windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Download Linux artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: echocoin-linux
+          path: artifacts/linux
+
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: echocoin-windows
+          path: artifacts/windows
+
+      - name: Make AppImage executable
+        run: chmod +x artifacts/linux/echocoin.AppImage
+
+      - name: Generate changelog
+        id: changelog
+        run: |
+          PREV_TAG=$(git tag --sort=-version:refname | grep -v "${{ needs.version.outputs.tag }}" | head -1)
+          if [ -n "$PREV_TAG" ]; then
+            RANGE="${PREV_TAG}..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+          git log "$RANGE" --shortstat --pretty=format:"%h %s" | awk '
+            /^[a-f0-9]/ { hash=$0 }
+            /files? changed/ {
+              match($0, /([0-9]+) insertion/, ins)
+              match($0, /([0-9]+) deletion/, del)
+              total = ins[1] + del[1]
+              print total " " hash
+            }
+          ' | sort -rn | head -10 | awk '{$1=""; print NR"."$0}' > /tmp/largest.txt
+
+          echo "CHANGELOG<<EOF" >> "$GITHUB_OUTPUT"
+          echo "## ${{ needs.version.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          echo "" >> "$GITHUB_OUTPUT"
+          echo "### 10 largest commits" >> "$GITHUB_OUTPUT"
+          cat /tmp/largest.txt >> "$GITHUB_OUTPUT"
+          echo "EOF" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.version.outputs.tag }}
+          name: Echocoin ${{ needs.version.outputs.tag }}
+          body: ${{ steps.changelog.outputs.CHANGELOG }}
+          files: |
+            artifacts/linux/echocoin.AppImage
+            artifacts/windows/echocoin.exe
+          fail_on_unmatched_files: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  revert-on-failure:
+    needs: [version, set-genesis, test, build-linux, build-windows, release]
+    runs-on: ubuntu-latest
+    if: |
+      always() && (
+        needs.version.result       == 'failure' ||
+        needs.set-genesis.result   == 'failure' ||
+        needs.test.result          == 'failure' ||
+        needs.build-linux.result   == 'failure' ||
+        needs.build-windows.result == 'failure' ||
+        needs.release.result       == 'failure'
+      )
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Revert VERSION and GENESIS_TIMESTAMP
+        run: |
+          PREV="${{ needs.version.outputs.prev_ver }}"
+          TAG="${{ needs.version.outputs.tag }}"
+          if [ -z "$PREV" ]; then
+            echo "No previous version available -- cannot revert"
+            exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+          echo "$PREV" > VERSION
+          if [ "${{ vars.TESTNET }}" = "True" ]; then
+            sed -i "s/^GENESIS_TIMESTAMP = .*/GENESIS_TIMESTAMP = 0/" params.py
+            git add VERSION params.py
+          else
+            git add VERSION
+          fi
+          git commit -m "revert: VERSION back to $PREV ($TAG release failed)"
+          git push origin main
+          git push origin :refs/tags/$TAG || true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

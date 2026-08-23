@@ -1,0 +1,16 @@
+flask>=3.0
+flask-limiter>=3.5
+requests>=2.31
+PyNaCl>=1.5
+liboqs-python>=0.14.0
+markdown>=3.5
+pytest>=8.0
+libtorrent>=2.0.0
+chiavdf>=1.1.14
+cairosvg>=2.7
+Pillow>=10.0
+orjson>=3.9
+cachetools>=5.3
+peewee>=3.17
+pydantic>=2.0
+msgpack>=1.0

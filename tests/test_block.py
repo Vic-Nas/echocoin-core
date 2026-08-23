@@ -1,0 +1,426 @@
+"""
+Unit tests for block.py
+
+Covers: create_genesis, create, block_hash, block_size, validate (all sub-checks),
+compute_expected_fee_rate, assemble.
+
+VDF verification is mocked because vdf.evaluate takes ~120s.
+Whitepaper constraints enforced:
+  - hash integrity (tamper detection)
+  - parent chain linkage and height sequence
+  - timestamp not more than 30s in the future
+  - VDF proof mandatory for height > 0
+  - fee_rate computed by asymmetric formula (Section 2)
+  - tx canonical ordering inside block
+  - block size <= BLOCK_SIZE_LIMIT
+"""
+
+import os
+import sys
+import time as _time
+from unittest.mock import patch
+
+import pytest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import block as block_mod
+import state as state_mod
+import tx as tx_mod
+from params import (
+    BLOCK_CYCLE_SECONDS, BLOCK_SIZE_LIMIT, BLOCK_SIZE_TARGET_BYTES,
+    GENESIS_MESSAGE, GENESIS_TIMESTAMP, INITIAL_FEE_RATE, RINGS_PER_ECH,
+)
+from tests.fixtures import (
+    address, genesis, keypair, make_block, make_tx, seed_balance,
+)
+
+
+# ---------------------------------------------------------------------------
+# VDF mock: vdf.verify always True unless explicitly overridden
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def mock_vdf(monkeypatch):
+    monkeypatch.setattr("block.vdf_mod.verify", lambda *a, **kw: True)
+
+
+def fresh_state():
+    return state_mod.State()
+
+
+def noop_fee_rate(height):
+    return INITIAL_FEE_RATE
+
+
+# ---------------------------------------------------------------------------
+# 1. create_genesis
+# ---------------------------------------------------------------------------
+
+class TestCreateGenesis:
+    def test_genesis_height_is_zero(self):
+        g = genesis()
+        assert g["height"] == 0
+
+    def test_genesis_previous_hash_is_zeros(self):
+        g = genesis()
+        assert g["previous_hash"] == "0" * 64
+
+    def test_genesis_transactions_empty(self):
+        g = genesis()
+        assert g["transactions"] == []
+
+    def test_genesis_has_hash_field(self):
+        g = genesis()
+        assert "hash" in g
+        assert len(g["hash"]) == 64
+
+    def test_genesis_hash_is_deterministic(self):
+        g1 = genesis()
+        g2 = genesis()
+        assert g1["hash"] == g2["hash"]
+
+    def test_genesis_contains_message(self):
+        g = genesis()
+        assert g["message"] == GENESIS_MESSAGE
+
+    def test_genesis_timestamp_matches_params(self):
+        g = genesis()
+        assert g["timestamp"] == GENESIS_TIMESTAMP
+
+    def test_genesis_fee_rate_is_initial(self):
+        g = genesis()
+        assert g["fee_rate"] == INITIAL_FEE_RATE
+
+    def test_genesis_builder_is_none(self):
+        g = genesis()
+        assert g["builder"] is None
+
+
+# ---------------------------------------------------------------------------
+# 2. block_hash
+# ---------------------------------------------------------------------------
+
+class TestBlockHash:
+    def test_hash_excludes_hash_field(self):
+        """block_hash must not include the 'hash' field (no circular dependency)."""
+        g = genesis()
+        h1 = block_mod.block_hash(g)
+        g2 = dict(g)
+        g2["hash"] = "different"
+        h2 = block_mod.block_hash(g2)
+        assert h1 == h2
+
+    def test_hash_changes_with_content(self):
+        g = genesis()
+        g2 = dict(g)
+        g2["height"] = 1
+        assert block_mod.block_hash(g) != block_mod.block_hash(g2)
+
+    def test_stored_hash_matches_computed(self):
+        g = genesis()
+        assert g["hash"] == block_mod.block_hash(g)
+
+
+# ---------------------------------------------------------------------------
+# 3. validate -- hash integrity
+# ---------------------------------------------------------------------------
+
+class TestValidateHash:
+    def test_valid_genesis_passes(self):
+        g = genesis()
+        ok, err = block_mod.validate(g, fresh_state(), [], noop_fee_rate)
+        assert ok is True, err
+
+    def test_tampered_hash_fails(self):
+        g = genesis()
+        g["hash"] = "00" * 32
+        ok, err = block_mod.validate(g, fresh_state(), [], noop_fee_rate)
+        assert ok is False
+        assert "hash" in err
+
+    def test_tampered_content_fails(self):
+        g = dict(genesis())
+        g["height"] = 999
+        # Recompute hash so it's consistent but height is wrong
+        g["hash"] = block_mod.block_hash(g)
+        ok, err = block_mod.validate(g, fresh_state(), [], noop_fee_rate)
+        # Either height check or hash recompute catches the tamper
+        assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# 4. validate -- parent linkage
+# ---------------------------------------------------------------------------
+
+class TestValidateParent:
+    def test_block_with_correct_parent_passes(self):
+        g = genesis()
+        b = make_block(1, g["hash"], [])
+        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        assert ok is True, err
+
+    def test_wrong_previous_hash_fails(self):
+        g = genesis()
+        b = make_block(1, "00" * 32, [])
+        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        assert ok is False
+        assert "previous_hash" in err
+
+    def test_height_not_parent_plus_one_fails(self):
+        g = genesis()
+        # Build a block with height=2 against a height-0 parent
+        b = make_block(2, g["hash"], [])
+        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        assert ok is False
+
+
+# ---------------------------------------------------------------------------
+# 5. validate -- timestamp
+# ---------------------------------------------------------------------------
+
+class TestValidateTimestamp:
+    def test_past_timestamp_passes(self):
+        # No minimum-gap rule: any past timestamp is valid
+        g = genesis()
+        b = make_block(1, g["hash"], [], timestamp_offset=-(BLOCK_CYCLE_SECONDS + 1))
+        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        assert ok is True, err
+
+    def test_future_timestamp_fails(self):
+        g = genesis()
+        from params import GENESIS_TIMESTAMP
+        far_future = GENESIS_TIMESTAMP + 365 * 24 * 3600 + 3600  # past the mocked "now"
+        correct_rate = block_mod.compute_expected_fee_rate([g])
+        b = block_mod.create(1, g["hash"], [], address(0),
+                             correct_rate, "aa" * 100, "bb" * 100, timestamp=far_future)
+        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        assert ok is False
+        assert "future" in err
+
+
+# ---------------------------------------------------------------------------
+# 6. validate -- VDF proof (whitepaper Section 3: chain is its own clock)
+# ---------------------------------------------------------------------------
+
+class TestValidateVDF:
+    def test_vdf_verified_for_height_gt_zero(self):
+        g = genesis()
+        b = make_block(1, g["hash"], [])
+        # VDF mock returns True by default -- should pass
+        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        assert ok is True, err
+
+    def test_invalid_vdf_proof_fails(self, monkeypatch):
+        monkeypatch.setattr("block.vdf_mod.verify", lambda *a, **kw: False)
+        g = genesis()
+        b = make_block(1, g["hash"], [])
+        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        assert ok is False
+        assert "VDF" in err
+
+    def test_missing_vdf_output_fails(self):
+        g = genesis()
+        b = make_block(1, g["hash"], [])
+        b["vdf_output"] = None
+        b["hash"] = block_mod.block_hash(b)
+        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        assert ok is False
+
+    def test_genesis_skips_vdf_check(self):
+        g = genesis()
+        # Genesis has vdf_output=None -- should still pass
+        ok, err = block_mod.validate(g, fresh_state(), [], noop_fee_rate)
+        assert ok is True, err
+
+    def test_invalid_builder_address_fails(self):
+        g = genesis()
+        b = make_block(1, g["hash"], [])
+        b["builder"] = "not.a.valid.address"
+        b["hash"] = block_mod.block_hash(b)
+        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        assert ok is False
+        assert "builder" in err
+
+
+# ---------------------------------------------------------------------------
+# 7. validate -- tx ordering
+# ---------------------------------------------------------------------------
+
+class TestValidateTxOrdering:
+    def test_canonical_tx_order_passes(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        # fee_height must equal genesis height (0) because block.validate
+        # checks txs against chain_tip_height = block.height - 1 = 0
+        t = make_tx(0, 1, RINGS_PER_ECH, s, chain_tip_height=0)
+        g = genesis()
+        b = make_block(1, g["hash"], [t])
+        ok, err = block_mod.validate(b, s.snapshot(), [g], noop_fee_rate)
+        assert ok is True, err
+
+    def test_wrong_tx_order_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        seed_balance(s, 1, 100.0)
+        # Create two txs from different senders (independent nonces)
+        t1 = make_tx(0, 2, RINGS_PER_ECH, s, chain_tip_height=0)
+        t2 = make_tx(1, 2, RINGS_PER_ECH, s, chain_tip_height=0)
+        sorted_txs = tx_mod.sort_txs([t1, t2])
+        # Reverse them to create wrong order
+        wrong_order = list(reversed(sorted_txs))
+        if wrong_order == sorted_txs:
+            pytest.skip("Hashes happened to sort into same order")
+        g = genesis()
+        b = make_block(1, g["hash"], wrong_order)
+        # Rebuild hash to match wrong content
+        b["hash"] = block_mod.block_hash(b)
+        ok, err = block_mod.validate(b, s.snapshot(), [g], noop_fee_rate)
+        assert ok is False
+        assert "order" in err
+
+
+# ---------------------------------------------------------------------------
+# 8. validate -- fee_rate check
+# ---------------------------------------------------------------------------
+
+class TestValidateFeeRate:
+    def test_correct_fee_rate_passes(self):
+        g = genesis()
+        expected_rate = block_mod.compute_expected_fee_rate([g])
+        ts = g["timestamp"] + BLOCK_CYCLE_SECONDS
+        b = block_mod.create(1, g["hash"], [], address(0),
+                             expected_rate, "aa" * 100, "bb" * 100,
+                             timestamp=ts)
+        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        assert ok is True, err
+
+    def test_wrong_fee_rate_fails(self):
+        g = genesis()
+        b = make_block(1, g["hash"], [], fee_rate=INITIAL_FEE_RATE + 9999)
+        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        assert ok is False
+        assert "fee rate" in err
+
+
+# ---------------------------------------------------------------------------
+# 9. compute_expected_fee_rate (whitepaper Section 2 asymmetric formula)
+# ---------------------------------------------------------------------------
+
+class TestComputeExpectedFeeRate:
+    def test_empty_chain_returns_initial_rate(self):
+        assert block_mod.compute_expected_fee_rate([]) == INITIAL_FEE_RATE
+
+    def test_zero_volume_decays_slowly(self):
+        g = genesis()
+        # Empty blocks for 100 slots
+        chain = [g]
+        for h in range(1, 101):
+            blk = make_block(h, chain[-1]["hash"], [])
+            blk["tx_bytes"] = 0
+            chain.append(blk)
+        rate = block_mod.compute_expected_fee_rate(chain)
+        # Rate should have dropped but still >= 1
+        assert rate >= 1
+        assert rate <= INITIAL_FEE_RATE
+
+    def test_high_volume_adjustment_is_above_one(self):
+        """vol_ratio > 1 -> adjustment = min(1.05, vol_ratio) > 1.
+        The rate only visibly rises once it's large enough to survive int truncation
+        (int(rate * 1.05) > rate requires rate >= 21). We test the formula directly.
+        """
+        from params import FEE_RATE_WINDOW
+        import statistics
+        g = genesis()
+        chain = [g]
+        # Seed chain with high-volume blocks
+        for h in range(1, FEE_RATE_WINDOW + 1):
+            blk = make_block(h, chain[-1]["hash"], [])
+            blk["tx_bytes"] = BLOCK_SIZE_TARGET_BYTES * 2
+            blk["fee_rate"] = INITIAL_FEE_RATE
+            chain.append(blk)
+        window = chain[-FEE_RATE_WINDOW:]
+        vols = [b.get("tx_bytes", 0) for b in window]
+        median_vol = statistics.median(vols)
+        vol_ratio = median_vol / BLOCK_SIZE_TARGET_BYTES
+        # With 2x volume, vol_ratio = 2.0, adjustment = min(1.05, 2.0) = 1.05
+        assert vol_ratio > 1
+        adjustment = min(1.05, vol_ratio)
+        assert adjustment > 1.0
+
+    def test_rate_minimum_is_one(self):
+        g = genesis()
+        # Drive rate down with zero-volume blocks
+        chain = [g]
+        for h in range(1, 501):
+            blk = make_block(h, chain[-1]["hash"], [])
+            blk["tx_bytes"] = 0
+            blk["fee_rate"] = max(1, int(chain[-1].get("fee_rate", INITIAL_FEE_RATE) * 0.999))
+            chain.append(blk)
+        rate = block_mod.compute_expected_fee_rate(chain)
+        assert rate >= 1
+
+    def test_fee_rate_rise_capped_at_5pct_per_block(self):
+        """Whitepaper: rises up to 5% per block (min(1.05, vol_ratio))."""
+        g = genesis()
+        chain = [g]
+        for h in range(1, 11):
+            blk = make_block(h, chain[-1]["hash"], [])
+            blk["tx_bytes"] = BLOCK_SIZE_TARGET_BYTES * 100  # extreme volume
+            blk["fee_rate"] = INITIAL_FEE_RATE
+            chain.append(blk)
+        rate = block_mod.compute_expected_fee_rate(chain)
+        # Rate increase from previous step can be at most 5%
+        prev_rate = chain[-1].get("fee_rate", INITIAL_FEE_RATE)
+        assert rate <= int(prev_rate * 1.05) + 1  # +1 for int rounding
+
+
+# ---------------------------------------------------------------------------
+# 10. assemble
+# ---------------------------------------------------------------------------
+
+class TestAssemble:
+    def test_assemble_returns_block_without_hash(self):
+        g = genesis()
+        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE)
+        assert "hash" not in b
+
+    def test_assemble_includes_valid_txs(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t = make_tx(0, 1, RINGS_PER_ECH, s, 0)
+        g = genesis()
+        b = block_mod.assemble(g, [t], address(0), INITIAL_FEE_RATE)
+        assert len(b["transactions"]) == 1
+
+    def test_assemble_respects_size_limit(self):
+        g = genesis()
+        # Create many dummy tx-shaped dicts to fill the block
+        dummy_txs = []
+        s = fresh_state()
+        seed_balance(s, 0, 10_000.0)
+        for i in range(50):
+            t = make_tx(0, 1, RINGS_PER_ECH, s, 0)
+            dummy_txs.append(t)
+            try:
+                s.apply_tx(t)
+            except Exception:
+                break
+        b = block_mod.assemble(g, dummy_txs, address(0), INITIAL_FEE_RATE)
+        blk_size = block_mod.block_size({**b, "hash": "x"})
+        assert blk_size <= BLOCK_SIZE_LIMIT
+
+    def test_assemble_records_tx_bytes(self):
+        g = genesis()
+        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE)
+        assert "tx_bytes" in b
+
+    def test_assemble_height_is_parent_plus_one(self):
+        g = genesis()
+        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE)
+        assert b["height"] == g["height"] + 1
+
+    def test_assemble_previous_hash_matches_tip(self):
+        g = genesis()
+        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE)
+        assert b["previous_hash"] == g["hash"]

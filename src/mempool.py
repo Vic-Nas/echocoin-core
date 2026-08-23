@@ -1,0 +1,69 @@
+"""Pending tx storage. No I/O."""
+
+import time
+
+import tx as tx_mod
+from params import FEE_HEIGHT_MAX_AGE
+
+MEMPOOL_TTL_SECONDS = 30 * 60
+
+
+class Mempool:
+    """
+    The node loop is the only writer. Flask threads are read-only.
+    CPython GIL makes dict reads and single-key writes atomic, so no
+    lock is needed. Flask threads must never call add, remove, or remove_many.
+    """
+
+    def __init__(self):
+        # tx_hash -> (tx_dict, entered_monotonic)
+        self._pool: dict = {}
+
+    def add(self, tx_dict) -> tuple:
+        h = tx_mod.tx_hash(tx_dict)
+        if h in self._pool:
+            return False, "duplicate"
+        self._pool[h] = (tx_dict, time.monotonic())
+        return True, h
+
+    def remove(self, tx_hash):
+        self._pool.pop(tx_hash, None)
+
+    def remove_many(self, tx_hashes):
+        for h in tx_hashes:
+            self._pool.pop(h, None)
+
+    def get(self, tx_hash):
+        entry = self._pool.get(tx_hash)
+        return entry[0] if entry else None
+
+    def get_txs_by_hashes(self, tx_hashes):
+        return [self._pool[h][0] for h in tx_hashes if h in self._pool]
+
+    def size(self):
+        return len(self._pool)
+
+    def all_txs(self):
+        return [tx for tx, _ in self._pool.values()]
+
+    def pending_hashes(self):
+        return frozenset(self._pool.keys())
+
+    def prune_stale(self, chain_tip_height, state, ttl_seconds=MEMPOOL_TTL_SECONDS):
+        """Evict txs that can never become valid: stale fee_height, superseded
+        nonce, or simply too old. Returns list of pruned hashes."""
+        now = time.monotonic()
+        pruned = []
+        for h, (t, entered) in list(self._pool.items()):
+            fh = t.get("fee_height")
+            stale_fee = (
+                not isinstance(fh, int)
+                or fh > chain_tip_height
+                or fh < chain_tip_height - (FEE_HEIGHT_MAX_AGE - 1)
+            )
+            if (stale_fee
+                    or t["nonce"] <= state.get_nonce(t["from"])
+                    or now - entered > ttl_seconds):
+                pruned.append(h)
+                del self._pool[h]
+        return pruned

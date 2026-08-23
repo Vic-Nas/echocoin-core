@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Transaction</h2>
+<div class="card">
+  <table>
+    <tr><td style="color:var(--muted);width:120px">Hash</td><td class="hash">{{ tx_hash }}</td></tr>
+    <tr><td style="color:var(--muted)">Status</td><td>{{ location }}</td></tr>
+    <tr><td style="color:var(--muted)">From</td><td class="hash-short">{{ tx.from }}</td></tr>
+    <tr><td style="color:var(--muted)">Nonce</td><td>{{ tx.nonce }}</td></tr>
+    <tr><td style="color:var(--muted)">Fee</td><td>{{ tx.fee }}</td></tr>
+    <tr><td style="color:var(--muted)">Fee height</td><td>{{ tx.fee_height }}</td></tr>
+  </table>
+</div>
+<div class="card">
+  <div class="card-title">Outputs</div>
+  <table>
+    <thead><tr><th>To</th><th>Amount</th></tr></thead>
+    <tbody>
+    {% for o in tx.outputs %}
+    <tr><td class="hash-short">{{ o.to }}</td><td>{{ o.amount }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
