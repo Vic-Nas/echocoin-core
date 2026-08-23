@@ -214,12 +214,12 @@ class TestIsBetterThan:
         assert cs1.is_better_than(cs0)
         assert not cs0.is_better_than(cs1)
 
-    def test_equal_height_lower_score_is_better(self):
-        """Whitepaper: lower cumulative_score wins at equal height."""
+    def test_equal_height_higher_burn_sum_is_better(self):
+        """Whitepaper: higher cumulative burn-sum wins at equal height."""
         cs = ChainState.from_genesis()
-        # Manually craft two states with same height but different scores
-        cs_good = ChainState(cs.chain[:], cs.state.snapshot(), cs.burn_window.copy(), 100)
-        cs_bad  = ChainState(cs.chain[:], cs.state.snapshot(), cs.burn_window.copy(), 200)
+        # Manually craft two states with same height but different burn totals
+        cs_good = ChainState(cs.chain[:], cs.state.snapshot(), cs.burn_window.copy(), 200)
+        cs_bad  = ChainState(cs.chain[:], cs.state.snapshot(), cs.burn_window.copy(), 100)
         assert cs_good.is_better_than(cs_bad)
         assert not cs_bad.is_better_than(cs_good)
 
@@ -257,11 +257,9 @@ class TestIsBetterThan:
         score_with_cap = _capped_suffix_score(chain, 1, fork_balances)
         score_no_cap   = _capped_suffix_score(chain, 1, {builder_addr: 10**18})
 
-        # With zero fork-point balance the cap limits eligible burns to 0;
-        # denominator falls to max(1,0)=1, so score == raw hash seed.
-        # With a huge cap, eligible burns reflect actual window burns.
-        # Both must be non-negative.
-        assert score_with_cap >= 0
+        # With zero fork-point balance, all suffix burns are capped to 0.
+        assert score_with_cap == 0
+        # With a huge cap, eligible burns reflect actual suffix burns (>= 0).
         assert score_no_cap   >= 0
 
 
@@ -347,7 +345,7 @@ class TestBuildWindowAndScore:
     def test_build_window_for_genesis_only(self):
         g = genesis()
         window, score = ChainState._build_window_and_score([g])
-        assert score == float("inf")  # genesis has no builder; min sentinel
+        assert score == 0  # genesis has no burns
 
     def test_build_window_for_two_blocks(self):
         g = genesis()

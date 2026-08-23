@@ -38,7 +38,7 @@ Lower score means more economic commitment and higher priority. The numerator is
 
 **Burn pools.** A burn output may name a beneficiary address. Burns tagged to a beneficiary accumulate that address's scoring weight. When the beneficiary wins a block, contributors share the reward proportionally; the block builder always receives a guaranteed 2% base cut regardless of their tagged contributions. Burn weight is address-specific and non-transferable. A contributor who distrusts the pool operator can stop tagging at any time; their weight expires within ~17 hours.
 
-**Fork choice.** When two valid blocks compete for the same slot, nodes keep the one with the lower score. For competing chains, nodes adopt the one with the lower minimum per-block score from the fork point onward. Burns eligible for scoring in a divergent suffix are capped to each contributor's balance at the fork point — rewards minted privately after the fork cannot inflate the denominator. This closes the self-funding loop: a privately-built chain cannot improve its score by burning its own minted rewards.
+**Fork choice.** When two valid blocks compete for the same slot, nodes keep the one with the lower score. For competing chains, nodes adopt the one with the higher total eligible burns from the fork point onward. Burns eligible for this comparison are capped to each contributor's balance at the fork point — rewards minted privately after the fork do not count. This closes the self-funding loop: a privately-built chain cannot gain an advantage by burning its own minted rewards. When total eligible burns are equal (including the bootstrap case where no burns exist yet), the longer chain wins; tip hash breaks any remaining tie deterministically.
 
 **History rewriting.** Rewriting block N requires recomputing the VDF for every subsequent block sequentially, taking as long in real time as the honest network took. The honest chain keeps advancing during any attempt, widening the gap permanently.
 
@@ -77,7 +77,7 @@ On first contact, a node verifies that a candidate peer shares the same genesis 
 
 ## 8. Security Analysis
 
-**Botnet.** A chain built without burns has denominator 1 and very large per-block scores. The honest network's burn weight produces far lower per-block scores; every node independently prefers the honest chain.
+**Botnet.** A chain built without burns has zero total eligible burns in its suffix. The honest network accumulates real burn weight with every block; every node independently prefers the honest chain.
 
 **Withholding attack.** An attacker who builds privately and burns the minted rewards gains nothing: eligible burns in the divergent suffix are capped to the attacker's pre-fork balance. Privately minted rewards do not improve the scoring denominator.
 
