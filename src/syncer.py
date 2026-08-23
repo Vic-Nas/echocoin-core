@@ -3,16 +3,16 @@
 Uses UDPTransport.get_info() for lightweight tip comparison and
 UDPTransport.request_sync() for fetching chain segments.
 
-Fork choice: cumulative suffix score from the fork point onward, with a
-pre-fork balance cap on each contributor's burns. Lower cumulative score
-wins, regardless of height. See ChainState.is_better_than().
+Fork choice: total eligible burns in the suffix from the fork point onward,
+with a pre-fork balance cap per contributor. Higher burn-sum wins.
+See ChainState.is_better_than().
 """
 
 import logging
 
 log = logging.getLogger("ec.syncer")
 
-FETCH_CHUNK = 500   # blocks per GETSYNC request
+FETCH_CHUNK = 20    # blocks per GETSYNC request (keep UDP responses small)
 
 
 class Syncer:
@@ -24,8 +24,8 @@ class Syncer:
     def check_and_sync(self, local_chain, apply_fn):
         """Pick a random peer and sync if they have a better chain.
 
-        Compares by cumulative suffix score from the fork point (with
-        pre-fork balance cap); lower total score wins regardless of height.
+        Compares by total eligible burns in the suffix from the fork point
+        (with pre-fork balance cap); higher burn-sum wins.
         Returns True if the chain was updated.
         """
         peer = self.pool.random()

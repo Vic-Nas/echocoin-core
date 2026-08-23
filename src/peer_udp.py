@@ -544,7 +544,7 @@ class UDPTransport:
                 log.debug("[udp] send_chunked error to %s: %s", target, e)
                 break
             if total > 1:
-                time.sleep(0.001)  # gentle pacing to avoid local buffer drops
+                time.sleep(0.005)  # pacing to avoid drops on NAT/internet paths
 
     def _rebroadcast(self, msg_type: int, msg_id: int,
                      data: dict, exclude: str):
