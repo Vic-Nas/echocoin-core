@@ -151,9 +151,17 @@ jobs:
 
       - name: Install liboqs system dependencies
         run: |
-          choco install cmake ninja openssl gtk-runtime --no-progress -y
+          choco install cmake ninja openssl --no-progress -y
           echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
         shell: pwsh
+
+      - name: Install cairo via MSYS2
+        shell: cmd
+        run: C:\msys64\usr\bin\bash -lc "pacman -S --noconfirm mingw-w64-x86_64-cairo"
+
+      - name: Add MSYS2 mingw64 to PATH
+        shell: pwsh
+        run: echo "C:\msys64\mingw64\bin" >> $env:GITHUB_PATH
 
       - name: Build and install liboqs system-wide
         shell: pwsh
