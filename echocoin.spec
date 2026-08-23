@@ -66,6 +66,8 @@ _all_datas = [
     ("src/bip39_english.txt", "."),
     ("docs/whitepaper.md", "docs"),
     ("echocoin.svg",       "."),
+    ("echocoin.png",       "."),
+    ("favicon.ico",        "."),
     ("templates_html",     "templates_html"),
     *nacl_datas, *cffi_datas, *oqs_datas, *chiavdf_datas,
 ]
@@ -105,6 +107,7 @@ if sys.platform == "win32":
         upx=True,
         upx_exclude=[],
         console=True,
+        icon="favicon.ico",
         bootloader_ignore_signals=False,
         disable_windowed_traceback=False,
         target_arch=None,

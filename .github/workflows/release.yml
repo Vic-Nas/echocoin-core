@@ -151,7 +151,7 @@ jobs:
 
       - name: Install liboqs system dependencies
         run: |
-          choco install cmake ninja openssl --no-progress -y
+          choco install cmake ninja openssl gtk-runtime --no-progress -y
           echo "OPENSSL_ROOT_DIR=C:\Program Files\OpenSSL-Win64" >> $env:GITHUB_ENV
         shell: pwsh
 
@@ -176,7 +176,17 @@ jobs:
       - name: Install dependencies
         run: |
           pip install -r requirements.txt
-          pip install pyinstaller
+          pip install pyinstaller cairosvg Pillow
+
+      - name: Generate icons
+        shell: pwsh
+        run: >-
+          python -c
+          'import cairosvg,io; from PIL import Image;
+          imgs=[Image.open(io.BytesIO(cairosvg.svg2png(url="echocoin.svg",output_width=s,output_height=s))).convert("RGBA") for s in [16,32,48]];
+          imgs[0].save("favicon.ico",format="ICO",sizes=[(16,16),(32,32),(48,48)],append_images=imgs[1:]);
+          open("echocoin.png","wb").write(cairosvg.svg2png(url="echocoin.svg",output_width=512,output_height=512));
+          print("icons generated")'
 
       - name: Build
         run: pyinstaller --clean --noconfirm echocoin.spec
