@@ -347,7 +347,7 @@ class TestBuildWindowAndScore:
     def test_build_window_for_genesis_only(self):
         g = genesis()
         window, score = ChainState._build_window_and_score([g])
-        assert score == 0  # genesis has no builder
+        assert score == float("inf")  # genesis has no builder; min sentinel
 
     def test_build_window_for_two_blocks(self):
         g = genesis()
