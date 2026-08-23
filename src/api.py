@@ -59,6 +59,7 @@ Private app  (default port 8334, 127.0.0.1 only):
 
 import logging
 import os
+import sys
 
 import markdown
 from flask import Flask, jsonify, render_template, request
@@ -347,13 +348,24 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
 
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# PyInstaller-aware base path
+# ---------------------------------------------------------------------------
+
+def _base_dir():
+    """Return the directory that contains templates_html/, working both from
+    source (repo root) and inside a PyInstaller bundle (sys._MEIPASS)."""
+    if getattr(sys, "frozen", False):
+        return sys._MEIPASS
+    return os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+
+
 # Public app factory  (port 8333)
 # ---------------------------------------------------------------------------
 
 def create_app(node, pool, private_port=8334, public_port=8333):
     app = Flask(__name__,
-                template_folder=os.path.join(os.path.dirname(__file__),
-                                             "..", "templates_html"))
+                template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(
         fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate, fmt_score=fmt_score)
     app.logger.setLevel(logging.WARNING)
@@ -388,8 +400,7 @@ def create_app(node, pool, private_port=8334, public_port=8333):
 def create_private_app(node, pool, private_port=8334, public_port=8333):
     """Full-featured app for local use. Never expose via Funnel or public port."""
     app = Flask(__name__,
-                template_folder=os.path.join(os.path.dirname(__file__),
-                                             "..", "templates_html"))
+                template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(
         fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate, fmt_score=fmt_score)
     app.logger.setLevel(logging.WARNING)
