@@ -17,7 +17,7 @@ import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from gossip import Gossip, STEM_HOPS, SEEN_TX_CACHE_SIZE
+from gossip import Gossip, STEM_HOPS_MAX as STEM_HOPS, SEEN_TX_CACHE_SIZE
 import tx as tx_mod
 import state as state_mod
 from tests.fixtures import address, make_tx, seed_balance
@@ -89,13 +89,13 @@ class TestRelayTx:
             g.relay_tx(t)
             mock_send.assert_called_once()
 
-    def test_relay_tx_duplicate_not_sent(self):
-        g, pool, udp = make_gossip(peers=["1.2.3.4:9000"])
+    def test_relay_tx_duplicate_fluff_suppressed(self):
+        """Duplicate fluffs are suppressed by the seen cache; stem always forwards."""
+        g, pool, udp = make_gossip(peers=[])  # no peers → falls through to fluff
         t = sample_tx()
-        with patch.object(g, "dandelion_send") as mock_send:
-            g.relay_tx(t)
-            g.relay_tx(t)
-            assert mock_send.call_count == 1
+        g.dandelion_send(t, 0)   # first fluff: goes through
+        g.dandelion_send(t, 0)   # second fluff: suppressed by seen cache
+        assert udp.send_tx.call_count == 1
 
     def test_relay_tx_different_txs_both_sent(self):
         g, pool, udp = make_gossip(peers=["1.2.3.4:9000"])

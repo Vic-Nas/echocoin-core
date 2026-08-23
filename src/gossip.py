@@ -5,6 +5,7 @@ Dandelion stem/fluff logic is unchanged; only the transport differs.
 """
 
 import logging
+import random
 import threading
 from cachetools import LRUCache
 
@@ -12,8 +13,9 @@ import tx as tx_mod
 
 log = logging.getLogger("ec.gossip")
 
-STEM_HOPS          = 4
 SEEN_TX_CACHE_SIZE = 50_000
+STEM_HOPS_MIN      = 2
+STEM_HOPS_MAX      = 8
 
 
 class Gossip:
@@ -30,12 +32,9 @@ class Gossip:
         self.udp.send_block(block)
 
     def relay_tx(self, tx_dict):
-        h = tx_mod.tx_hash(tx_dict)
-        with self._lock:
-            if h in self._seen_tx:
-                return
-            self._seen_tx[h] = True
-        self.dandelion_send(tx_dict, STEM_HOPS)
+        """Start a fresh Dandelion relay for a locally-submitted or fluffed tx."""
+        hops = random.randint(STEM_HOPS_MIN, STEM_HOPS_MAX)
+        self.dandelion_send(tx_dict, hops)
 
     def mark_seen(self, h):
         """Mark h as seen. Returns True if already seen, False if new."""
@@ -48,10 +47,27 @@ class Gossip:
     # ---- Dandelion stem/fluff ----
 
     def dandelion_send(self, tx_dict, remaining_hops):
+        """Forward tx along the Dandelion stem or fluff it.
+
+        Stem (remaining_hops > 0): send to one random peer with the countdown.
+        Skips the seen cache so small networks can complete the stem even with
+        only 2 nodes — the countdown bounds any loop.
+
+        Fluff (remaining_hops == 0 or no peers): broadcast to all peers.
+        Checks seen cache here to prevent broadcast storms.
+        """
         if remaining_hops > 0:
             peer = self.pool.random()
             if peer:
-                self.udp.send_tx(tx_dict, peers=[peer])
+                log.debug("[gossip] dandelion stem  hops_left=%d", remaining_hops)
+                self.udp.send_tx(tx_dict, peers=[peer],
+                                 remaining_hops=remaining_hops - 1)
                 return
-        # Fluff: broadcast to all
-        self.udp.send_tx(tx_dict)
+        # Fluff: broadcast to all, but only once per tx
+        h = tx_mod.tx_hash(tx_dict)
+        with self._lock:
+            if h in self._seen_tx:
+                return
+            self._seen_tx[h] = True
+        log.debug("[gossip] dandelion fluff")
+        self.udp.send_tx(tx_dict, remaining_hops=0)

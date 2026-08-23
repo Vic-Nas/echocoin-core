@@ -264,13 +264,20 @@ class UDPTransport:
             self._send_chunked(MT_BLOCK, msg_id, payload,
                                self._addr_tuple(addr))
 
-    def send_tx(self, tx: dict, peers=None):
-        """Send TX to specific peers or broadcast."""
+    def send_tx(self, tx: dict, peers=None, remaining_hops=0):
+        """Send TX to specific peers or broadcast.
+
+        remaining_hops > 0: stem phase — receiver continues forwarding.
+        remaining_hops == 0: fluff phase — receiver validates and adds to mempool.
+        """
         if peers is None:
             peers = self._pool.get_all()
         if not peers:
             return
-        payload = _encode({"genesis": self.genesis_hash, "tx": tx})
+        msg = {"genesis": self.genesis_hash, "tx": tx, "remaining_hops": remaining_hops}
+        if remaining_hops > 0:
+            msg["relay_type"] = "tx_stem"
+        payload = _encode(msg)
         msg_id = self._new_msg_id()
         self._mark_seen(msg_id)
         for addr in peers:
