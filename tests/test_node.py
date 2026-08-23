@@ -265,26 +265,26 @@ class TestSubmitTx:
 
 class TestBuildAndSignTx:
     def test_build_and_sign_returns_tx_and_fee(self, node_env):
-        node, *_ = node_env
+        node, keyfile, *_ = node_env
         node.cs.state.credit(node.addr, 100 * RINGS_PER_ECH)
         node.cs.state.total_minted += 100 * RINGS_PER_ECH
         # Rebuild view so it reflects the updated state
         from node import NodeView
         node.view = NodeView(node.cs)
         outputs = [{"to": address(1), "amount": RINGS_PER_ECH}]
-        t, fee = node.build_and_sign_tx(outputs)
+        t, fee = node.build_and_sign_tx(outputs, passphrase="testpass")
         assert isinstance(t, dict)
         assert "signature" in t
         assert isinstance(fee, int) and fee > 0
 
     def test_build_and_sign_signature_verifies(self, node_env):
-        node, *_ = node_env
+        node, keyfile, *_ = node_env
         node.cs.state.credit(node.addr, 100 * RINGS_PER_ECH)
         node.cs.state.total_minted += 100 * RINGS_PER_ECH
         from node import NodeView
         node.view = NodeView(node.cs)
         outputs = [{"to": address(1), "amount": RINGS_PER_ECH}]
-        t, _ = node.build_and_sign_tx(outputs)
+        t, _ = node.build_and_sign_tx(outputs, passphrase="testpass")
         ok, err = tx_mod.validate(t, node.cs.state, node.cs.height,
                                    node.cs.fee_rate_at)
         assert ok is True, err

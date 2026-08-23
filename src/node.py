@@ -268,12 +268,9 @@ class Node:
             return False, "node busy (timeout)"
 
     def build_and_sign_tx(self, to_outputs, passphrase=None):
-        if self._kek is not None:
-            kek, own_kek = self._kek, False
-        elif passphrase:
-            kek, own_kek = crypto.derive_kek(self.keyfile, passphrase), True
-        else:
-            raise RuntimeError("node not running and no passphrase provided")
+        if not passphrase:
+            raise ValueError("passphrase is required to sign a transaction")
+        kek        = crypto.derive_kek(self.keyfile, passphrase)
         v          = self.view
         nonce      = v.state.get_nonce(self.addr) + 1
         fee_height = v.height
@@ -282,9 +279,7 @@ class Node:
         sk = crypto.decrypt_secret_key(self.keyfile, kek=kek)
         t  = tx_mod.create(self.addr, self.pk_hex, to_outputs,
                             nonce, fee_height, fee, sk)
-        del sk
-        if own_kek:
-            del kek
+        del sk, kek
         return t, fee
 
     # ------------------------------------------------------------------
