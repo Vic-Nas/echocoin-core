@@ -4,6 +4,7 @@ on:
   push:
     paths:
       - VERSION
+  workflow_dispatch: {}
 
 concurrency:
   group: release
@@ -55,10 +56,10 @@ jobs:
         if: ${{ vars.TESTNET == 'True' }}
         run: |
           TIMESTAMP=$(python3 -c "import time; print(int(time.time()))")
-          sed -i "s/^GENESIS_TIMESTAMP = .*/GENESIS_TIMESTAMP = $TIMESTAMP/" params.py
+          sed -i "s/^GENESIS_TIMESTAMP = .*/GENESIS_TIMESTAMP = $TIMESTAMP/" src/params.py
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add params.py
+          git add src/params.py
           git commit -m "chore: set GENESIS_TIMESTAMP=$TIMESTAMP for ${{ needs.version.outputs.tag }}"
           git push origin main
 
@@ -294,8 +295,8 @@ jobs:
           git pull --rebase origin main
           echo "$PREV" > VERSION
           if [ "${{ vars.TESTNET }}" = "True" ]; then
-            sed -i "s/^GENESIS_TIMESTAMP = .*/GENESIS_TIMESTAMP = 0/" params.py
-            git add VERSION params.py
+            sed -i "s/^GENESIS_TIMESTAMP = .*/GENESIS_TIMESTAMP = 0/" src/params.py
+            git add VERSION src/params.py
           else
             git add VERSION
           fi
