@@ -209,7 +209,7 @@ class TestBurnHistory:
         b2 = make_burn_block(2, b1["hash"], 1, 2 * EMBERS_PER_SCH)
         w = window_from_blocks([g, b1, b2])
         h = w.history()
-        assert h[0]["height"] >= h[-1]["height"]
+        assert [entry["height"] for entry in h] == [2, 1]
 
 
 # ---------------------------------------------------------------------------

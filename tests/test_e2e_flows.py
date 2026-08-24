@@ -351,7 +351,7 @@ class TestE2E_BlockAssembly:
                 break
 
         sorted_txs = tx_mod.sort_txs(txs)
-        assembled = block_mod.assemble(g, sorted_txs, address(0), INITIAL_FEE_RATE)
+        assembled = block_mod.assemble(g, sorted_txs, address(0), INITIAL_FEE_RATE, chain=[g])
         assert assembled["height"] == 1
         assert assembled["previous_hash"] == g["hash"]
         assert len(assembled["transactions"]) <= len(sorted_txs)
@@ -373,7 +373,7 @@ class TestE2E_BlockAssembly:
             except Exception:
                 break
 
-        assembled = block_mod.assemble(g, dummy_txs, address(0), INITIAL_FEE_RATE)
+        assembled = block_mod.assemble(g, dummy_txs, address(0), INITIAL_FEE_RATE, chain=[g])
         # Assembled block (with hash placeholder) must fit
         test_block = {**assembled, "hash": "x" * 64}
         assert block_mod.block_size(test_block) <= BLOCK_SIZE_LIMIT

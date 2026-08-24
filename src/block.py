@@ -287,7 +287,7 @@ def compute_expected_fee_rate(chain):
     return max(1, int(current_rate * adjustment))
 
 
-def assemble(tip, txs, builder_addr, fee_rate, chain=None, deadline=None):
+def assemble(tip, txs, builder_addr, fee_rate, chain, deadline=None):
     """Assemble a candidate block from a mempool snapshot.
 
     Pure function: does not touch node state. Adds txs one at a time,
@@ -296,12 +296,12 @@ def assemble(tip, txs, builder_addr, fee_rate, chain=None, deadline=None):
     caller adds vdf_output, vdf_proof, and recomputes the hash.
 
     txs:      pre-sorted list from tx.sort_txs()
-    chain:    full chain list, used to determine vdf_iterations for this block.
-              Pass None only for genesis (uses VDF_ITERATIONS baseline).
+    chain:    full chain list (including genesis), used to determine
+              vdf_iterations for this block.
     deadline: float unix time; stop packing if exceeded
     """
     next_height = tip["height"] + 1
-    iterations  = get_vdf_iterations(chain) if chain is not None else VDF_ITERATIONS
+    iterations  = get_vdf_iterations(chain)
 
     skeleton = create(
         height=next_height,

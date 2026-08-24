@@ -117,7 +117,8 @@ class TestFeeAccounting:
         assert cs2.state.get_balance(address(2)) >= fee
 
     def test_burns_replenish_mintable_pool(self):
-        """Whitepaper Section 5: burns add back to can_mint."""
+        """Whitepaper Section 5: burns add back to can_mint, outweighing
+        the small amount minted for the block that contains them."""
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
         cs.state.total_minted += 1000 * EMBERS_PER_SCH
@@ -130,9 +131,8 @@ class TestFeeAccounting:
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
 
-        # Reward after should be >= reward_before (burns + minted reward)
-        reward_after = cs2.state.compute_block_reward()
-        assert isinstance(reward_after, int) and reward_after >= 0
+        assert cs2.state.total_burnt == 10 * EMBERS_PER_SCH
+        assert cs2.state.compute_block_reward() > reward_before
 
 
 # ---------------------------------------------------------------------------

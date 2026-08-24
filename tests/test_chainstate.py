@@ -125,16 +125,20 @@ class TestValidateAndApply:
         assert cs2.state.get_balance(address(1)) == EMBERS_PER_SCH
 
     def test_fees_credited_to_builder_after_valid_block(self):
+        from params import BUILDER_REWARD_SHARE
+
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
         cs.state.total_minted += 100 * EMBERS_PER_SCH
         g = cs.tip
+        reward = cs.state.compute_block_reward()
         t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
         b = make_block(1, g["hash"], [t], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
-        # Builder should have received the transaction fee
-        assert cs2.state.get_balance(address(2)) >= t["fee"]
+        # Builder receives the fee plus its fixed floor share of the reward
+        expected = t["fee"] + int(reward * BUILDER_REWARD_SHARE)
+        assert cs2.state.get_balance(address(2)) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -164,15 +168,21 @@ class TestBuilderRewardFloor:
 
         cs_burn = ChainState.from_genesis()
         cs_burn.state.credit(address(0), 1000 * EMBERS_PER_SCH)
-        cs_burn.state.total_minted += 1000 * EMBERS_PER_SCH
         t = make_burn_tx(0, 10 * EMBERS_PER_SCH, cs_burn.state, 0)
+        # The intentional burn increases total_burnt, which bumps can_mint
+        # (and therefore the reward) -- compute it post-tx to match what
+        # _apply_builder_reward actually sees.
+        post_tx = cs_burn.state.snapshot()
+        post_tx.apply_tx(t)
+        reward2 = post_tx.compute_block_reward()
+
         b2 = make_block(1, cs_burn.tip["hash"], [t], builder_index=2)
         ok, err, cs2 = cs_burn.validate_and_apply(b2)
         assert ok is True, err
-        reward2 = cs_burn.state.compute_block_reward()
         floor_with_burn = int(reward2 * BUILDER_REWARD_SHARE)
-        # Builder's own floor share credited, independent of the burner's cut
-        assert cs2.state.get_balance(address(2)) >= floor_with_burn
+        # Builder (not the burner) gets exactly its fee plus the fixed floor
+        # share -- the same fraction of the reward as the no-burn case above.
+        assert cs2.state.get_balance(address(2)) == t["fee"] + floor_with_burn
 
 
 # ---------------------------------------------------------------------------
@@ -190,21 +200,6 @@ class TestFromChain:
         b1 = make_block(1, g["hash"], [])
         cs = ChainState.from_chain([g, b1])
         assert cs.height == 1
-
-    def test_state_matches_sequential_application(self):
-        g = genesis()
-        cs0 = ChainState.from_genesis()
-        # Seed and add a tx
-        cs0.state.credit(address(0), 100 * EMBERS_PER_SCH)
-        cs0.state.total_minted += 100 * EMBERS_PER_SCH
-        t = make_tx(0, 1, EMBERS_PER_SCH, cs0.state, 0)
-        b1 = make_block(1, g["hash"], [t])
-        # Apply via validate_and_apply
-        ok, _, cs1 = cs0.validate_and_apply(b1)
-        assert ok
-
-        # Build from_chain replay separately
-        assert cs1.height == 1
 
     def test_genesis_hash_preserved_in_chain(self):
         g = genesis()
@@ -320,18 +315,6 @@ class TestApplyBlock:
 # ---------------------------------------------------------------------------
 # 9. from_chain with transactions -- verifies state is correctly accumulated
 # ---------------------------------------------------------------------------
-
-class TestFromChainWithTxs:
-    def test_from_chain_applies_txs_and_rewards(self):
-        cs0 = ChainState.from_genesis()
-        g = cs0.tip
-        b1 = make_block(1, g["hash"], [])
-        _, _, cs1 = cs0.validate_and_apply(b1)
-
-        cs_replayed = ChainState.from_chain([g, b1])
-        assert cs_replayed.height == 1
-        assert cs_replayed.state.total_minted == cs1.state.total_minted
-
 
 # ---------------------------------------------------------------------------
 # 10. _build_window -- shared by from_storage

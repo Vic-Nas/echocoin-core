@@ -432,7 +432,7 @@ class TestVdfIterationsAdjustment:
 class TestAssemble:
     def test_assemble_returns_block_without_hash(self):
         g = genesis()
-        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE)
+        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE, chain=[g])
         assert "hash" not in b
 
     def test_assemble_includes_valid_txs(self):
@@ -440,7 +440,7 @@ class TestAssemble:
         seed_balance(s, 0, 100.0)
         t = make_tx(0, 1, EMBERS_PER_SCH, s, 0)
         g = genesis()
-        b = block_mod.assemble(g, [t], address(0), INITIAL_FEE_RATE)
+        b = block_mod.assemble(g, [t], address(0), INITIAL_FEE_RATE, chain=[g])
         assert len(b["transactions"]) == 1
 
     def test_assemble_respects_size_limit(self):
@@ -456,21 +456,21 @@ class TestAssemble:
                 s.apply_tx(t)
             except Exception:
                 break
-        b = block_mod.assemble(g, dummy_txs, address(0), INITIAL_FEE_RATE)
+        b = block_mod.assemble(g, dummy_txs, address(0), INITIAL_FEE_RATE, chain=[g])
         blk_size = block_mod.block_size({**b, "hash": "x"})
         assert blk_size <= BLOCK_SIZE_LIMIT
 
     def test_assemble_records_tx_bytes(self):
         g = genesis()
-        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE)
+        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE, chain=[g])
         assert "tx_bytes" in b
 
     def test_assemble_height_is_parent_plus_one(self):
         g = genesis()
-        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE)
+        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE, chain=[g])
         assert b["height"] == g["height"] + 1
 
     def test_assemble_previous_hash_matches_tip(self):
         g = genesis()
-        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE)
+        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE, chain=[g])
         assert b["previous_hash"] == g["hash"]
