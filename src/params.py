@@ -41,10 +41,12 @@ VDF_ITERATIONS = 12_200_000  # calibrated: ~120s on target hardware
 
 # VDF difficulty adjustment. The iteration count can only increase over time
 # as hardware gets faster. Adjustment happens every VDF_ADJUST_INTERVAL blocks
-# using the median reported evaluation time across that window.
-# If median < VDF_ADJUST_MIN_SECONDS, iterations increase by VDF_ADJUST_FACTOR.
-# Iterations never decrease; faster hardware means shorter block times until
-# the next upward adjustment, never a security regression.
+# using the median real block-to-block timestamp delta across that window
+# (not a self-reported figure -- every node computes this identically from
+# chain data alone). If median < VDF_ADJUST_MIN_SECONDS, iterations increase
+# by VDF_ADJUST_FACTOR. Iterations never decrease; faster hardware means
+# shorter block times until the next upward adjustment, never a security
+# regression.
 VDF_ADJUST_INTERVAL    = 1000   # blocks between adjustments
 VDF_ADJUST_MIN_SECONDS = 100    # trigger increase if median falls below this
 VDF_ADJUST_FACTOR      = 1.02   # max 2% increase per adjustment period

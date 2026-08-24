@@ -24,51 +24,40 @@ _TX_SORT_FIELDS = {"fee_height", "nonce"}
 
 
 def get_vdf_iterations(chain) -> int:
-    """Return the VDF iteration count that must be used for the next block.
+    """Return the VDF iteration count required for the next block
+    (height = len(chain)) built on top of `chain`.
 
-    Determined by the most recent adjustment block committed to the chain.
-    Adjustment blocks are at heights that are multiples of VDF_ADJUST_INTERVAL.
-    The genesis block always uses VDF_ITERATIONS as the baseline.
+    Deterministically derived from real block timestamps -- no
+    self-reported or otherwise-unverifiable field is trusted. Assemblers
+    and validators call this on the same chain prefix and always agree,
+    including exactly at adjustment boundaries.
 
-    All nodes compute this identically from chain data; no wall clock used.
+    Between boundaries, this is an O(1) lookup of the value fixed at the
+    last boundary (itself independently verified when that block was
+    accepted, so trusting it here is safe). At a boundary, the window
+    that just completed is replayed once to decide whether to bump.
     """
-    if len(chain) <= 1:
-        return VDF_ITERATIONS
-    # Find the most recent adjustment block
-    tip_height = len(chain) - 1
-    last_adj   = (tip_height // VDF_ADJUST_INTERVAL) * VDF_ADJUST_INTERVAL
-    if last_adj == 0:
-        return VDF_ITERATIONS
-    adj_block = chain[last_adj]
-    return adj_block.get("vdf_iterations", VDF_ITERATIONS)
-
-
-def compute_next_vdf_iterations(chain) -> int:
-    """Compute what vdf_iterations should be for the upcoming adjustment block.
-
-    Called when assembling a block at height that is a multiple of
-    VDF_ADJUST_INTERVAL. Uses the median vdf_seconds from the previous window.
-    Only ever increases. Returns current value if no adjustment needed.
-    """
-    tip_height   = len(chain) - 1
-    window_start = tip_height - VDF_ADJUST_INTERVAL + 1
-    if window_start < 0:
+    next_height = len(chain)
+    if next_height < VDF_ADJUST_INTERVAL:
         return VDF_ITERATIONS
 
-    current_iterations = get_vdf_iterations(chain)
+    last_boundary = (next_height // VDF_ADJUST_INTERVAL) * VDF_ADJUST_INTERVAL
+    if next_height > last_boundary:
+        return chain[last_boundary].get("vdf_iterations", VDF_ITERATIONS)
 
-    seconds = [
-        chain[h].get("vdf_seconds")
-        for h in range(window_start, tip_height + 1)
-        if chain[h].get("vdf_seconds") is not None
+    # next_height == last_boundary: assembling/validating the boundary
+    # block itself. Fold in the window that just completed, using real
+    # timestamp deltas between consecutive blocks (not a self-reported
+    # figure) -- the same signal Bitcoin's own retarget relies on.
+    window_start      = last_boundary - VDF_ADJUST_INTERVAL
+    prior_iterations  = chain[window_start].get("vdf_iterations", VDF_ITERATIONS)
+    deltas = [
+        chain[h]["timestamp"] - chain[h - 1]["timestamp"]
+        for h in range(max(window_start, 1), last_boundary)
     ]
-    if not seconds:
-        return current_iterations
-
-    median_secs = statistics.median(seconds)
-    if median_secs < VDF_ADJUST_MIN_SECONDS:
-        return int(current_iterations * VDF_ADJUST_FACTOR)
-    return current_iterations
+    if deltas and statistics.median(deltas) < VDF_ADJUST_MIN_SECONDS:
+        return int(prior_iterations * VDF_ADJUST_FACTOR)
+    return prior_iterations
 
 
 def create_genesis():
@@ -88,7 +77,6 @@ def create_genesis():
         "vdf_output":       None,
         "vdf_proof":        None,
         "vdf_iterations":   VDF_ITERATIONS,
-        "vdf_seconds":      None,
     }
     blk["hash"] = block_hash(blk)
     return blk
@@ -96,7 +84,7 @@ def create_genesis():
 
 def create(height, previous_hash, transactions, builder,
            fee_rate, vdf_output=None, vdf_proof=None, timestamp=None,
-           vdf_seconds=None, vdf_iterations=None):
+           vdf_iterations=None):
     """Create a new block dict.
 
     builder: address of the node that produced the accepted VDF proof
@@ -104,8 +92,6 @@ def create(height, previous_hash, transactions, builder,
              None only for the genesis block.
     vdf_output: hex string of the VDF output element (from vdf.evaluate).
     vdf_proof:  hex string of the full VDF proof blob (from vdf.evaluate).
-    vdf_seconds: wall clock seconds the builder took to evaluate the VDF.
-                 Informational only; used for difficulty adjustment median.
     vdf_iterations: iteration count used for this block's VDF. Set at
                     adjustment boundaries, carried forward otherwise.
     Both vdf_output and vdf_proof are None only for the genesis block.
@@ -120,7 +106,6 @@ def create(height, previous_hash, transactions, builder,
         "vdf_output":     vdf_output,
         "vdf_proof":      vdf_proof,
         "vdf_iterations": vdf_iterations if vdf_iterations is not None else VDF_ITERATIONS,
-        "vdf_seconds":    vdf_seconds,
     }
     blk["hash"] = block_hash(blk)
     return blk
@@ -308,21 +293,15 @@ def assemble(tip, txs, builder_addr, fee_rate, chain=None, deadline=None):
     Pure function: does not touch node state. Adds txs one at a time,
     stopping before the block would exceed the size limit or the deadline
     (if given). Returns a block dict without a VDF proof attached; the
-    caller adds vdf_output, vdf_proof, vdf_seconds, and recomputes the hash.
+    caller adds vdf_output, vdf_proof, and recomputes the hash.
 
     txs:      pre-sorted list from tx.sort_txs()
     chain:    full chain list, used to determine vdf_iterations for this block.
               Pass None only for genesis (uses VDF_ITERATIONS baseline).
     deadline: float unix time; stop packing if exceeded
     """
-    # Determine VDF iteration count for this block height
     next_height = tip["height"] + 1
-    if chain is not None and next_height % VDF_ADJUST_INTERVAL == 0:
-        iterations = compute_next_vdf_iterations(chain)
-    elif chain is not None:
-        iterations = get_vdf_iterations(chain)
-    else:
-        iterations = VDF_ITERATIONS
+    iterations  = get_vdf_iterations(chain) if chain is not None else VDF_ITERATIONS
 
     skeleton = create(
         height=next_height,

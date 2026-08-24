@@ -379,6 +379,56 @@ class TestComputeExpectedFeeRate:
 # 10. assemble
 # ---------------------------------------------------------------------------
 
+class TestVdfIterationsAdjustment:
+    """Regression coverage for the VDF difficulty-adjustment boundary.
+
+    Both the block that carries a genuine adjustment (built via assemble())
+    and the validator checking that same block must agree on the required
+    iteration count. Historically these used two different code paths
+    (compute_next_vdf_iterations vs get_vdf_iterations) that disagreed
+    exactly at boundary heights whenever a bump actually triggered.
+    """
+
+    def test_boundary_block_validates_when_bump_triggers(self, monkeypatch):
+        monkeypatch.setattr("block.VDF_ADJUST_INTERVAL", 3)
+        monkeypatch.setattr("block.VDF_ADJUST_MIN_SECONDS", 1_000_000)
+        monkeypatch.setattr("block.VDF_ADJUST_FACTOR", 2.0)
+
+        g = genesis()
+        chain = [g]
+        for h in range(1, 3):
+            blk = make_block(h, chain[-1]["hash"], [], chain=chain)
+            chain.append(blk)
+
+        # This block sits exactly at the adjustment boundary (height 3).
+        iterations = block_mod.get_vdf_iterations(chain)
+        assert iterations == block_mod.VDF_ITERATIONS * 2, \
+            "sanity check: the window's real timestamps should trigger a bump"
+
+        fee_rate = block_mod.compute_expected_fee_rate(chain)
+        blk3 = block_mod.assemble(chain[-1], [], address(0), fee_rate, chain=chain)
+        assert blk3["vdf_iterations"] == iterations
+        blk3["vdf_output"] = "aa" * 100
+        blk3["vdf_proof"]  = "bb" * 100
+        blk3["hash"] = block_mod.block_hash(blk3)
+
+        ok, err = block_mod.validate(blk3, fresh_state(), chain, noop_fee_rate)
+        assert ok is True, err
+
+    def test_iterations_never_decrease(self, monkeypatch):
+        monkeypatch.setattr("block.VDF_ADJUST_INTERVAL", 3)
+        monkeypatch.setattr("block.VDF_ADJUST_MIN_SECONDS", 1)  # never triggers a bump
+        monkeypatch.setattr("block.VDF_ADJUST_FACTOR", 2.0)
+
+        g = genesis()
+        chain = [g]
+        for h in range(1, 4):
+            blk = make_block(h, chain[-1]["hash"], [], chain=chain)
+            chain.append(blk)
+
+        assert block_mod.get_vdf_iterations(chain) == block_mod.VDF_ITERATIONS
+
+
 class TestAssemble:
     def test_assemble_returns_block_without_hash(self):
         g = genesis()

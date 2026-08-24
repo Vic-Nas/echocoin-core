@@ -321,7 +321,6 @@ class Node:
                                         fee_rate, chain=cs.chain)
         candidate["vdf_output"]    = vdf_out
         candidate["vdf_proof"]     = vdf_proof
-        candidate["vdf_seconds"]   = round(vdf_seconds, 2)
         candidate["vdf_iterations"] = iterations
         candidate["hash"]          = block_mod.block_hash(candidate)
         ok, err = block_mod.validate(candidate, cs.state.snapshot(), cs.chain, cs.fee_rate_at)
