@@ -8,7 +8,7 @@ emission schedule -- all without network or disk I/O.
 Flows covered:
   E2E-1:  Genesis -> mine blocks -> emit rewards -> verify circulating supply
   E2E-2:  PoB: two senders burn different amounts -> proportional reward split
-  E2E-3:  Fork choice: longest chain wins; equal height broken by tip hash
+  E2E-3:  Fork choice: most cumulative proven work wins; ties broken by tip hash
   E2E-4:  Reorg: a shorter chain that becomes longer is accepted
   E2E-5:  Fee rate dynamics: spam attack inflates fee, inactivity decays it
   E2E-6:  Burn expiry: burns age out of the POB_WINDOW
@@ -66,14 +66,15 @@ class TestE2E_EmissionSchedule:
         # Burn in window means reward is distributed
         assert cs.state.total_minted > 100 * EMBERS_PER_SCH
 
-    def test_no_rewards_without_burns(self):
-        """Without any burns, reward stays in can_mint (total_minted stays at pre-seeded value)."""
+    def test_only_builder_floor_minted_without_burns(self):
+        """Without any burns, only the builder's flat floor share mints;
+        the rest of each block's reward stays in can_mint."""
         cs = ChainState.from_genesis()
         for h in range(1, 6):
             b = make_block(h, cs.tip["hash"], [])
             ok, err, cs = cs.validate_and_apply(b)
             assert ok is True, f"h={h}: {err}"
-        assert cs.state.total_minted == 0
+        assert 0 < cs.state.total_minted < cs.state.compute_block_reward() * 5
 
     def test_minted_does_not_exceed_supply_cap(self):
         cs = ChainState.from_genesis()
@@ -152,7 +153,7 @@ class TestE2E_PoBRewardSplit:
 
 class TestE2E_ForkChoice:
     def test_equal_height_lower_hash_wins(self):
-        """Longest chain wins; equal height is broken by tip hash."""
+        """Most cumulative proven work wins; ties broken by tip hash."""
         cs = ChainState.from_genesis()
         g = cs.tip
         b1a = make_block(1, g["hash"], [], builder_index=0)

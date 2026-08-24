@@ -5,7 +5,7 @@ Covers: from_genesis, from_chain, from_storage, validate_and_apply,
 apply_block, _apply_block_with_state, is_better_than (fork choice),
 accessors (tip, height, genesis_hash, fee_rate_at).
 
-Fork choice: longest chain wins; tip hash breaks ties.
+Fork choice: most cumulative proven VDF work wins; tip hash breaks ties.
 """
 
 import os
@@ -22,7 +22,7 @@ from chainstate import ChainState
 import pob as pob_mod
 from params import INITIAL_FEE_RATE, EMBERS_PER_SCH
 from tests.fixtures import (
-    address, genesis, make_block, make_tx, seed_balance,
+    address, genesis, make_block, make_burn_tx, make_tx, seed_balance,
 )
 
 
@@ -138,6 +138,44 @@ class TestValidateAndApply:
 
 
 # ---------------------------------------------------------------------------
+# 3b. Builder reward floor (unconditional, independent of burn activity)
+# ---------------------------------------------------------------------------
+
+class TestBuilderRewardFloor:
+    def test_builder_earns_floor_share_with_no_burns_and_no_txs(self):
+        cs = ChainState.from_genesis()
+        b = make_block(1, cs.tip["hash"], [], builder_index=2)
+        ok, err, cs2 = cs.validate_and_apply(b)
+        assert ok is True, err
+        assert cs2.state.get_balance(address(2)) > 0
+
+    def test_floor_share_is_constant_regardless_of_burns(self):
+        """The builder's floor share is the same fraction of the reward
+        whether or not anyone burned in the window -- no incentive to
+        exclude burn transactions."""
+        from params import BUILDER_REWARD_SHARE
+
+        cs_no_burn = ChainState.from_genesis()
+        reward = cs_no_burn.state.compute_block_reward()
+        b1 = make_block(1, cs_no_burn.tip["hash"], [], builder_index=2)
+        _, _, cs1 = cs_no_burn.validate_and_apply(b1)
+        floor_no_burn = cs1.state.get_balance(address(2))
+        assert floor_no_burn == int(reward * BUILDER_REWARD_SHARE)
+
+        cs_burn = ChainState.from_genesis()
+        cs_burn.state.credit(address(0), 1000 * EMBERS_PER_SCH)
+        cs_burn.state.total_minted += 1000 * EMBERS_PER_SCH
+        t = make_burn_tx(0, 10 * EMBERS_PER_SCH, cs_burn.state, 0)
+        b2 = make_block(1, cs_burn.tip["hash"], [t], builder_index=2)
+        ok, err, cs2 = cs_burn.validate_and_apply(b2)
+        assert ok is True, err
+        reward2 = cs_burn.state.compute_block_reward()
+        floor_with_burn = int(reward2 * BUILDER_REWARD_SHARE)
+        # Builder's own floor share credited, independent of the burner's cut
+        assert cs2.state.get_balance(address(2)) >= floor_with_burn
+
+
+# ---------------------------------------------------------------------------
 # 4. from_chain (replay)
 # ---------------------------------------------------------------------------
 
@@ -196,7 +234,7 @@ class TestFromStorage:
 
 
 # ---------------------------------------------------------------------------
-# 6. is_better_than (fork choice: longest chain)
+# 6. is_better_than (fork choice: cumulative proven work)
 # ---------------------------------------------------------------------------
 
 class TestIsBetterThan:
@@ -234,6 +272,19 @@ class TestIsBetterThan:
         _, _, cs2 = cs1.validate_and_apply(b2)
         assert cs2.is_better_than(cs1)
         assert not cs1.is_better_than(cs2)
+
+    def test_fewer_blocks_with_more_proven_iterations_wins(self):
+        """Fork choice weighs cumulative proven VDF work, not raw block
+        count: a shorter chain whose blocks each proved more iterations
+        can outweigh a longer chain of cheaper blocks."""
+        cs = ChainState.from_genesis()
+        heavy = ChainState(cs.chain, cs.state, cs.burn_window,
+                            cumulative_iterations=1_000_000)
+        light = ChainState(cs.chain + [make_block(1, cs.tip["hash"], [])],
+                            cs.state, cs.burn_window,
+                            cumulative_iterations=500_000)
+        assert heavy.is_better_than(light)
+        assert not light.is_better_than(heavy)
 
 
 # ---------------------------------------------------------------------------

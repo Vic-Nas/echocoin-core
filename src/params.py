@@ -34,6 +34,15 @@ INITIAL_FEE_RATE = 10     # embers/byte; low start, fee formula rises under load
 # permanent whale dominance from a one-time burn.
 POB_WINDOW = 500
 
+# Fraction of the newly-minted block reward paid unconditionally to the
+# block builder, regardless of burn activity. Keeps block production
+# profitable even with an empty mempool and no burns in the PoB window,
+# and removes any incentive to suppress burn transactions -- the
+# builder's cut is constant whether burns exist or not. The remainder
+# splits proportionally among burners in the window, or stays unminted
+# in can_mint if none exist.
+BUILDER_REWARD_SHARE = 0.02
+
 # VDF iteration count tuned to ~120 seconds of sequential computation on
 # commodity hardware. Must be calibrated empirically before genesis.
 # Placeholder: replace with measured value before mainnet.

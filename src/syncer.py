@@ -3,7 +3,7 @@
 Uses UDPTransport.get_info() for lightweight tip comparison and
 UDPTransport.request_sync() for fetching chain segments.
 
-Fork choice: longest chain wins; tip hash breaks ties.
+Fork choice: most cumulative proven VDF work wins; tip hash breaks ties.
 See ChainState.is_better_than().
 """
 
@@ -23,7 +23,7 @@ class Syncer:
     def check_and_sync(self, local_chain, apply_fn):
         """Pick a random peer and sync if they have a better chain.
 
-        Compares by chain length (longest wins, tip hash breaks ties).
+        Compares by cumulative proven VDF work (tip hash breaks ties).
         Returns True if the chain was updated.
         """
         peer = self.pool.random()

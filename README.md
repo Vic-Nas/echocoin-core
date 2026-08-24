@@ -1,6 +1,6 @@
 # Scorchcoin
 
-A peer-to-peer electronic cash system. Longest chain wins, first valid block received: Bitcoin-style consensus. Block timing is enforced by a Verifiable Delay Function anchored to real elapsed time. Fees are deterministic and go to the block builder. Signatures are quantum-resistant (FALCON-512). Voluntary Proof-of-Burn lets any participant earn a proportional share of every block's reward by burning coins.
+A peer-to-peer electronic cash system. Most cumulative proven work wins, first valid block received: Bitcoin-style consensus. Block timing is enforced by a Verifiable Delay Function anchored to real elapsed time. Fees are deterministic and go to the block builder. Signatures are quantum-resistant (FALCON-512). Voluntary Proof-of-Burn lets any participant earn a proportional share of every block's reward by burning coins.
 
 See [docs/whitepaper.md](docs/whitepaper.md) for the full protocol specification.
 
