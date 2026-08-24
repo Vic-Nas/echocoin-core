@@ -43,10 +43,11 @@ POB_WINDOW = 500
 # in can_mint if none exist.
 BUILDER_REWARD_SHARE = 0.02
 
-# VDF iteration count tuned to ~120 seconds of sequential computation on
-# commodity hardware. Must be calibrated empirically before genesis.
-# Placeholder: replace with measured value before mainnet.
-VDF_ITERATIONS = 12_200_000  # calibrated: ~120s on target hardware
+# VDF iteration count targeting ~120 seconds of sequential computation on
+# commodity hardware. NOT YET CALIBRATED: this is a placeholder value, not
+# a measured one -- no benchmark has been run against real target hardware.
+# Must be replaced with an empirically measured value before genesis.
+VDF_ITERATIONS = 12_200_000  # placeholder -- unmeasured
 
 # VDF difficulty adjustment. The iteration count can only increase over time
 # as hardware gets faster. Adjustment happens every VDF_ADJUST_INTERVAL blocks
@@ -56,7 +57,13 @@ VDF_ITERATIONS = 12_200_000  # calibrated: ~120s on target hardware
 # by VDF_ADJUST_FACTOR. Iterations never decrease; faster hardware means
 # shorter block times until the next upward adjustment, never a security
 # regression.
-VDF_ADJUST_INTERVAL    = 1000   # blocks between adjustments
+#
+# Window size matches Bitcoin's actual real-time retarget window (2 weeks),
+# not its block count -- block count alone isn't the right basis, since
+# what resists manipulation is how long an attacker must sustain outsized
+# influence over the window's median, not how many blocks it spans. At our
+# 2-minute cadence that's 2 weeks / 2 min = 10,080 blocks.
+VDF_ADJUST_INTERVAL    = 10_080  # blocks between adjustments (~2 weeks)
 VDF_ADJUST_MIN_SECONDS = 100    # trigger increase if median falls below this
 VDF_ADJUST_FACTOR      = 1.02   # max 2% increase per adjustment period
 
