@@ -87,7 +87,7 @@ def main():
     parser.add_argument("--peer",       action="append", default=[])
     parser.add_argument(
         "--private-port", type=int, default=None,
-        help="Port for private API (send/burn). Defaults to --port+1.",
+        help="Port for private API (send/burn). Defaults to --port+2.",
     )
     parser.add_argument(
         "--max-peers", type=int, default=params.MAX_PEERS,

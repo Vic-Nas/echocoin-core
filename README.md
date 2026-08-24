@@ -39,7 +39,7 @@ Scorchcoin runs two HTTP servers:
 
 Open `http://localhost:8335` for your personal wallet interface. Open `http://localhost:8333` (or your public address) for the block explorer. The private port is always two above the public port unless overridden with `--private-port`.
 
-Note: port+1 is reserved by the DHT subsystem (libtorrent) and port+3 for its internal use. Do not bind other services to these ports.
+Note: port+3 is reserved by the DHT subsystem (libtorrent) for its internal use. Do not bind other services to it.
 
 ## Passphrase
 
