@@ -13,7 +13,12 @@ One UDP socket per node handles everything:
 Reliability layer
 -----------------
 Large messages (SYNC, full block) are chunked into MAX_CHUNK_SIZE UDP datagrams.
-Each chunk is numbered. The receiver reassembles and ACKs the whole message.
+Each chunk is numbered and the receiver reassembles them; there is no
+chunk-level ACK or retransmission (MT_ACK is defined but unused). A message
+that loses even one chunk is silently dropped once its reassembly buffer
+goes stale (_Reassembler.evict_stale). Recovery relies on the caller's own
+retry cadence -- the periodic syncer re-poll and gossip re-broadcast to
+other peers -- rather than retransmission of the same transfer.
 Small messages (PING, PEERS, TX, small blocks) fit in one datagram and are
 fire-and-forget with application-level retry handled by the caller.
 

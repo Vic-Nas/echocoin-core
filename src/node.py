@@ -318,7 +318,7 @@ class Node:
         fee_rate   = block_mod.compute_expected_fee_rate(cs.chain)
         sorted_txs = tx_mod.sort_txs(self.mempool.all_txs())
         candidate  = block_mod.assemble(cs.tip, sorted_txs, self.addr,
-                                        fee_rate, chain=cs.chain)
+                                        fee_rate, iterations)
         candidate["vdf_output"]    = vdf_out
         candidate["vdf_proof"]     = vdf_proof
         candidate["vdf_iterations"] = iterations
@@ -360,7 +360,6 @@ class Node:
             if not ok:
                 log.debug("[vdf] peer block rejected: %s", err)
                 continue
-            confirmed = {tx_mod.tx_hash(t) for t in blk.get("transactions", [])}
             log.debug("[vdf] peer block accepted  height=%d  hash=%s  builder=%s  tx=%d",
                       blk["height"], blk["hash"][:12],
                       (blk.get("builder") or "")[:24], len(blk.get("transactions", [])))

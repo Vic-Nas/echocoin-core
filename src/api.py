@@ -359,8 +359,11 @@ def create_app(node, pool, private_port=8334, public_port=8333):
     app.logger.setLevel(logging.WARNING)
     logging.getLogger("werkzeug").setLevel(logging.INFO)
 
-    limiter = Limiter(get_remote_address, app=app, default_limits=[],
-                      storage_uri="memory://")
+    # Public port is externally reachable; give every route a sane default
+    # so a route added later isn't unprotected by omission. /api/tx/send
+    # keeps its own stricter per-route limit on top of this.
+    limiter = Limiter(get_remote_address, app=app,
+                      default_limits=["60 per minute"], storage_uri="memory://")
 
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=False)
