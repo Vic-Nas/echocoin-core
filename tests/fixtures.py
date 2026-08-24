@@ -97,18 +97,14 @@ def make_burn_tx(
     state: "state_mod.State",
     chain_tip_height: int,
     fee_rate: int = INITIAL_FEE_RATE,
-    beneficiary_index: int | None = None,
 ):
-    """Build a transaction with a burn output, optionally tagged to a beneficiary."""
+    """Build a transaction with a single burn output."""
     sk, _ = keypair(sender_index)
     from_addr = address(sender_index)
     pk_hex_val = pubkey_hex(sender_index)
     nonce = state.get_nonce(from_addr) + 1
 
     burn_out = {"to": pob_mod.BURN_ADDRESS, "amount": amount}
-    if beneficiary_index is not None:
-        burn_out["beneficiary"] = address(beneficiary_index)
-
     fee = tx_mod.compute_fee(
         from_addr, pk_hex_val, [burn_out], nonce, chain_tip_height, fee_rate
     )

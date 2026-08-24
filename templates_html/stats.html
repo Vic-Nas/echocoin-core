@@ -90,7 +90,7 @@ fetch('/api/stats')
     const maxYBurn = Math.max(...pts.map(p => p.minted)) * 1.05 || 1;
     drawChart('chart-mintburn', pts, [
       {key: 'minted',      color: 'var(--accent)', width: 2},
-      {key: 'burned_fees', color: 'var(--red)',    width: 2},
+      {key: 'total_burnt', color: 'var(--red)',    width: 2},
     ], maxX, maxYBurn);
   })
   .catch(() => {

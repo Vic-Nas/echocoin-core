@@ -38,7 +38,7 @@ Public app  (default port 8333, externally reachable):
          {"size": <n>, "transactions": [{"hash", "from", "outputs", "fee"}, ...]}
 
     GET  /api/stats
-         {"points": [...], "totals": {"minted", "burned_fees", "circulating",
+         {"points": [...], "totals": {"minted", "total_burnt", "circulating",
           "can_mint", "supply_cap", "net_emission_last", "rings_per_ech"}}
 
     POST /api/tx/send                 rate-limited: 20 requests/second
@@ -67,7 +67,6 @@ from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
 import crypto as crypto_mod
-import pob as pob_mod
 import tx as tx_mod
 from params import POB_WINDOW, RINGS_PER_ECH, SUPPLY_CAP
 from pob import BURN_ADDRESS
@@ -83,17 +82,6 @@ def fmt_balance(rings):
     ech = rings // RINGS_PER_ECH
     rem = rings % RINGS_PER_ECH
     return f"{ech} ECH {rem:,} rings"
-
-
-def fmt_score(score):
-    if score == 0:
-        return "0"
-    import math
-    exp = int(math.log10(score))
-    if exp < 6:
-        return f"{score:,}"
-    mantissa = score / (10 ** exp)
-    return f"{mantissa:.2f}e{exp}"
 
 
 def fmt_fee_rate(rings_per_byte):
@@ -327,7 +315,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         net_last = pts[-1]["net_emission"] if pts else 0
         return jsonify({"points": pts, "totals": {
             "minted":           sv.total_minted,
-            "burned_fees":      sv.total_burnt,
+            "total_burnt":      sv.total_burnt,
             "circulating":      sv.total_minted - sv.total_burnt,
             "can_mint":         max(0, SUPPLY_CAP - sv.total_minted + sv.total_burnt),
             "supply_cap":       SUPPLY_CAP,
@@ -367,7 +355,7 @@ def create_app(node, pool, private_port=8334, public_port=8333):
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(
-        fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate, fmt_score=fmt_score)
+        fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate)
     app.logger.setLevel(logging.WARNING)
     logging.getLogger("werkzeug").setLevel(logging.INFO)
 
@@ -402,7 +390,7 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(
-        fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate, fmt_score=fmt_score)
+        fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate)
     app.logger.setLevel(logging.WARNING)
 
     limiter = Limiter(get_remote_address, app=app, default_limits=[],
@@ -439,19 +427,15 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
     @app.route("/burn", methods=["GET", "POST"])
     def burn():
         v = node.view
-        balance      = v.state.get_balance(node.addr)
-        bw           = v.burn_window
-        pool_totals  = bw.pool_totals()
-        burn_totals  = bw.sender_totals()
-        tip_hash_int = pob_mod._tip_hash_int(v.chain)
+        balance     = v.state.get_balance(node.addr)
+        bw          = v.burn_window
+        burn_totals = bw.sender_totals()
+        total_burn  = sum(burn_totals.values())
         ctx = dict(title="Burn", from_addr=node.addr, balance=balance,
                    my_burn=burn_totals.get(node.addr, 0),
-                   my_score=bw.score(tip_hash_int, node.addr),
-                   total_burn=sum(pool_totals.values()),
+                   total_burn=total_burn,
                    sorted_burners=sorted(burn_totals.items(), key=lambda x: -x[1]),
-                   sorted_pools=sorted(pool_totals.items(), key=lambda x: -x[1]),
                    burn_history=bw.history(),
-                   scores={addr: bw.score(tip_hash_int, addr) for addr in pool_totals},
                    pob_window=POB_WINDOW, alert_ok="", alert_err="")
         if request.method == "POST":
             raw        = request.form.get("amount", "").strip()
@@ -466,13 +450,7 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
                 if burn_rings > balance:
                     ctx["alert_err"] = "Insufficient balance."
                 else:
-                    beneficiary = (request.form.get("beneficiary", "").strip()
-                                   or node.addr)
-                    if not crypto_mod.is_valid_address(beneficiary):
-                        beneficiary = node.addr
                     burn_out = {"to": BURN_ADDRESS, "amount": burn_rings}
-                    if beneficiary != node.addr:
-                        burn_out["beneficiary"] = beneficiary
                     _submit_and_alert(node, [burn_out], passphrase, ctx)
         return render_template("burn.html", **ctx)
 

@@ -1,6 +1,6 @@
 # Echocoin
 
-A peer-to-peer electronic cash system. Every participating node earns the full reward for every block it builds. Block timing is enforced by a Verifiable Delay Function anchored to real elapsed time. Fees are deterministic and burned. Signatures are quantum-resistant (FALCON-512). Voluntary burn pools are supported natively with a guaranteed 2% cut for the block builder to prevent hijacking by pool contributors.
+A peer-to-peer electronic cash system. Longest chain wins, first valid block received: Bitcoin-style consensus. Block timing is enforced by a Verifiable Delay Function anchored to real elapsed time. Fees are deterministic and go to the block builder. Signatures are quantum-resistant (FALCON-512). Voluntary Proof-of-Burn lets any participant earn a proportional share of every block's reward by burning coins.
 
 See [docs/whitepaper.md](docs/whitepaper.md) for the full protocol specification.
 

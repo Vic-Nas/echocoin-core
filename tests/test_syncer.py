@@ -60,7 +60,7 @@ class TestCheckAndSync:
         pool.strike.assert_not_called()
 
     def test_peer_behind_still_compares(self):
-        # Syncer always compares regardless of height — shorter chain can win by avg score
+        # Syncer always fetches and compares regardless of local vs. remote height
         syncer, pool, udp = make_syncer(peers=["1.2.3.4:9000"])
         udp.get_info.return_value = {"height": 2, "tip_hash": ""}
         local = chain_of(5)

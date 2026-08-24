@@ -58,10 +58,6 @@ class TestFromGenesis:
         assert cs.state.total_minted == 0
         assert cs.state.total_burnt == 0
 
-    def test_cumulative_score_is_zero(self):
-        cs = ChainState.from_genesis()
-        assert cs.cumulative_score == 0
-
 
 # ---------------------------------------------------------------------------
 # 2. Accessors
@@ -220,8 +216,8 @@ class TestIsBetterThan:
         blk_b = dict(g)
         blk_a["hash"] = "aa" * 32
         blk_b["hash"] = "bb" * 32
-        cs_a = ChainState([blk_a], cs.state.snapshot(), cs.burn_window.copy(), 0)
-        cs_b = ChainState([blk_b], cs.state.snapshot(), cs.burn_window.copy(), 0)
+        cs_a = ChainState([blk_a], cs.state.snapshot(), cs.burn_window.copy())
+        cs_b = ChainState([blk_b], cs.state.snapshot(), cs.burn_window.copy())
         assert cs_a.is_better_than(cs_b)  # "aa..." < "bb..."
         assert not cs_b.is_better_than(cs_a)
 
@@ -238,23 +234,6 @@ class TestIsBetterThan:
         _, _, cs2 = cs1.validate_and_apply(b2)
         assert cs2.is_better_than(cs1)
         assert not cs1.is_better_than(cs2)
-
-
-# ---------------------------------------------------------------------------
-# 7. cumulative_score tracks total intentional burns
-# ---------------------------------------------------------------------------
-
-class TestCumulativeScore:
-    def test_empty_chain_score_is_zero(self):
-        cs = ChainState.from_genesis()
-        assert cs.cumulative_score == 0
-
-    def test_score_non_decreasing_with_blocks(self):
-        cs0 = ChainState.from_genesis()
-        g = cs0.tip
-        b1 = make_block(1, g["hash"], [])
-        _, _, cs1 = cs0.validate_and_apply(b1)
-        assert cs1.cumulative_score >= cs0.cumulative_score
 
 
 # ---------------------------------------------------------------------------
@@ -304,17 +283,17 @@ class TestFromChainWithTxs:
 
 
 # ---------------------------------------------------------------------------
-# 10. _build_window_and_score -- shared by from_chain and from_storage
+# 10. _build_window -- shared by from_storage
 # ---------------------------------------------------------------------------
 
-class TestBuildWindowAndScore:
+class TestBuildWindow:
     def test_build_window_for_genesis_only(self):
         g = genesis()
-        window, score = ChainState._build_window_and_score([g])
-        assert score == 0  # genesis has no burns
+        window = ChainState._build_window([g])
+        assert window.sender_totals() == {}
 
     def test_build_window_for_two_blocks(self):
         g = genesis()
         b1 = make_block(1, g["hash"], [])
-        window, score = ChainState._build_window_and_score([g, b1])
-        assert score >= 0
+        window = ChainState._build_window([g, b1])
+        assert window.sender_totals() == {}

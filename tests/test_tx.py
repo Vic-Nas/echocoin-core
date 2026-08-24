@@ -7,8 +7,8 @@ Covers: create, tx_hash, tx_size, tx_size_in_block, compute_fee, validate
 All tests are pure and local -- no network, no chain, no disk.
 Whitepaper constraints enforced:
   - fee = tx_size_bytes * fee_rate  (Section 2)
-  - fee is burned, reducing circulating supply
-  - burn output "to" == "burn"; optional beneficiary field
+  - fee goes to block builder
+  - burn output "to" == "burn"
   - outputs must be non-empty, amounts positive
 """
 

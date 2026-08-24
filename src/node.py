@@ -126,17 +126,15 @@ class NodeView:
     Flask reads node.view; one reference swap, GIL-atomic, no lock needed.
     stats_points comes from node.stats, not carried here.
     """
-    __slots__ = ("chain", "height", "tip", "genesis_hash", "cumulative_score",
-                 "state", "burn_window")
+    __slots__ = ("chain", "height", "tip", "genesis_hash", "state", "burn_window")
 
     def __init__(self, cs):
-        self.chain            = cs.chain
-        self.tip              = cs.tip
-        self.height           = cs.height
-        self.genesis_hash     = cs.genesis_hash
-        self.cumulative_score = cs.cumulative_score
-        self.state            = cs.state.snapshot()
-        self.burn_window      = cs.burn_window
+        self.chain        = cs.chain
+        self.tip          = cs.tip
+        self.height       = cs.height
+        self.genesis_hash = cs.genesis_hash
+        self.state        = cs.state.snapshot()
+        self.burn_window  = cs.burn_window
 
 
 # ---------------------------------------------------------------------------

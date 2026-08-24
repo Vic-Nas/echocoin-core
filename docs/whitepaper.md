@@ -4,7 +4,7 @@
 
 ## Abstract
 
-Bitcoin proved that trust between strangers can be replaced by cryptographic proof on a public ledger. Its proof-of-work mechanism wastes energy on a puzzle whose only purpose is to make history rewriting expensive. Echocoin replaces proof-of-work with two complementary mechanisms: a Verifiable Delay Function (VDF) that anchors the chain to real elapsed time, and Proof-of-Burn (PoB) that ties block rewards to real economic commitment. The result is a battle-tested Bitcoin-like consensus model — longest chain wins, first valid block received — with an incentive layer that rewards long-term participants who burn coins and earn back a proportional share of every block's reward.
+Bitcoin proved that trust between strangers can be replaced by cryptographic proof on a public ledger. Its proof-of-work mechanism wastes energy on a puzzle whose only purpose is to make history rewriting expensive. Echocoin replaces proof-of-work with two complementary mechanisms: a Verifiable Delay Function (VDF) that anchors the chain to real elapsed time, and Proof-of-Burn (PoB) that ties block rewards to real economic commitment. The result is a battle-tested Bitcoin-like consensus model (longest chain wins, first valid block received) with an incentive layer that rewards long-term participants who burn coins and earn back a proportional share of every block's reward.
 
 ## 1. The Problem with Proof-of-Work
 
@@ -36,7 +36,7 @@ Every node assembles candidate blocks from its local mempool and broadcasts them
 
 ## 4. Fees and Builder Rewards
 
-The node that produces a block collects all transaction fees from that block as its building reward. Fees are credited to the builder's address in the same block application step as transactions — before the PoB reward distribution — so the builder's balance reflects both.
+The node that produces a block collects all transaction fees from that block as its building reward. Fees are credited to the builder's address in the same block application step as transactions, before the PoB reward distribution, so the builder's balance reflects both.
 
 Fees do not reduce the mintable supply. The rings transferred as fees simply move from sender to builder. This keeps the fee mechanism simple and predictable.
 
@@ -51,7 +51,7 @@ reward(block) = floor(can_mint × (1 − 0.5^(1/5,000,000)))
 
 The halflife of 5,000,000 blocks corresponds to roughly 20 years at 2 minutes per block. Only intentional PoB burns are added back into `can_mint`; fees are not burned and do not replenish it. Burns sustain rewards indefinitely: at low usage, emission decays smoothly toward zero; at high usage, burns offset emission and stabilize net supply.
 
-**Reward distribution.** Every block reward is distributed proportionally among all senders who burned coins within the last 500 blocks (the PoB window). If sender A burned 3 ECH and sender B burned 1 ECH in the window, A receives 75% and B receives 25% of the block reward. If no one has burned in the window, the reward is not distributed — it remains in `can_mint` for a future block when there are participants to distribute it to. Rounding is truncated toward zero; any remainder stays in the mintable pool.
+**Reward distribution.** Every block reward is distributed proportionally among all senders who burned coins within the last 500 blocks (the PoB window). If sender A burned 3 ECH and sender B burned 1 ECH in the window, A receives 75% and B receives 25% of the block reward. If no one has burned in the window, the reward is not distributed: it remains in `can_mint` for a future block when there are participants to distribute it to. Rounding is truncated toward zero; any remainder stays in the mintable pool.
 
 **Block builder fees.** Transaction fees are separate from the block reward and go entirely to the builder. A builder who has never burned still earns fees for every block they produce.
 
@@ -69,7 +69,7 @@ On first contact, a node verifies that a candidate peer shares the same genesis 
 
 ## 8. Security Analysis
 
-**Botnet.** An attacker running many nodes gains nothing without burning real coins. Block production rights follow the longest chain, not any per-slot scoring. A botnet can try to out-pace the honest network, but doing so requires VDF computation for every block — sequentially — which is no faster on a botnet than on a single node. The honest network accumulates real elapsed time.
+**Botnet.** An attacker running many nodes gains nothing without burning real coins. Block production rights follow the longest chain, not any per-slot scoring. A botnet can try to out-pace the honest network, but doing so requires VDF computation for every block, sequentially, which is no faster on a botnet than on a single node. The honest network accumulates real elapsed time.
 
 **History rewriting.** Rewriting old history requires one sequential VDF per block. The honest chain advances continuously; the gap widens permanently. No parallelism helps.
 
@@ -81,7 +81,7 @@ On first contact, a node verifies that a candidate peer shares the same genesis 
 
 ## 9. Conclusion
 
-Echocoin inherits Bitcoin's core guarantee: no trust required, everything verifiable, no authority can reverse a transaction. It replaces proof-of-work with a Verifiable Delay Function that binds the chain to real elapsed time. Block selection and fork choice are Bitcoin-like — simple, battle-tested, no per-slot scoring. Proof-of-Burn is purely an incentive layer: burn coins, earn a proportional share of block rewards. Supply is capped at 21 million ECH with smooth exponential decay, sustained indefinitely by burns recycled into future emission. No halvings, no energy waste, no complex scoring.
+Echocoin inherits Bitcoin's core guarantee: no trust required, everything verifiable, no authority can reverse a transaction. It replaces proof-of-work with a Verifiable Delay Function that binds the chain to real elapsed time. Block selection and fork choice are Bitcoin-like: simple, battle-tested, no per-slot scoring. Proof-of-Burn is purely an incentive layer: burn coins, earn a proportional share of block rewards. Supply is capped at 21 million ECH with smooth exponential decay, sustained indefinitely by burns recycled into future emission. No halvings, no energy waste, no complex scoring.
 
 ## References
 

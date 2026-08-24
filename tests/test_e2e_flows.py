@@ -2,17 +2,16 @@
 End-to-end protocol flow tests
 
 These tests exercise complete protocol scenarios from genesis through
-multi-block chains, reorgs, PoB pool splits, fee dynamics, and the
+multi-block chains, reorgs, PoB reward splits, fee dynamics, and the
 emission schedule -- all without network or disk I/O.
 
 Flows covered:
   E2E-1:  Genesis -> mine blocks -> emit rewards -> verify circulating supply
-  E2E-2:  PoB pool: two contributors burn to one beneficiary -> correct reward split
-  E2E-3:  Fork choice: two competing chains of equal height; lower score wins
+  E2E-2:  PoB: two senders burn different amounts -> proportional reward split
+  E2E-3:  Fork choice: longest chain wins; equal height broken by tip hash
   E2E-4:  Reorg: a shorter chain that becomes longer is accepted
   E2E-5:  Fee rate dynamics: spam attack inflates fee, inactivity decays it
-  E2E-6:  Burn pool expiry: burns age out of the POB_WINDOW
-  E2E-7:  Censorship resistance: probabilistic rejection after repeated exclusion
+  E2E-6:  Burn expiry: burns age out of the POB_WINDOW
   E2E-8:  Full tx lifecycle: create -> mempool -> block -> confirmed
   E2E-9:  Block assembly: assemble() fills to limit, skips oversized single txs
   E2E-10: Multi-sender block with correct nonce sequencing
@@ -100,10 +99,10 @@ class TestE2E_EmissionSchedule:
 
 
 # ---------------------------------------------------------------------------
-# E2E-2: PoB pool reward split
+# E2E-2: PoB reward split
 # ---------------------------------------------------------------------------
 
-class TestE2E_PoBPoolSplit:
+class TestE2E_PoBRewardSplit:
     def test_two_contributors_proportional_split(self):
         """Reward splits proportional to burns: addr(0) burns 3x more than addr(1)."""
         cs = ChainState.from_genesis()
@@ -148,12 +147,12 @@ class TestE2E_PoBPoolSplit:
 
 
 # ---------------------------------------------------------------------------
-# E2E-3: Fork choice -- equal height, lower cumulative score wins
+# E2E-3: Fork choice -- equal height, lower tip hash wins
 # ---------------------------------------------------------------------------
 
 class TestE2E_ForkChoice:
-    def test_lower_score_chain_wins(self):
-        """Whitepaper Section 3: lower cumulative_score = more burn commitment."""
+    def test_equal_height_lower_hash_wins(self):
+        """Longest chain wins; equal height is broken by tip hash."""
         cs = ChainState.from_genesis()
         g = cs.tip
         b1a = make_block(1, g["hash"], [], builder_index=0)
@@ -162,18 +161,13 @@ class TestE2E_ForkChoice:
         _, _, csa = cs.validate_and_apply(b1a)
         _, _, csb = cs.validate_and_apply(b1b)
 
-        # Both are at height 1; whichever has lower cumulative_score should win
-        if csa.cumulative_score < csb.cumulative_score:
-            assert csa.is_better_than(csb)
-        elif csb.cumulative_score < csa.cumulative_score:
-            assert csb.is_better_than(csa)
-        else:
-            # Equal scores: lower hash wins
-            winner = csa if csa.tip["hash"] < csb.tip["hash"] else csb
-            loser  = csb if winner is csa else csa
-            assert winner.is_better_than(loser)
+        # Both are at height 1; lower tip hash wins deterministically
+        winner = csa if csa.tip["hash"] < csb.tip["hash"] else csb
+        loser  = csb if winner is csa else csa
+        assert winner.is_better_than(loser)
+        assert not loser.is_better_than(winner)
 
-    def test_longer_chain_always_wins_regardless_of_score(self):
+    def test_longer_chain_always_wins(self):
         cs = ChainState.from_genesis()
         g = cs.tip
         b1 = make_block(1, g["hash"], [])
@@ -211,7 +205,8 @@ class TestE2E_Reorg:
 
         assert cs_remote.is_better_than(cs_local)
 
-    def test_same_length_lower_score_remote_replaces_local(self):
+    def test_same_block_produces_equal_chains(self):
+        """Applying the same block to two identical chains yields identical tips."""
         cs_local = ChainState.from_genesis()
         g = cs_local.tip
 
@@ -219,8 +214,9 @@ class TestE2E_Reorg:
         _, _, cs_a = cs_local.validate_and_apply(b1)
         _, _, cs_b = cs_local.validate_and_apply(b1)  # same block
 
-        # They should be equal
-        assert cs_a.cumulative_score == cs_b.cumulative_score
+        assert cs_a.tip["hash"] == cs_b.tip["hash"]
+        assert not cs_a.is_better_than(cs_b)
+        assert not cs_b.is_better_than(cs_a)
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +257,7 @@ class TestE2E_FeeDynamics:
 
 
 # ---------------------------------------------------------------------------
-# E2E-6: Burn pool expiry (whitepaper Section 3)
+# E2E-6: Burn expiry (whitepaper Section 3)
 # ---------------------------------------------------------------------------
 
 class TestE2E_BurnExpiry:

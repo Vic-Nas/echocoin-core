@@ -1,8 +1,8 @@
-"""ChainState: the four values that always move together.
+"""ChainState: the three values that always move together.
 
-chain, state, burn_window, and cumulative_score are always consistent
-with each other. ChainState groups them so the node can swap them as a
-unit and methods that read chain state get one object instead of four.
+chain, state, and burn_window are always consistent with each other.
+ChainState groups them so the node can swap them as a unit and methods
+that read chain state get one object instead of three.
 
 ChainState is immutable after construction; mutations return a new one.
 The node holds one reference and replaces it atomically (GIL-safe).
@@ -14,26 +14,15 @@ import state as state_mod
 import tx as tx_mod
 
 
-def _block_burns(blk):
-    """Sum of all intentional burn outputs in a block's transactions."""
-    total = 0
-    for t in blk.get("transactions", []):
-        for out in t.get("outputs", []):
-            if out.get("to") == pob_mod.BURN_ADDRESS:
-                total += out["amount"]
-    return total
-
-
 class ChainState:
-    """Consistent snapshot of chain + ledger state + burn window + total burns."""
+    """Consistent snapshot of chain + ledger state + burn window."""
 
-    __slots__ = ("chain", "state", "burn_window", "cumulative_score")
+    __slots__ = ("chain", "state", "burn_window")
 
-    def __init__(self, chain, state, burn_window, cumulative_score):
-        self.chain            = chain           # list of block dicts
-        self.state            = state           # State (balance ledger)
-        self.burn_window      = burn_window     # BurnWindow (rolling burns)
-        self.cumulative_score = cumulative_score  # total intentional burns in chain (rings)
+    def __init__(self, chain, state, burn_window):
+        self.chain       = chain       # list of block dicts
+        self.state       = state       # State (balance ledger)
+        self.burn_window = burn_window  # BurnWindow (rolling burns)
 
     # ------------------------------------------------------------------
     # Convenient accessors
@@ -61,17 +50,14 @@ class ChainState:
     # ------------------------------------------------------------------
 
     @classmethod
-    def _build_window_and_score(cls, chain):
-        """Build BurnWindow and cumulative burn total by replaying chain headers.
-        Shared by from_chain and from_storage.
+    def _build_window(cls, chain):
+        """Build BurnWindow by replaying chain headers.
+        Shared by from_storage.
         """
         window = pob_mod.BurnWindow()
-        score  = 0
         for blk in chain:
             window.add_block(blk)
-            if blk["height"] > 0:
-                score += _block_burns(blk)
-        return window, score
+        return window
 
     @classmethod
     def from_genesis(cls):
@@ -79,7 +65,7 @@ class ChainState:
         genesis = block_mod.create_genesis()
         window  = pob_mod.BurnWindow()
         window.add_block(genesis)
-        return cls([genesis], state_mod.State(), window, 0)
+        return cls([genesis], state_mod.State(), window)
 
     @classmethod
     def from_chain(cls, chain):
@@ -88,7 +74,6 @@ class ChainState:
         """
         state  = state_mod.State()
         window = pob_mod.BurnWindow()
-        score  = 0
         for blk in chain:
             window.add_block(blk)
             h = blk["height"]
@@ -96,7 +81,6 @@ class ChainState:
                 continue
             for t in blk["transactions"]:
                 state.apply_tx(t)
-            score += _block_burns(blk)
             builder = blk.get("builder")
             if builder:
                 total_fees = sum(t.get("fee", 0) for t in blk.get("transactions", []))
@@ -105,17 +89,16 @@ class ChainState:
                 state.apply_reward_distribution(
                     window.reward_distribution(state.compute_block_reward())
                 )
-        return cls(list(chain), state, window, score)
+        return cls(list(chain), state, window)
 
     @classmethod
     def from_storage(cls, chain, stored_state):
         """Build a ChainState from a chain and a pre-loaded State snapshot.
         Avoids replaying txs (balances come from the snapshot). Builds the
-        burn window and cumulative score from the chain since those aren't
-        persisted.
+        burn window from the chain since it isn't persisted.
         """
-        window, score = cls._build_window_and_score(chain)
-        return cls(list(chain), stored_state, window, score)
+        window = cls._build_window(chain)
+        return cls(list(chain), stored_state, window)
 
     # ------------------------------------------------------------------
     # Produce a new ChainState by appending one block
@@ -153,8 +136,7 @@ class ChainState:
         """
         new_window = self.burn_window.copy()
         new_window.add_block(blk)
-        new_score  = self.cumulative_score + _block_burns(blk)
-        builder    = blk.get("builder")
+        builder = blk.get("builder")
         if builder:
             total_fees = sum(t.get("fee", 0) for t in blk.get("transactions", []))
             if total_fees > 0:
@@ -162,7 +144,7 @@ class ChainState:
             post_tx_state.apply_reward_distribution(
                 new_window.reward_distribution(post_tx_state.compute_block_reward())
             )
-        return ChainState(self.chain + [blk], post_tx_state, new_window, new_score)
+        return ChainState(self.chain + [blk], post_tx_state, new_window)
 
     # ------------------------------------------------------------------
     # Fork choice: longest chain wins, tip hash breaks ties
