@@ -1,7 +1,7 @@
 # Scorchcoin build targets
 #
 # make linux   -- regenerate icons, build onedir via PyInstaller,
-#                 then wrap into dist/scorchcoin.AppImage
+#                 then wrap into dist/scorchcoin (AppImage, no extension)
 # make windows -- build dist/scorchcoin.exe (onefile) using pre-committed icons
 # make icons   -- regenerate favicon.ico and scorchcoin.png from scorchcoin.svg
 #                 (Linux only; requires libcairo2-dev + pip install cairosvg Pillow)
@@ -29,13 +29,13 @@ linux: icons
 	@which appimagetool > /dev/null 2>&1 || (echo "appimagetool not found. See Makefile header." && exit 1)
 	rm -rf $(APPDIR)
 	mkdir -p $(APPDIR)/usr/bin
-	cp -r $(DIST)/scorchcoin/* $(APPDIR)/usr/bin/
+	cp -r $(DIST)/scorchcoin-onedir/* $(APPDIR)/usr/bin/
 	cp scorchcoin.png $(APPDIR)/scorchcoin.png
 	printf '[Desktop Entry]\nName=Scorchcoin\nExec=scorchcoin\nIcon=scorchcoin\nType=Application\nCategories=Network;Finance;\n' > $(APPDIR)/scorchcoin.desktop
 	printf '#!/bin/sh\nexec "$$APPDIR/usr/bin/scorchcoin" "$$@"\n' > $(APPDIR)/AppRun
 	chmod +x $(APPDIR)/AppRun
-	ARCH=x86_64 appimagetool --appimage-extract-and-run $(APPDIR) $(DIST)/scorchcoin.AppImage
-	@echo "Built: $(DIST)/scorchcoin.AppImage"
+	ARCH=x86_64 appimagetool --appimage-extract-and-run $(APPDIR) $(DIST)/scorchcoin
+	@echo "Built: $(DIST)/scorchcoin"
 
 windows:
 	pyinstaller --clean --noconfirm $(SPEC)

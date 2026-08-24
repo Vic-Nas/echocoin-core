@@ -12,8 +12,8 @@ Download the binary for your platform and run it directly:
 
 ```
 # Linux
-chmod +x scorchcoin.AppImage
-./scorchcoin.AppImage
+chmod +x scorchcoin
+./scorchcoin
 
 # Windows
 scorchcoin.exe

@@ -1,6 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# Linux:   make linux   -> dist/scorchcoin.AppImage  (onedir wrapped in AppImage)
+# Linux:   make linux   -> dist/scorchcoin            (AppImage, no extension)
 # Windows: make windows -> dist/scorchcoin.exe       (onefile)
 
 import glob, os, sys
@@ -116,7 +116,9 @@ if sys.platform == "win32":
     )
 else:
     # onedir: exclude_binaries=True tells EXE not to bundle libs itself;
-    # COLLECT then assembles everything into dist/scorchcoin/
+    # COLLECT then assembles everything into dist/scorchcoin-onedir/.
+    # Named differently from the final AppImage (dist/scorchcoin, no
+    # extension) so the two don't collide on disk.
     exe = EXE(
         pyz,
         a.scripts,
@@ -138,5 +140,5 @@ else:
         a.datas,
         strip=False,
         upx=False,
-        name="scorchcoin",
+        name="scorchcoin-onedir",
     )

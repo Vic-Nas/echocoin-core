@@ -135,7 +135,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: scorchcoin-linux
-          path: dist/scorchcoin.AppImage
+          path: dist/scorchcoin
 
   build-windows:
     needs: test
@@ -222,7 +222,7 @@ jobs:
           path: artifacts/windows
 
       - name: Make AppImage executable
-        run: chmod +x artifacts/linux/scorchcoin.AppImage
+        run: chmod +x artifacts/linux/scorchcoin
 
       - name: Generate changelog
         id: changelog
@@ -257,7 +257,7 @@ jobs:
           name: Scorchcoin ${{ needs.version.outputs.tag }}
           body: ${{ steps.changelog.outputs.CHANGELOG }}
           files: |
-            artifacts/linux/scorchcoin.AppImage
+            artifacts/linux/scorchcoin
             artifacts/windows/scorchcoin.exe
           fail_on_unmatched_files: true
         env:
