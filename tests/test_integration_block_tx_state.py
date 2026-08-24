@@ -28,7 +28,7 @@ import tx as tx_mod
 import pob as pob_mod
 import mempool as mempool_mod
 from chainstate import ChainState
-from params import INITIAL_FEE_RATE, RINGS_PER_ECH, SUPPLY_CAP
+from params import INITIAL_FEE_RATE, EMBERS_PER_SCH, SUPPLY_CAP
 from tests.fixtures import (
     address, genesis, make_block, make_burn_tx, make_tx, seed_balance,
 )
@@ -50,28 +50,28 @@ def get_fee_rate(height):
 class TestBlockCommitFlow:
     def test_single_tx_block_commits(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        cs.state.total_minted += 100 * RINGS_PER_ECH
+        cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        cs.state.total_minted += 100 * EMBERS_PER_SCH
 
-        t = make_tx(0, 1, RINGS_PER_ECH, cs.state, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
         b = make_block(1, cs.tip["hash"], [t])
         ok, err, cs2 = cs.validate_and_apply(b)
 
         assert ok is True, err
-        assert cs2.state.get_balance(address(1)) == RINGS_PER_ECH
+        assert cs2.state.get_balance(address(1)) == EMBERS_PER_SCH
         assert cs2.height == 1
 
     def test_multi_tx_block_commits(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
-        cs.state.credit(address(1), 1000 * RINGS_PER_ECH)
-        cs.state.total_minted += 2000 * RINGS_PER_ECH
+        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
+        cs.state.credit(address(1), 1000 * EMBERS_PER_SCH)
+        cs.state.total_minted += 2000 * EMBERS_PER_SCH
 
-        t1 = make_tx(0, 2, RINGS_PER_ECH, cs.state, 0)
+        t1 = make_tx(0, 2, EMBERS_PER_SCH, cs.state, 0)
         cs.state.apply_tx(t1)  # advance nonce for sorting
-        t2 = make_tx(1, 2, RINGS_PER_ECH, cs.state, 0)
+        t2 = make_tx(1, 2, EMBERS_PER_SCH, cs.state, 0)
         # Reset state for validation (chainstate will re-apply)
-        cs.state.debit(address(2), RINGS_PER_ECH)
+        cs.state.debit(address(2), EMBERS_PER_SCH)
         cs.state.set_nonce(address(0), 0)
 
         txs = tx_mod.sort_txs([t1, t2])
@@ -80,14 +80,14 @@ class TestBlockCommitFlow:
 
         assert ok is True, err
         # Both txs credited
-        assert cs2.state.get_balance(address(2)) >= 2 * RINGS_PER_ECH
+        assert cs2.state.get_balance(address(2)) >= 2 * EMBERS_PER_SCH
 
     def test_duplicate_nonce_in_block_fails(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
-        cs.state.total_minted += 1000 * RINGS_PER_ECH
+        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
+        cs.state.total_minted += 1000 * EMBERS_PER_SCH
 
-        t1 = make_tx(0, 1, RINGS_PER_ECH, cs.state, 0)
+        t1 = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
         # Same nonce -- replay attack
         t2 = dict(t1)
         txs = tx_mod.sort_txs([t1, t2])
@@ -104,10 +104,10 @@ class TestFeeBurnAccounting:
     def test_fees_go_to_builder_not_total_burnt(self):
         """Fees credit the block builder; they do not accumulate in total_burnt."""
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
-        cs.state.total_minted += 1000 * RINGS_PER_ECH
+        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
+        cs.state.total_minted += 1000 * EMBERS_PER_SCH
 
-        t = make_tx(0, 1, RINGS_PER_ECH, cs.state, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
         fee = t["fee"]
         b = make_block(1, cs.tip["hash"], [t], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
@@ -119,13 +119,13 @@ class TestFeeBurnAccounting:
     def test_burns_replenish_mintable_pool(self):
         """Whitepaper Section 5: burns add back to can_mint."""
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
-        cs.state.total_minted += 1000 * RINGS_PER_ECH
+        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
+        cs.state.total_minted += 1000 * EMBERS_PER_SCH
 
         reward_before = cs.state.compute_block_reward()
 
         # Commit a block with a burn tx
-        t = make_burn_tx(0, 10 * RINGS_PER_ECH, cs.state, 0)
+        t = make_burn_tx(0, 10 * EMBERS_PER_SCH, cs.state, 0)
         b = make_block(1, cs.tip["hash"], [t])
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
@@ -143,10 +143,10 @@ class TestPoBBurnEffect:
     def test_burn_in_block_tracked_in_window(self):
         """A burn tx in a block is recorded in the BurnWindow under the sender."""
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
-        cs.state.total_minted += 1000 * RINGS_PER_ECH
+        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
+        cs.state.total_minted += 1000 * EMBERS_PER_SCH
 
-        t = make_burn_tx(0, 50 * RINGS_PER_ECH, cs.state, 0)
+        t = make_burn_tx(0, 50 * EMBERS_PER_SCH, cs.state, 0)
         b = make_block(1, cs.tip["hash"], [t])
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
@@ -155,14 +155,14 @@ class TestPoBBurnEffect:
 
     def test_sender_burn_tracked_in_window(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
-        cs.state.total_minted += 1000 * RINGS_PER_ECH
+        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
+        cs.state.total_minted += 1000 * EMBERS_PER_SCH
 
-        t = make_burn_tx(0, 10 * RINGS_PER_ECH, cs.state, 0)
+        t = make_burn_tx(0, 10 * EMBERS_PER_SCH, cs.state, 0)
         b = make_block(1, cs.tip["hash"], [t])
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
-        assert cs2.burn_window.sender_totals().get(address(0), 0) == 10 * RINGS_PER_ECH
+        assert cs2.burn_window.sender_totals().get(address(0), 0) == 10 * EMBERS_PER_SCH
 
 
 # ---------------------------------------------------------------------------
@@ -172,10 +172,10 @@ class TestPoBBurnEffect:
 class TestMempoolPruning:
     def test_confirmed_txs_removed_from_mempool(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
-        cs.state.total_minted += 1000 * RINGS_PER_ECH
+        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
+        cs.state.total_minted += 1000 * EMBERS_PER_SCH
 
-        t = make_tx(0, 1, RINGS_PER_ECH, cs.state, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
         h = tx_mod.tx_hash(t)
 
         mp = mempool_mod.Mempool()
@@ -194,12 +194,12 @@ class TestMempoolPruning:
 
     def test_unconfirmed_txs_remain_in_mempool(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
-        cs.state.credit(address(1), 1000 * RINGS_PER_ECH)
-        cs.state.total_minted += 2000 * RINGS_PER_ECH
+        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
+        cs.state.credit(address(1), 1000 * EMBERS_PER_SCH)
+        cs.state.total_minted += 2000 * EMBERS_PER_SCH
 
-        t1 = make_tx(0, 2, RINGS_PER_ECH, cs.state, 0)
-        t2 = make_tx(1, 2, RINGS_PER_ECH, cs.state, 0)
+        t1 = make_tx(0, 2, EMBERS_PER_SCH, cs.state, 0)
+        t2 = make_tx(1, 2, EMBERS_PER_SCH, cs.state, 0)
 
         mp = mempool_mod.Mempool()
         mp.add(t1)
@@ -253,16 +253,16 @@ class TestChainReplay:
 class TestMixedOutputs:
     def test_mixed_outputs_applied_correctly(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
-        cs.state.total_minted += 1000 * RINGS_PER_ECH
+        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
+        cs.state.total_minted += 1000 * EMBERS_PER_SCH
 
         from_addr = address(0)
         from tests.fixtures import keypair, pubkey_hex
         pk_hex = pubkey_hex(0)
         sk, _ = keypair(0)
 
-        normal_out = {"to": address(1), "amount": RINGS_PER_ECH}
-        burn_out   = {"to": pob_mod.BURN_ADDRESS, "amount": RINGS_PER_ECH}
+        normal_out = {"to": address(1), "amount": EMBERS_PER_SCH}
+        burn_out   = {"to": pob_mod.BURN_ADDRESS, "amount": EMBERS_PER_SCH}
         outputs = [normal_out, burn_out]
 
         fee = tx_mod.compute_fee(from_addr, pk_hex, outputs, 1, 0, INITIAL_FEE_RATE)
@@ -272,8 +272,8 @@ class TestMixedOutputs:
         ok, err, cs2 = cs.validate_and_apply(b)
 
         assert ok is True, err
-        assert cs2.state.get_balance(address(1)) == RINGS_PER_ECH
+        assert cs2.state.get_balance(address(1)) == EMBERS_PER_SCH
         # Only intentional burns hit total_burnt (not fees)
-        assert cs2.state.total_burnt >= RINGS_PER_ECH
+        assert cs2.state.total_burnt >= EMBERS_PER_SCH
 
 

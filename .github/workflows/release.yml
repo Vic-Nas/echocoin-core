@@ -133,8 +133,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: echocoin-linux
-          path: dist/echocoin.AppImage
+          name: scorchcoin-linux
+          path: dist/scorchcoin.AppImage
 
   build-windows:
     needs: test
@@ -186,16 +186,16 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
-          & "$env:pythonLocation\python.exe" -c 'import cairosvg,io; from PIL import Image; imgs=[Image.open(io.BytesIO(cairosvg.svg2png(url="echocoin.svg",output_width=s,output_height=s))).convert("RGBA") for s in [16,32,48]]; imgs[0].save("favicon.ico",format="ICO",sizes=[(16,16),(32,32),(48,48)],append_images=imgs[1:]); open("echocoin.png","wb").write(cairosvg.svg2png(url="echocoin.svg",output_width=512,output_height=512)); print("icons generated")'
+          & "$env:pythonLocation\python.exe" -c 'import cairosvg,io; from PIL import Image; imgs=[Image.open(io.BytesIO(cairosvg.svg2png(url="scorchcoin.svg",output_width=s,output_height=s))).convert("RGBA") for s in [16,32,48]]; imgs[0].save("favicon.ico",format="ICO",sizes=[(16,16),(32,32),(48,48)],append_images=imgs[1:]); open("scorchcoin.png","wb").write(cairosvg.svg2png(url="scorchcoin.svg",output_width=512,output_height=512)); print("icons generated")'
 
       - name: Build
-        run: pyinstaller --clean --noconfirm echocoin.spec
+        run: pyinstaller --clean --noconfirm scorchcoin.spec
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: echocoin-windows
-          path: dist/echocoin.exe
+          name: scorchcoin-windows
+          path: dist/scorchcoin.exe
 
   release:
     needs: [version, build-linux, build-windows]
@@ -211,17 +211,17 @@ jobs:
       - name: Download Linux artifact
         uses: actions/download-artifact@v4
         with:
-          name: echocoin-linux
+          name: scorchcoin-linux
           path: artifacts/linux
 
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
-          name: echocoin-windows
+          name: scorchcoin-windows
           path: artifacts/windows
 
       - name: Make AppImage executable
-        run: chmod +x artifacts/linux/echocoin.AppImage
+        run: chmod +x artifacts/linux/scorchcoin.AppImage
 
       - name: Generate changelog
         id: changelog
@@ -256,8 +256,8 @@ jobs:
           name: Echocoin ${{ needs.version.outputs.tag }}
           body: ${{ steps.changelog.outputs.CHANGELOG }}
           files: |
-            artifacts/linux/echocoin.AppImage
-            artifacts/windows/echocoin.exe
+            artifacts/linux/scorchcoin.AppImage
+            artifacts/windows/scorchcoin.exe
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

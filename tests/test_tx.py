@@ -23,7 +23,7 @@ import crypto
 import tx as tx_mod
 import state as state_mod
 from pob import BURN_ADDRESS
-from params import INITIAL_FEE_RATE, RINGS_PER_ECH
+from params import INITIAL_FEE_RATE, EMBERS_PER_SCH
 from tests.fixtures import (
     keypair, address, pubkey_hex, make_tx, make_burn_tx, seed_balance
 )
@@ -49,28 +49,28 @@ class TestCreate:
     def test_create_returns_dict_with_required_fields(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         for field in ["from", "pubkey", "outputs", "nonce", "fee_height", "fee", "signature"]:
             assert field in t
 
     def test_signature_is_hex_string(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         assert isinstance(t["signature"], str)
         bytes.fromhex(t["signature"])  # must not raise
 
     def test_pubkey_is_hex_string(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         assert isinstance(t["pubkey"], str)
         bytes.fromhex(t["pubkey"])
 
     def test_from_address_matches_pubkey(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         pk_bytes = bytes.fromhex(t["pubkey"])
         expected_addr = crypto.public_key_to_address(pk_bytes)
         assert t["from"] == expected_addr
@@ -78,9 +78,9 @@ class TestCreate:
     def test_nonce_increments(self):
         s = fresh_state()
         seed_balance(s, 0, 1000.0)
-        t1 = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t1 = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         s.apply_tx(t1)
-        t2 = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t2 = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         assert t2["nonce"] == t1["nonce"] + 1
 
 
@@ -92,29 +92,29 @@ class TestTxHash:
     def test_hash_returns_64_char_hex(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         h = tx_mod.tx_hash(t)
         assert isinstance(h, str) and len(h) == 64
 
     def test_hash_is_deterministic(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         assert tx_mod.tx_hash(t) == tx_mod.tx_hash(t)
 
     def test_different_txs_have_different_hashes(self):
         s = fresh_state()
         seed_balance(s, 0, 1000.0)
-        t1 = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t1 = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         s.apply_tx(t1)
-        t2 = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t2 = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         assert tx_mod.tx_hash(t1) != tx_mod.tx_hash(t2)
 
     def test_hash_includes_signature(self):
         """tx_hash covers the entire tx dict including signature."""
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         h1 = tx_mod.tx_hash(t)
         t2 = dict(t)
         t2["signature"] = "00" * 100
@@ -130,7 +130,7 @@ class TestTxSize:
     def test_tx_size_excludes_signature(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         size = tx_mod.tx_size(t)
         assert isinstance(size, int) and size > 0
         # signature is NOT priced per whitepaper Section 2
@@ -142,7 +142,7 @@ class TestTxSize:
     def test_tx_size_in_block_first_position_no_comma(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         s0 = tx_mod.tx_size_in_block(t, position=0)
         s1 = tx_mod.tx_size_in_block(t, position=1)
         assert s1 == s0 + 1  # comma added for non-first
@@ -150,7 +150,7 @@ class TestTxSize:
     def test_tx_size_positive(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         assert tx_mod.tx_size(t) > 0
 
 
@@ -165,7 +165,7 @@ class TestComputeFee:
         # Build skeleton to measure size
         from_addr = address(0)
         pk_hex_val = pubkey_hex(0)
-        outputs = [{"to": address(1), "amount": RINGS_PER_ECH}]
+        outputs = [{"to": address(1), "amount": EMBERS_PER_SCH}]
         nonce = 1
         fee_height = 10
         fee = tx_mod.compute_fee(from_addr, pk_hex_val, outputs, nonce, fee_height, INITIAL_FEE_RATE)
@@ -178,21 +178,21 @@ class TestComputeFee:
     def test_fee_converges_for_realistic_tx(self):
         from_addr = address(0)
         pk_hex_val = pubkey_hex(0)
-        outputs = [{"to": address(1), "amount": 50 * RINGS_PER_ECH}]
+        outputs = [{"to": address(1), "amount": 50 * EMBERS_PER_SCH}]
         fee = tx_mod.compute_fee(from_addr, pk_hex_val, outputs, 1, 10, INITIAL_FEE_RATE)
         assert fee > 0
 
     def test_fee_zero_rate_yields_zero(self):
         from_addr = address(0)
         pk_hex_val = pubkey_hex(0)
-        outputs = [{"to": address(1), "amount": RINGS_PER_ECH}]
+        outputs = [{"to": address(1), "amount": EMBERS_PER_SCH}]
         fee = tx_mod.compute_fee(from_addr, pk_hex_val, outputs, 1, 10, 0)
         assert fee == 0
 
     def test_higher_rate_yields_higher_fee(self):
         from_addr = address(0)
         pk_hex_val = pubkey_hex(0)
-        outputs = [{"to": address(1), "amount": RINGS_PER_ECH}]
+        outputs = [{"to": address(1), "amount": EMBERS_PER_SCH}]
         fee_low  = tx_mod.compute_fee(from_addr, pk_hex_val, outputs, 1, 10, 1)
         fee_high = tx_mod.compute_fee(from_addr, pk_hex_val, outputs, 1, 10, 100)
         assert fee_high > fee_low
@@ -200,9 +200,9 @@ class TestComputeFee:
     def test_more_outputs_increases_fee(self):
         from_addr = address(0)
         pk_hex_val = pubkey_hex(0)
-        out1 = [{"to": address(1), "amount": RINGS_PER_ECH}]
-        out2 = [{"to": address(1), "amount": RINGS_PER_ECH},
-                {"to": address(2), "amount": RINGS_PER_ECH}]
+        out1 = [{"to": address(1), "amount": EMBERS_PER_SCH}]
+        out2 = [{"to": address(1), "amount": EMBERS_PER_SCH},
+                {"to": address(2), "amount": EMBERS_PER_SCH}]
         fee1 = tx_mod.compute_fee(from_addr, pk_hex_val, out1, 1, 10, INITIAL_FEE_RATE)
         fee2 = tx_mod.compute_fee(from_addr, pk_hex_val, out2, 1, 10, INITIAL_FEE_RATE)
         assert fee2 > fee1
@@ -216,14 +216,14 @@ class TestValidateFields:
     def test_valid_tx_passes(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is True, err
 
     def test_missing_from_field_fails(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         del t["from"]
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is False
@@ -232,7 +232,7 @@ class TestValidateFields:
     def test_empty_outputs_fails(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         t["outputs"] = []
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is False
@@ -256,8 +256,8 @@ class TestValidateFields:
     def test_invalid_recipient_address_fails(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10,
-                    outputs_override=[{"to": "not_an_address", "amount": RINGS_PER_ECH}])
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10,
+                    outputs_override=[{"to": "not_an_address", "amount": EMBERS_PER_SCH}])
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is False
         assert "invalid address" in err
@@ -265,7 +265,7 @@ class TestValidateFields:
     def test_negative_fee_fails(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         t["fee"] = -1
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is False
@@ -273,14 +273,14 @@ class TestValidateFields:
     def test_burn_output_is_accepted(self):
         s = fresh_state()
         seed_balance(s, 0, 10.0)
-        t = make_burn_tx(0, RINGS_PER_ECH, s, 10)
+        t = make_burn_tx(0, EMBERS_PER_SCH, s, 10)
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is True, err
 
     def test_burn_output_passes(self):
         s = fresh_state()
         seed_balance(s, 0, 10.0)
-        t = make_burn_tx(0, RINGS_PER_ECH, s, 10)
+        t = make_burn_tx(0, EMBERS_PER_SCH, s, 10)
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is True, err
 
@@ -293,7 +293,7 @@ class TestValidateSignature:
     def test_wrong_pubkey_for_address_fails(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         # Replace pubkey with a different key's hex
         _, pk2 = keypair(2)
         t["pubkey"] = pk2.hex()
@@ -304,7 +304,7 @@ class TestValidateSignature:
     def test_tampered_signature_fails(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         t["signature"] = "00" * 752
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is False
@@ -312,7 +312,7 @@ class TestValidateSignature:
     def test_non_hex_signature_fails(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         t["signature"] = 12345
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is False
@@ -326,14 +326,14 @@ class TestValidateNonce:
     def test_correct_nonce_passes(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is True, err
 
     def test_nonce_too_high_fails(self):
         s = fresh_state()
         seed_balance(s, 0, 1000.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10, nonce_override=5)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10, nonce_override=5)
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is False
         assert "nonce" in err
@@ -341,7 +341,7 @@ class TestValidateNonce:
     def test_nonce_already_used_fails(self):
         s = fresh_state()
         seed_balance(s, 0, 1000.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         s.apply_tx(t)
         # Replay the same tx (same nonce)
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
@@ -357,7 +357,7 @@ class TestValidateFeeHeight:
     def test_fee_height_in_future_fails(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10, fee_height_override=15)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10, fee_height_override=15)
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is False
         assert "future" in err
@@ -366,7 +366,7 @@ class TestValidateFeeHeight:
         s = fresh_state()
         seed_balance(s, 0)
         # fee_height 0 is too old when tip is 25 and max_age is 20
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 25, fee_height_override=0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 25, fee_height_override=0)
         ok, err = tx_mod.validate(t, s, 25, get_fee_rate)
         assert ok is False
         assert "old" in err
@@ -374,7 +374,7 @@ class TestValidateFeeHeight:
     def test_fee_rate_unavailable_fails(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         ok, err = tx_mod.validate(t, s, 10, lambda h: None)
         assert ok is False
 
@@ -382,7 +382,7 @@ class TestValidateFeeHeight:
         """Modify fee then re-sign so the signature check passes and the fee check fires."""
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         sk, _ = keypair(0)
         t["fee"] = t["fee"] + 999  # wrong fee
         # Re-sign so signature is valid over the tampered fee
@@ -401,7 +401,7 @@ class TestValidateBalance:
     def test_insufficient_balance_fails(self):
         s = fresh_state()
         seed_balance(s, 0, 0.001)  # nearly nothing
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is False
         assert "insufficient" in err
@@ -438,9 +438,9 @@ class TestSortTxs:
     def test_sorted_by_fee_height_asc(self):
         s = fresh_state()
         seed_balance(s, 0, 1000.0)
-        t1 = make_tx(0, 1, RINGS_PER_ECH, s, 10, fee_height_override=10)
+        t1 = make_tx(0, 1, EMBERS_PER_SCH, s, 10, fee_height_override=10)
         s.apply_tx(t1)
-        t2 = make_tx(0, 1, RINGS_PER_ECH, s, 10, fee_height_override=8)
+        t2 = make_tx(0, 1, EMBERS_PER_SCH, s, 10, fee_height_override=8)
         txs = tx_mod.sort_txs([t1, t2])
         assert txs[0]["fee_height"] <= txs[1]["fee_height"]
 
@@ -449,8 +449,8 @@ class TestSortTxs:
         s = fresh_state()
         seed_balance(s, 0, 1000.0)
         seed_balance(s, 1, 1000.0)
-        t1 = make_tx(0, 2, RINGS_PER_ECH, s, 10)
-        t2 = make_tx(1, 2, RINGS_PER_ECH, s, 10)
+        t1 = make_tx(0, 2, EMBERS_PER_SCH, s, 10)
+        t2 = make_tx(1, 2, EMBERS_PER_SCH, s, 10)
         sorted_once = tx_mod.sort_txs([t1, t2])
         sorted_twice = tx_mod.sort_txs([t2, t1])
         assert [tx_mod.tx_hash(t) for t in sorted_once] == [tx_mod.tx_hash(t) for t in sorted_twice]

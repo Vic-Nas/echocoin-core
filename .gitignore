@@ -1,5 +1,5 @@
-# Generated icons (produced by make icons from echocoin.svg)
-echocoin.png
+# Generated icons (produced by make icons from scorchcoin.svg)
+scorchcoin.png
 favicon.ico
 
 # Build artifacts
@@ -15,7 +15,7 @@ __pycache__/
 *.egg-info/
 
 # Runtime data
-echocoin_chain.db
-echocoin_chain.db-shm
-echocoin_chain.db-wal
-echocoin_key.json
+scorchcoin_chain.db
+scorchcoin_chain.db-shm
+scorchcoin_chain.db-wal
+scorchcoin_key.json

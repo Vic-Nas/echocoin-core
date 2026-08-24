@@ -1,5 +1,5 @@
 """
-Shared test fixtures and helpers used across the Echocoin test suite.
+Shared test fixtures and helpers used across the Scorchcoin test suite.
 
 Mirrors the pattern used by bitcoin-core and ethereum/go-ethereum test
 helpers: one place for deterministic keypairs, address generation,
@@ -21,7 +21,7 @@ import pob as pob_mod
 from params import (
     GENESIS_TIMESTAMP,
     INITIAL_FEE_RATE,
-    RINGS_PER_ECH,
+    EMBERS_PER_SCH,
     SUPPLY_CAP,
 )
 
@@ -116,10 +116,10 @@ def make_burn_tx(
 # ---------------------------------------------------------------------------
 
 def seed_balance(state: "state_mod.State", index: int, amount_ech: float = 100.0):
-    """Credit an address with rings. Bypasses tx validation -- for test setup only."""
-    rings = int(amount_ech * RINGS_PER_ECH)
-    state.credit(address(index), rings)
-    state.total_minted += rings
+    """Credit an address with embers. Bypasses tx validation -- for test setup only."""
+    embers = int(amount_ech * EMBERS_PER_SCH)
+    state.credit(address(index), embers)
+    state.total_minted += embers
 
 
 # ---------------------------------------------------------------------------

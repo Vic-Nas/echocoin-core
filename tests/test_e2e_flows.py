@@ -34,7 +34,7 @@ from chainstate import ChainState
 from node import StatsAccumulator
 from params import (
     BLOCK_SIZE_TARGET_BYTES, INITIAL_FEE_RATE, POB_WINDOW,
-    RINGS_PER_ECH, SUPPLY_CAP,
+    EMBERS_PER_SCH, SUPPLY_CAP,
 )
 from tests.fixtures import (
     address, genesis, keypair, make_block, make_burn_tx,
@@ -55,16 +55,16 @@ class TestE2E_EmissionSchedule:
     def test_rewards_minted_when_burns_present(self):
         """Rewards are only distributed when there are burns in the window."""
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        cs.state.total_minted += 100 * RINGS_PER_ECH
+        cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        cs.state.total_minted += 100 * EMBERS_PER_SCH
 
-        t = make_burn_tx(0, RINGS_PER_ECH, cs.state, 0)
+        t = make_burn_tx(0, EMBERS_PER_SCH, cs.state, 0)
         b1 = make_block(1, cs.tip["hash"], [t])
         ok, err, cs = cs.validate_and_apply(b1)
         assert ok is True, err
 
         # Burn in window means reward is distributed
-        assert cs.state.total_minted > 100 * RINGS_PER_ECH
+        assert cs.state.total_minted > 100 * EMBERS_PER_SCH
 
     def test_no_rewards_without_burns(self):
         """Without any burns, reward stays in can_mint (total_minted stays at pre-seeded value)."""
@@ -92,9 +92,9 @@ class TestE2E_EmissionSchedule:
     def test_burn_fees_replenish_can_mint(self):
         """Whitepaper Section 5: burnt fees sustain rewards indefinitely."""
         from state import compute_reward
-        minted = SUPPLY_CAP - 1000 * RINGS_PER_ECH
+        minted = SUPPLY_CAP - 1000 * EMBERS_PER_SCH
         r_no_burn   = compute_reward(minted, 0)
-        r_with_burn = compute_reward(minted, 500 * RINGS_PER_ECH)
+        r_with_burn = compute_reward(minted, 500 * EMBERS_PER_SCH)
         assert r_with_burn > r_no_burn
 
 
@@ -106,19 +106,19 @@ class TestE2E_PoBRewardSplit:
     def test_two_contributors_proportional_split(self):
         """Reward splits proportional to burns: addr(0) burns 3x more than addr(1)."""
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
-        cs.state.credit(address(1), 1000 * RINGS_PER_ECH)
-        cs.state.total_minted += 2000 * RINGS_PER_ECH
+        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
+        cs.state.credit(address(1), 1000 * EMBERS_PER_SCH)
+        cs.state.total_minted += 2000 * EMBERS_PER_SCH
 
-        t0 = make_burn_tx(0, 3 * RINGS_PER_ECH, cs.state, 0)
+        t0 = make_burn_tx(0, 3 * EMBERS_PER_SCH, cs.state, 0)
         cs.state.apply_tx(t0)
-        t1 = make_burn_tx(1, RINGS_PER_ECH, cs.state, 0)
+        t1 = make_burn_tx(1, EMBERS_PER_SCH, cs.state, 0)
         cs.state.apply_tx(t1)
 
         # Reset state (chainstate will re-apply)
-        cs.state._balances[address(0)] += 3 * RINGS_PER_ECH + t0["fee"]
+        cs.state._balances[address(0)] += 3 * EMBERS_PER_SCH + t0["fee"]
         cs.state._nonces[address(0)] = 0
-        cs.state._balances[address(1)] += RINGS_PER_ECH + t1["fee"]
+        cs.state._balances[address(1)] += EMBERS_PER_SCH + t1["fee"]
         cs.state._nonces[address(1)] = 0
         cs.state.total_burnt = 0
 
@@ -135,14 +135,14 @@ class TestE2E_PoBRewardSplit:
     def test_burn_weight_is_sender_specific(self):
         """Burn weight accrues to the sender, not any third party."""
         g = genesis()
-        burn_out = {"to": pob_mod.BURN_ADDRESS, "amount": RINGS_PER_ECH}
+        burn_out = {"to": pob_mod.BURN_ADDRESS, "amount": EMBERS_PER_SCH}
         tx = {"from": address(0), "outputs": [burn_out], "nonce": 1, "fee": 0, "fee_height": 1}
         b = make_block(1, g["hash"], [tx])
         w = pob_mod.BurnWindow()
         w.add_block(g)
         w.add_block(b)
         totals = w.sender_totals()
-        assert totals.get(address(0), 0) == RINGS_PER_ECH
+        assert totals.get(address(0), 0) == EMBERS_PER_SCH
         assert totals.get(address(1), 0) == 0
 
 
@@ -228,7 +228,7 @@ class TestE2E_FeeDynamics:
         """
         Whitepaper Section 2: sustained full blocks apply adjustment=1.05 each block.
         At 1.05^14 ≈ 1.98, the rate nearly doubles.  int() truncation means this is
-        only observable once the base rate is high enough.  Start from rate=100 rings/byte
+        only observable once the base rate is high enough.  Start from rate=100 embers/byte
         so the doubling is clearly visible.
         """
         g = genesis()
@@ -264,16 +264,16 @@ class TestE2E_BurnExpiry:
     def test_burn_expires_after_pob_window(self):
         """Whitepaper: burns older than POB_WINDOW fall out of the denominator."""
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
-        cs.state.total_minted += 1000 * RINGS_PER_ECH
+        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
+        cs.state.total_minted += 1000 * EMBERS_PER_SCH
 
         # Burn at block 1
-        t = make_burn_tx(0, 10 * RINGS_PER_ECH, cs.state, 0)
+        t = make_burn_tx(0, 10 * EMBERS_PER_SCH, cs.state, 0)
         b1 = make_block(1, cs.tip["hash"], [t])
         ok, err, cs = cs.validate_and_apply(b1)
         assert ok is True, err
 
-        assert cs.burn_window.sender_totals().get(address(0), 0) == 10 * RINGS_PER_ECH
+        assert cs.burn_window.sender_totals().get(address(0), 0) == 10 * EMBERS_PER_SCH
 
         # Advance POB_WINDOW blocks
         for h in range(2, POB_WINDOW + 2):
@@ -293,11 +293,11 @@ class TestE2E_TxLifecycle:
     def test_tx_create_to_confirmed(self):
         """create tx -> add to mempool -> include in block -> confirmed."""
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        cs.state.total_minted += 100 * RINGS_PER_ECH
+        cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        cs.state.total_minted += 100 * EMBERS_PER_SCH
 
         mp = mempool_mod.Mempool()
-        t = make_tx(0, 1, RINGS_PER_ECH, cs.state, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
         ok, h = mp.add(t)
         assert ok is True
 
@@ -310,13 +310,13 @@ class TestE2E_TxLifecycle:
         mp.remove_many(confirmed)
 
         assert mp.size() == 0
-        assert cs2.state.get_balance(address(1)) == RINGS_PER_ECH
+        assert cs2.state.get_balance(address(1)) == EMBERS_PER_SCH
 
     def test_rejected_tx_stays_in_mempool(self):
         """Tx failing state validation stays pending."""
         cs = ChainState.from_genesis()
         # No balance for sender -- tx will be invalid
-        t = make_tx(3, 4, RINGS_PER_ECH, cs.state, 0)
+        t = make_tx(3, 4, EMBERS_PER_SCH, cs.state, 0)
         mp = mempool_mod.Mempool()
         # We add it directly to the mempool (bypassing node.submit_tx validation)
         mp.add(t)
@@ -337,12 +337,12 @@ class TestE2E_BlockAssembly:
     def test_assembly_produces_valid_block_with_txs(self):
         g = genesis()
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 500 * RINGS_PER_ECH)
-        cs.state.total_minted += 500 * RINGS_PER_ECH
+        cs.state.credit(address(0), 500 * EMBERS_PER_SCH)
+        cs.state.total_minted += 500 * EMBERS_PER_SCH
 
         txs = []
         for i in range(5):
-            t = make_tx(0, 1, RINGS_PER_ECH, cs.state, 0)
+            t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
             txs.append(t)
             try:
                 cs.state.apply_tx(t)
@@ -362,10 +362,10 @@ class TestE2E_BlockAssembly:
         # Provide far more txs than can fit
         dummy_txs = []
         s = state_mod.State()
-        s.credit(address(0), 100_000 * RINGS_PER_ECH)
-        s.total_minted = 100_000 * RINGS_PER_ECH
+        s.credit(address(0), 100_000 * EMBERS_PER_SCH)
+        s.total_minted = 100_000 * EMBERS_PER_SCH
         for _ in range(100):
-            t = make_tx(0, 1, RINGS_PER_ECH, s, 0)
+            t = make_tx(0, 1, EMBERS_PER_SCH, s, 0)
             dummy_txs.append(t)
             try:
                 s.apply_tx(t)
@@ -414,9 +414,9 @@ class TestE2E_StatsAccumulator:
 
     def test_stats_circulating_is_minted_minus_fees(self):
         cs0 = ChainState.from_genesis()
-        cs0.state.credit(address(0), 100 * RINGS_PER_ECH)
-        cs0.state.total_minted += 100 * RINGS_PER_ECH
-        t = make_tx(0, 1, RINGS_PER_ECH, cs0.state, 0)
+        cs0.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        cs0.state.total_minted += 100 * EMBERS_PER_SCH
+        t = make_tx(0, 1, EMBERS_PER_SCH, cs0.state, 0)
         b1 = make_block(1, cs0.tip["hash"], [t])
         ok, _, cs1 = cs0.validate_and_apply(b1)
         assert ok

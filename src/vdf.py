@@ -34,7 +34,7 @@ Run 3 times and take the median:
 
   import chiavdf, hashlib, time
   N          = 500_000
-  challenge  = hashlib.sha256(b"echocoin_genesis").digest()
+  challenge  = hashlib.sha256(b"scorchcoin_genesis").digest()
   initial_el = bytes([0x08]) + bytes(99)
   t0         = time.monotonic()
   chiavdf.prove(challenge, initial_el, 1024, N, "")

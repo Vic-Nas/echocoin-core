@@ -30,7 +30,7 @@ import tx as tx_mod
 from chainstate import ChainState
 from node import Node, NodeView, StatsAccumulator, _validate_tail
 from storage import Storage
-from params import INITIAL_FEE_RATE, RINGS_PER_ECH
+from params import INITIAL_FEE_RATE, EMBERS_PER_SCH
 from tests.fixtures import (
     address, genesis, keypair, make_block, make_tx, pubkey_hex, seed_balance,
 )
@@ -219,41 +219,41 @@ class TestSimpleAccessors:
 class TestSubmitTx:
     def test_submit_valid_tx_returns_true(self, node_env):
         node, *_ = node_env
-        node.cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        node.cs.state.total_minted += 100 * RINGS_PER_ECH
-        t = make_tx(0, 1, RINGS_PER_ECH, node.cs.state, 0)
+        node.cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        node.cs.state.total_minted += 100 * EMBERS_PER_SCH
+        t = make_tx(0, 1, EMBERS_PER_SCH, node.cs.state, 0)
         ok, result = node.submit_tx(t)
         assert ok is True
         assert len(result) == 64
 
     def test_submit_tx_adds_to_mempool(self, node_env):
         node, *_ = node_env
-        node.cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        node.cs.state.total_minted += 100 * RINGS_PER_ECH
-        t = make_tx(0, 1, RINGS_PER_ECH, node.cs.state, 0)
+        node.cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        node.cs.state.total_minted += 100 * EMBERS_PER_SCH
+        t = make_tx(0, 1, EMBERS_PER_SCH, node.cs.state, 0)
         node.submit_tx(t)
         assert node.mempool.size() == 1
 
     def test_submit_tx_relays_via_gossip(self, node_env):
         node, _, __, gossip, *_ = node_env
-        node.cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        node.cs.state.total_minted += 100 * RINGS_PER_ECH
-        t = make_tx(0, 1, RINGS_PER_ECH, node.cs.state, 0)
+        node.cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        node.cs.state.total_minted += 100 * EMBERS_PER_SCH
+        t = make_tx(0, 1, EMBERS_PER_SCH, node.cs.state, 0)
         node.submit_tx(t)
         gossip.relay_tx.assert_called_once()
 
     def test_submit_invalid_tx_returns_false(self, node_env):
         node, *_ = node_env
         # No balance for address(5)
-        t = make_tx(5, 1, RINGS_PER_ECH, node.cs.state, 0)
+        t = make_tx(5, 1, EMBERS_PER_SCH, node.cs.state, 0)
         ok, err = node.submit_tx(t)
         assert ok is False
 
     def test_submit_duplicate_tx_returns_false(self, node_env):
         node, *_ = node_env
-        node.cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        node.cs.state.total_minted += 100 * RINGS_PER_ECH
-        t = make_tx(0, 1, RINGS_PER_ECH, node.cs.state, 0)
+        node.cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        node.cs.state.total_minted += 100 * EMBERS_PER_SCH
+        t = make_tx(0, 1, EMBERS_PER_SCH, node.cs.state, 0)
         node.submit_tx(t)
         ok, err = node.submit_tx(t)
         assert ok is False
@@ -266,12 +266,12 @@ class TestSubmitTx:
 class TestBuildAndSignTx:
     def test_build_and_sign_returns_tx_and_fee(self, node_env):
         node, keyfile, *_ = node_env
-        node.cs.state.credit(node.addr, 100 * RINGS_PER_ECH)
-        node.cs.state.total_minted += 100 * RINGS_PER_ECH
+        node.cs.state.credit(node.addr, 100 * EMBERS_PER_SCH)
+        node.cs.state.total_minted += 100 * EMBERS_PER_SCH
         # Rebuild view so it reflects the updated state
         from node import NodeView
         node.view = NodeView(node.cs)
-        outputs = [{"to": address(1), "amount": RINGS_PER_ECH}]
+        outputs = [{"to": address(1), "amount": EMBERS_PER_SCH}]
         t, fee = node.build_and_sign_tx(outputs, passphrase="testpass")
         assert isinstance(t, dict)
         assert "signature" in t
@@ -279,11 +279,11 @@ class TestBuildAndSignTx:
 
     def test_build_and_sign_signature_verifies(self, node_env):
         node, keyfile, *_ = node_env
-        node.cs.state.credit(node.addr, 100 * RINGS_PER_ECH)
-        node.cs.state.total_minted += 100 * RINGS_PER_ECH
+        node.cs.state.credit(node.addr, 100 * EMBERS_PER_SCH)
+        node.cs.state.total_minted += 100 * EMBERS_PER_SCH
         from node import NodeView
         node.view = NodeView(node.cs)
-        outputs = [{"to": address(1), "amount": RINGS_PER_ECH}]
+        outputs = [{"to": address(1), "amount": EMBERS_PER_SCH}]
         t, _ = node.build_and_sign_tx(outputs, passphrase="testpass")
         ok, err = tx_mod.validate(t, node.cs.state, node.cs.height,
                                    node.cs.fee_rate_at)
@@ -345,9 +345,9 @@ class TestCommit:
 
     def test_commit_removes_confirmed_txs_from_mempool(self, node_env):
         node, *_ = node_env
-        node.cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        node.cs.state.total_minted += 100 * RINGS_PER_ECH
-        t = make_tx(0, 1, RINGS_PER_ECH, node.cs.state, 0)
+        node.cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        node.cs.state.total_minted += 100 * EMBERS_PER_SCH
+        t = make_tx(0, 1, EMBERS_PER_SCH, node.cs.state, 0)
         node.mempool.add(t)
         blk = make_block(1, node.cs.tip["hash"], [t])
         node._commit(blk)
@@ -394,9 +394,9 @@ class TestDrainQueue:
 
     def test_drain_submit_tx_message(self, node_env):
         node, *_ = node_env
-        node.cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        node.cs.state.total_minted += 100 * RINGS_PER_ECH
-        t = make_tx(0, 1, RINGS_PER_ECH, node.cs.state, 0)
+        node.cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        node.cs.state.total_minted += 100 * EMBERS_PER_SCH
+        t = make_tx(0, 1, EMBERS_PER_SCH, node.cs.state, 0)
         reply = queue.Queue()
         node.net_in_q.put({"type": "submit_tx", "tx": t, "reply": reply})
         node._drain_queue()
@@ -417,9 +417,9 @@ class TestDrainQueue:
 class TestHandleInboundTx:
     def test_fluff_valid_tx_added_to_mempool(self, node_env):
         node, *_ = node_env
-        node.cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        node.cs.state.total_minted += 100 * RINGS_PER_ECH
-        t = make_tx(0, 1, RINGS_PER_ECH, node.cs.state, 0)
+        node.cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        node.cs.state.total_minted += 100 * EMBERS_PER_SCH
+        t = make_tx(0, 1, EMBERS_PER_SCH, node.cs.state, 0)
         msg = {"tx": t, "relay_type": "tx_fluff", "remaining_hops": 0}
         node._handle_inbound_tx(msg)
         assert node.mempool.size() == 1
@@ -427,16 +427,16 @@ class TestHandleInboundTx:
     def test_fluff_invalid_tx_not_added(self, node_env):
         node, *_ = node_env
         # No balance for address(5)
-        t = make_tx(5, 1, RINGS_PER_ECH, node.cs.state, 0)
+        t = make_tx(5, 1, EMBERS_PER_SCH, node.cs.state, 0)
         msg = {"tx": t, "relay_type": "tx_fluff", "remaining_hops": 0}
         node._handle_inbound_tx(msg)
         assert node.mempool.size() == 0
 
     def test_fluff_duplicate_not_added_again(self, node_env):
         node, *_ = node_env
-        node.cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        node.cs.state.total_minted += 100 * RINGS_PER_ECH
-        t = make_tx(0, 1, RINGS_PER_ECH, node.cs.state, 0)
+        node.cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        node.cs.state.total_minted += 100 * EMBERS_PER_SCH
+        t = make_tx(0, 1, EMBERS_PER_SCH, node.cs.state, 0)
         msg = {"tx": t, "relay_type": "tx_fluff", "remaining_hops": 0}
         node._handle_inbound_tx(msg)
         node._handle_inbound_tx(msg)  # second time -- duplicate
@@ -445,7 +445,7 @@ class TestHandleInboundTx:
     def test_stem_tx_forwarded_without_validation(self, node_env):
         node, _, __, gossip, *_ = node_env
         # Even an invalid tx (no balance) should be forwarded on stem
-        t = make_tx(5, 1, RINGS_PER_ECH, node.cs.state, 0)
+        t = make_tx(5, 1, EMBERS_PER_SCH, node.cs.state, 0)
         msg = {"tx": t, "relay_type": "tx_stem", "remaining_hops": 3}
         node._handle_inbound_tx(msg)
         gossip.dandelion_send.assert_called_once()
@@ -453,9 +453,9 @@ class TestHandleInboundTx:
 
     def test_fluff_valid_tx_relayed(self, node_env):
         node, _, __, gossip, *_ = node_env
-        node.cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        node.cs.state.total_minted += 100 * RINGS_PER_ECH
-        t = make_tx(0, 1, RINGS_PER_ECH, node.cs.state, 0)
+        node.cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        node.cs.state.total_minted += 100 * EMBERS_PER_SCH
+        t = make_tx(0, 1, EMBERS_PER_SCH, node.cs.state, 0)
         msg = {"tx": t, "relay_type": "tx_fluff", "remaining_hops": 0}
         node._handle_inbound_tx(msg)
         gossip.relay_tx.assert_called_once()
@@ -561,10 +561,10 @@ class TestReorgMempool:
     def test_reorg_restores_old_chain_txs(self, node_env):
         """Txs from the old chain that aren't in the new chain go back to mempool."""
         node, *_ = node_env
-        node.cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        node.cs.state.total_minted += 100 * RINGS_PER_ECH
+        node.cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        node.cs.state.total_minted += 100 * EMBERS_PER_SCH
 
-        t = make_tx(0, 1, RINGS_PER_ECH, node.cs.state, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, node.cs.state, 0)
         g = node.cs.chain[0]
         b1_old = make_block(1, g["hash"], [t])
         # Commit the block so t is now confirmed in the old chain
@@ -591,10 +591,10 @@ class TestReorgMempool:
         Calls _reorg_mempool directly since we're testing its logic, not full validation.
         """
         node, *_ = node_env
-        node.cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        node.cs.state.total_minted += 100 * RINGS_PER_ECH
+        node.cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        node.cs.state.total_minted += 100 * EMBERS_PER_SCH
 
-        t = make_tx(0, 1, RINGS_PER_ECH, node.cs.state, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, node.cs.state, 0)
         h = tx_mod.tx_hash(t)
         g = node.cs.chain[0]
 

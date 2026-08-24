@@ -22,7 +22,7 @@ from storage import Storage
 from tests.fixtures import (
     address, genesis, make_block, make_tx, seed_balance,
 )
-from params import RINGS_PER_ECH
+from params import EMBERS_PER_SCH
 
 
 # ---------------------------------------------------------------------------
@@ -143,14 +143,14 @@ class TestTxAndAddrIndex:
     def test_tx_not_indexed_before_block_save(self, store):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 0)
         h = tx_mod.tx_hash(t)
         assert store.get_tx_height(h) is None
 
     def test_tx_indexed_after_block_save(self, store):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 0)
         h = tx_mod.tx_hash(t)
         g = genesis()
         b1 = make_block(1, g["hash"], [t])
@@ -161,7 +161,7 @@ class TestTxAndAddrIndex:
     def test_addr_index_for_sender(self, store):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 0)
         g = genesis()
         b1 = make_block(1, g["hash"], [t])
         store.save_block(g)
@@ -173,7 +173,7 @@ class TestTxAndAddrIndex:
     def test_addr_index_for_recipient(self, store):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 0)
         g = genesis()
         b1 = make_block(1, g["hash"], [t])
         store.save_block(g)

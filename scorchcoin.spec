@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# Linux:   make linux   -> dist/echocoin.AppImage  (onedir wrapped in AppImage)
-# Windows: make windows -> dist/echocoin.exe       (onefile)
+# Linux:   make linux   -> dist/scorchcoin.AppImage  (onedir wrapped in AppImage)
+# Windows: make windows -> dist/scorchcoin.exe       (onefile)
 
 import glob, os, sys
 from PyInstaller.utils.hooks import collect_all
@@ -65,8 +65,8 @@ _all_binaries = [
 _all_datas = [
     ("src/bip39_english.txt", "."),
     ("docs/whitepaper.md", "docs"),
-    ("echocoin.svg",       "."),
-    ("echocoin.png",       "."),
+    ("scorchcoin.svg",       "."),
+    ("scorchcoin.png",       "."),
     ("favicon.ico",        "."),
     ("templates_html",     "templates_html"),
     *nacl_datas, *cffi_datas, *oqs_datas, *chiavdf_datas,
@@ -101,7 +101,7 @@ if sys.platform == "win32":
         a.binaries,
         a.datas,
         [],
-        name="echocoin",
+        name="scorchcoin",
         debug=False,
         strip=False,
         upx=True,
@@ -116,12 +116,12 @@ if sys.platform == "win32":
     )
 else:
     # onedir: exclude_binaries=True tells EXE not to bundle libs itself;
-    # COLLECT then assembles everything into dist/echocoin/
+    # COLLECT then assembles everything into dist/scorchcoin/
     exe = EXE(
         pyz,
         a.scripts,
         exclude_binaries=True,
-        name="echocoin",
+        name="scorchcoin",
         debug=False,
         strip=False,
         upx=False,
@@ -138,5 +138,5 @@ else:
         a.datas,
         strip=False,
         upx=False,
-        name="echocoin",
+        name="scorchcoin",
     )

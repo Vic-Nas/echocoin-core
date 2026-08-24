@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import mempool as mempool_mod
 import tx as tx_mod
 import state as state_mod
-from params import INITIAL_FEE_RATE, RINGS_PER_ECH
+from params import INITIAL_FEE_RATE, EMBERS_PER_SCH
 from tests.fixtures import address, make_tx, seed_balance
 
 
@@ -28,7 +28,7 @@ def fresh_state():
     return state_mod.State()
 
 
-def sample_tx(sender_index=0, recipient_index=1, amount=RINGS_PER_ECH,
+def sample_tx(sender_index=0, recipient_index=1, amount=EMBERS_PER_SCH,
               nonce_offset=0, tip_height=10):
     s = fresh_state()
     seed_balance(s, sender_index, 100.0)
@@ -170,7 +170,7 @@ class TestPruneStale:
         mp = fresh_mempool()
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10, fee_height_override=10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10, fee_height_override=10)
         mp.add(t)
         # Tip is now 35, so fee_height=10 is 25 blocks old (max_age=20)
         pruned = mp.prune_stale(chain_tip_height=35, state=s)
@@ -182,7 +182,7 @@ class TestPruneStale:
         mp = fresh_mempool()
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         mp.add(t)
         s.apply_tx(t)  # nonce is now consumed
         pruned = mp.prune_stale(chain_tip_height=10, state=s)
@@ -194,7 +194,7 @@ class TestPruneStale:
         mp = fresh_mempool()
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         mp.add(t)
         # Force very short TTL
         pruned = mp.prune_stale(chain_tip_height=10, state=s, ttl_seconds=0)
@@ -204,7 +204,7 @@ class TestPruneStale:
         mp = fresh_mempool()
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         mp.add(t)
         pruned = mp.prune_stale(chain_tip_height=10, state=s)
         assert len(pruned) == 0

@@ -1,13 +1,13 @@
 """Protocol constants. No logic, no I/O."""
 
-# Denomination: 1 ECH = 100_000_000 rings (same precision as BTC/satoshis).
-# All balances, amounts, fees, and rewards are integers in rings.
-RINGS_PER_ECH = 100_000_000
+# Denomination: 1 SCH = 100_000_000 embers (same precision as BTC/satoshis).
+# All balances, amounts, fees, and rewards are integers in embers.
+EMBERS_PER_SCH = 100_000_000
 
-# Emission. Supply is bounded at 21M ECH with smooth exponential decay
+# Emission. Supply is bounded at 21M SCH with smooth exponential decay
 # over a 20-year half-life. Burnt fees replenish can_mint, sustaining
 # rewards indefinitely. No halvings, no supply shock.
-SUPPLY_CAP        = 21_000_000 * RINGS_PER_ECH
+SUPPLY_CAP        = 21_000_000 * EMBERS_PER_SCH
 EMISSION_HALFLIFE = 5_000_000  # blocks (~20 years at 2 min/block)
 EMISSION_RATE     = 0.5 ** (1 / EMISSION_HALFLIFE)  # per-block decay factor
 
@@ -26,10 +26,10 @@ ADDRESS_BITS       = 132
 ADDRESS_WORD_COUNT = 12
 WORD_BITS          = 11
 
-INITIAL_FEE_RATE = 10     # rings/byte; low start, fee formula rises under load
+INITIAL_FEE_RATE = 10     # embers/byte; low start, fee formula rises under load
 
 # Proof-of-Burn sliding window. Burns older than this many blocks no longer
-# count toward a builder's score. 500 blocks ~ 17 hours at 2 min/block:
+# count toward a sender's reward share. 500 blocks ~ 17 hours at 2 min/block:
 # long enough for daily participation cycles, short enough to prevent
 # permanent whale dominance from a one-time burn.
 POB_WINDOW = 500
@@ -52,11 +52,11 @@ VDF_ADJUST_FACTOR      = 1.02   # max 2% increase per adjustment period
 # Genesis message. Embedded in block 0 and hashed into the genesis block hash.
 # Cannot change after launch without breaking network identity.
 GENESIS_MESSAGE = (
-    "Echocoin genesis. No premine. No authority. Every node earns. "
+    "Scorchcoin genesis. No premine. No authority. Every node earns. "
     "The chain is its own clock: one VDF per block, real elapsed time."
 )
 
-DB_PATH = "echocoin_chain.db"
+DB_PATH = "scorchcoin_chain.db"
 
 # Genesis timestamp: unix time when the chain was launched. Set once manually
 # before the first release and never changed.
@@ -69,4 +69,4 @@ BEP44_SLOT_COUNT = 256
 # letting the chain restart fresh. Set to False for mainnet; at that point
 # GENESIS_TIMESTAMP is fixed manually once and the workflow never touches it.
 TESTNET      = True
-NETWORK_NAME = "Echocoin Testnet" if TESTNET else "Echocoin"
+NETWORK_NAME = "Scorchcoin Testnet" if TESTNET else "Scorchcoin"

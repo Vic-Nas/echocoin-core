@@ -25,7 +25,7 @@ import state as state_mod
 from state import compute_reward
 from pob import BURN_ADDRESS
 from params import (
-    EMISSION_RATE, SUPPLY_CAP, RINGS_PER_ECH
+    EMISSION_RATE, SUPPLY_CAP, EMBERS_PER_SCH
 )
 from tests.fixtures import address, make_tx, seed_balance
 
@@ -115,22 +115,22 @@ class TestApplyTx:
         seed_balance(s, 0, 100.0)
         addr0 = address(0)
         bal_before = s.get_balance(addr0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         s.apply_tx(t)
-        expected = bal_before - RINGS_PER_ECH - t["fee"]
+        expected = bal_before - EMBERS_PER_SCH - t["fee"]
         assert s.get_balance(addr0) == expected
 
     def test_apply_tx_credits_recipient(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         s.apply_tx(t)
-        assert s.get_balance(address(1)) == RINGS_PER_ECH
+        assert s.get_balance(address(1)) == EMBERS_PER_SCH
 
     def test_apply_tx_advances_nonce(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         s.apply_tx(t)
         assert s.get_nonce(address(0)) == t["nonce"]
 
@@ -138,7 +138,7 @@ class TestApplyTx:
         """Fees go to the block builder, not burned."""
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
         s.apply_tx(t)
         assert s.total_burnt == 0
 
@@ -147,7 +147,7 @@ class TestApplyTx:
         s = fresh_state()
         seed_balance(s, 0, 100.0)
         from tests.fixtures import make_burn_tx
-        t = make_burn_tx(0, RINGS_PER_ECH, s, 10)
+        t = make_burn_tx(0, EMBERS_PER_SCH, s, 10)
         burn_amount = t["outputs"][0]["amount"]
         s.apply_tx(t)
         assert s.total_burnt == burn_amount
@@ -157,7 +157,7 @@ class TestApplyTx:
         s = fresh_state()
         seed_balance(s, 0, 100.0)
         from tests.fixtures import make_burn_tx
-        t = make_burn_tx(0, RINGS_PER_ECH, s, 10)
+        t = make_burn_tx(0, EMBERS_PER_SCH, s, 10)
         balances_before = dict(s.all_balances())
         s.apply_tx(t)
         for addr, bal in s.all_balances().items():
@@ -173,16 +173,16 @@ class TestApplyTx:
         import tx as tx_mod
         from params import INITIAL_FEE_RATE
         outputs = [
-            {"to": address(1), "amount": RINGS_PER_ECH},
-            {"to": address(2), "amount": 2 * RINGS_PER_ECH},
+            {"to": address(1), "amount": EMBERS_PER_SCH},
+            {"to": address(2), "amount": 2 * EMBERS_PER_SCH},
         ]
         pk_hex = pubkey_hex(0)
         fee = tx_mod.compute_fee(from_addr, pk_hex, outputs, 1, 10, INITIAL_FEE_RATE)
         sk, _ = kp(0)
         t = tx_mod.create(from_addr, pk_hex, outputs, 1, 10, fee, sk)
         s.apply_tx(t)
-        assert s.get_balance(address(1)) == RINGS_PER_ECH
-        assert s.get_balance(address(2)) == 2 * RINGS_PER_ECH
+        assert s.get_balance(address(1)) == EMBERS_PER_SCH
+        assert s.get_balance(address(2)) == 2 * EMBERS_PER_SCH
 
 
 # ---------------------------------------------------------------------------
@@ -206,13 +206,13 @@ class TestEmission:
     def test_burns_restore_mintable_pool(self):
         """Whitepaper Section 5: burns feed back into can_mint."""
         r_no_burn   = compute_reward(SUPPLY_CAP // 2, 0)
-        r_with_burn = compute_reward(SUPPLY_CAP // 2, RINGS_PER_ECH * 1000)
+        r_with_burn = compute_reward(SUPPLY_CAP // 2, EMBERS_PER_SCH * 1000)
         assert r_with_burn > r_no_burn
 
     def test_reward_formula_matches_whitepaper(self):
         """can_mint = SUPPLY_CAP - total_minted + total_burnt;  reward = int(can_mint * (1 - RATE))"""
-        minted = 5_000_000 * RINGS_PER_ECH
-        burnt  = 500_000  * RINGS_PER_ECH
+        minted = 5_000_000 * EMBERS_PER_SCH
+        burnt  = 500_000  * EMBERS_PER_SCH
         can_mint = SUPPLY_CAP - minted + burnt
         expected = int(can_mint * (1 - EMISSION_RATE))
         assert compute_reward(minted, burnt) == expected
@@ -220,14 +220,14 @@ class TestEmission:
     def test_state_compute_block_reward_uses_state_totals(self):
         s = fresh_state()
         s.total_minted = SUPPLY_CAP // 4
-        s.total_burnt  = 1000 * RINGS_PER_ECH
+        s.total_burnt  = 1000 * EMBERS_PER_SCH
         r_state = s.compute_block_reward()
         r_direct = compute_reward(s.total_minted, s.total_burnt)
         assert r_state == r_direct
 
     def test_negative_can_mint_returns_zero(self):
         """Guard against can_mint going negative (shouldn't happen normally)."""
-        assert compute_reward(SUPPLY_CAP + RINGS_PER_ECH, 0) == 0
+        assert compute_reward(SUPPLY_CAP + EMBERS_PER_SCH, 0) == 0
 
 
 # ---------------------------------------------------------------------------

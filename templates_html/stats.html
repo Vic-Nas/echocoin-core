@@ -14,9 +14,9 @@
   </div>
 </div>
 <script>
-let RINGS_PER_ECH = 100_000_000;
-let SUPPLY_CAP_RINGS = 21_000_000 * RINGS_PER_ECH;
-const fmt = rings => (rings / RINGS_PER_ECH).toFixed(4) + ' ECH';
+let EMBERS_PER_SCH = 100_000_000;
+let SUPPLY_CAP_EMBERS = 21_000_000 * EMBERS_PER_SCH;
+const fmt = embers => (embers / EMBERS_PER_SCH).toFixed(4) + ' SCH';
 const fmtPct = (a, b) => b ? (a / b * 100).toFixed(2) + '%' : '0%';
 
 function polyline(points, xKey, yKey, W, H, PAD, maxX, maxY) {
@@ -36,8 +36,8 @@ function axisLabels(svg, W, H, PAD, maxX, maxY) {
   }
   for (let i = 0; i <= 4; i++) {
     const y = H - PAD - (i / 4) * (H - PAD * 2);
-    const val = (i / 4) * maxY / RINGS_PER_ECH;
-    const label = val >= 1 ? val.toFixed(1) + ' ECH' : (val * 1000).toFixed(1) + ' mECH';
+    const val = (i / 4) * maxY / EMBERS_PER_SCH;
+    const label = val >= 1 ? val.toFixed(1) + ' SCH' : (val * 1000).toFixed(1) + ' mSCH';
     svg.innerHTML += `<text x="${PAD - 4}" y="${y + 4}" fill="#5a6070" font-size="10" text-anchor="end">${label}</text>`;
   }
   for (let i = 1; i <= 3; i++) {
@@ -67,10 +67,10 @@ fetch('/api/stats')
     document.getElementById('stats-loading').style.display = 'none';
     document.getElementById('stats-content').style.display = '';
     const t = data.totals;
-    RINGS_PER_ECH = t.rings_per_ech || RINGS_PER_ECH;
-    SUPPLY_CAP_RINGS = t.supply_cap || SUPPLY_CAP_RINGS;
+    EMBERS_PER_SCH = t.embers_per_sch || EMBERS_PER_SCH;
+    SUPPLY_CAP_EMBERS = t.supply_cap || SUPPLY_CAP_EMBERS;
 
-    const circPct = fmtPct(t.circulating, SUPPLY_CAP_RINGS);
+    const circPct = fmtPct(t.circulating, SUPPLY_CAP_EMBERS);
     const netLast = t.net_emission_last || 0;
     const netColor = netLast >= 0 ? 'var(--green)' : 'var(--red)';
     const netSign = netLast >= 0 ? '+' : '';

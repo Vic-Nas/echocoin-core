@@ -29,7 +29,7 @@ import state as state_mod
 import tx as tx_mod
 from params import (
     BLOCK_CYCLE_SECONDS, BLOCK_SIZE_LIMIT, BLOCK_SIZE_TARGET_BYTES,
-    GENESIS_MESSAGE, GENESIS_TIMESTAMP, INITIAL_FEE_RATE, RINGS_PER_ECH,
+    GENESIS_MESSAGE, GENESIS_TIMESTAMP, INITIAL_FEE_RATE, EMBERS_PER_SCH,
 )
 from tests.fixtures import (
     address, genesis, keypair, make_block, make_tx, seed_balance,
@@ -253,7 +253,7 @@ class TestValidateTxOrdering:
         seed_balance(s, 0, 100.0)
         # fee_height must equal genesis height (0) because block.validate
         # checks txs against chain_tip_height = block.height - 1 = 0
-        t = make_tx(0, 1, RINGS_PER_ECH, s, chain_tip_height=0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, chain_tip_height=0)
         g = genesis()
         b = make_block(1, g["hash"], [t])
         ok, err = block_mod.validate(b, s.snapshot(), [g], noop_fee_rate)
@@ -264,8 +264,8 @@ class TestValidateTxOrdering:
         seed_balance(s, 0, 100.0)
         seed_balance(s, 1, 100.0)
         # Create two txs from different senders (independent nonces)
-        t1 = make_tx(0, 2, RINGS_PER_ECH, s, chain_tip_height=0)
-        t2 = make_tx(1, 2, RINGS_PER_ECH, s, chain_tip_height=0)
+        t1 = make_tx(0, 2, EMBERS_PER_SCH, s, chain_tip_height=0)
+        t2 = make_tx(1, 2, EMBERS_PER_SCH, s, chain_tip_height=0)
         sorted_txs = tx_mod.sort_txs([t1, t2])
         # Reverse them to create wrong order
         wrong_order = list(reversed(sorted_txs))
@@ -388,7 +388,7 @@ class TestAssemble:
     def test_assemble_includes_valid_txs(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, RINGS_PER_ECH, s, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, s, 0)
         g = genesis()
         b = block_mod.assemble(g, [t], address(0), INITIAL_FEE_RATE)
         assert len(b["transactions"]) == 1
@@ -400,7 +400,7 @@ class TestAssemble:
         s = fresh_state()
         seed_balance(s, 0, 10_000.0)
         for i in range(50):
-            t = make_tx(0, 1, RINGS_PER_ECH, s, 0)
+            t = make_tx(0, 1, EMBERS_PER_SCH, s, 0)
             dummy_txs.append(t)
             try:
                 s.apply_tx(t)

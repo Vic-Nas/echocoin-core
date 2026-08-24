@@ -14,10 +14,10 @@ def compute_reward(total_minted: int, total_burnt: int) -> int:
 
 class State:
     def __init__(self):
-        self._balances    = {}  # addr -> int (rings)
+        self._balances    = {}  # addr -> int (embers)
         self._nonces      = {}  # addr -> int (last used nonce, 0 = never transacted)
-        self.total_minted = 0   # rings minted via block rewards since genesis
-        self.total_burnt  = 0   # rings destroyed via fee burns since genesis
+        self.total_minted = 0   # embers minted via block rewards since genesis
+        self.total_burnt  = 0   # embers destroyed via fee burns since genesis
 
     # ------------------------------------------------------------------
     # Balance and nonce access

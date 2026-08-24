@@ -271,7 +271,7 @@ def compute_expected_fee_rate(chain):
         Rises up to 5% per block when blocks are full; a sustained spam
         attack doubles fees in ~14 blocks (~28 minutes).
 
-    Hard minimum: 1 ring/byte (technical floor, not a pricing floor).
+    Hard minimum: 1 ember/byte (technical floor, not a pricing floor).
     No hardcoded ceiling: fee pressure is the only cap on block fullness.
 
     Volume is read from blk["tx_bytes"] if present (set by node._commit),

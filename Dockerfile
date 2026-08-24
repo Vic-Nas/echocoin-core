@@ -23,4 +23,4 @@ COPY . .
 ENV PYTHONPATH=/app/src
 
 EXPOSE 8333
-CMD ["python", "main.py", "--log-level", "DEBUG", "--keyfile", "/data/echocoin_key.json", "--db", "/data/echocoin_chain.db"]
+CMD ["python", "main.py", "--log-level", "DEBUG", "--keyfile", "/data/scorchcoin_key.json", "--db", "/data/scorchcoin_chain.db"]

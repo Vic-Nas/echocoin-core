@@ -20,7 +20,7 @@ import block as block_mod
 import state as state_mod
 from chainstate import ChainState
 import pob as pob_mod
-from params import INITIAL_FEE_RATE, RINGS_PER_ECH
+from params import INITIAL_FEE_RATE, EMBERS_PER_SCH
 from tests.fixtures import (
     address, genesis, make_block, make_tx, seed_balance,
 )
@@ -115,21 +115,21 @@ class TestValidateAndApply:
     def test_block_with_tx_updates_state(self):
         cs = ChainState.from_genesis()
         # Seed balance directly into state for simplicity
-        cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        cs.state.total_minted += 100 * RINGS_PER_ECH
+        cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        cs.state.total_minted += 100 * EMBERS_PER_SCH
         g = cs.tip
-        t = make_tx(0, 1, RINGS_PER_ECH, cs.state, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
         b = make_block(1, g["hash"], [t])
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
-        assert cs2.state.get_balance(address(1)) == RINGS_PER_ECH
+        assert cs2.state.get_balance(address(1)) == EMBERS_PER_SCH
 
     def test_fees_credited_to_builder_after_valid_block(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        cs.state.total_minted += 100 * RINGS_PER_ECH
+        cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        cs.state.total_minted += 100 * EMBERS_PER_SCH
         g = cs.tip
-        t = make_tx(0, 1, RINGS_PER_ECH, cs.state, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
         b = make_block(1, g["hash"], [t], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
@@ -157,9 +157,9 @@ class TestFromChain:
         g = genesis()
         cs0 = ChainState.from_genesis()
         # Seed and add a tx
-        cs0.state.credit(address(0), 100 * RINGS_PER_ECH)
-        cs0.state.total_minted += 100 * RINGS_PER_ECH
-        t = make_tx(0, 1, RINGS_PER_ECH, cs0.state, 0)
+        cs0.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        cs0.state.total_minted += 100 * EMBERS_PER_SCH
+        t = make_tx(0, 1, EMBERS_PER_SCH, cs0.state, 0)
         b1 = make_block(1, g["hash"], [t])
         # Apply via validate_and_apply
         ok, _, cs1 = cs0.validate_and_apply(b1)
@@ -257,13 +257,13 @@ class TestApplyBlock:
 
     def test_apply_block_applies_transactions(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * RINGS_PER_ECH)
-        cs.state.total_minted += 100 * RINGS_PER_ECH
+        cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
+        cs.state.total_minted += 100 * EMBERS_PER_SCH
         g = cs.tip
-        t = make_tx(0, 1, RINGS_PER_ECH, cs.state, 0)
+        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
         b1 = make_block(1, g["hash"], [t])
         cs2 = cs.apply_block(b1)
-        assert cs2.state.get_balance(address(1)) == RINGS_PER_ECH
+        assert cs2.state.get_balance(address(1)) == EMBERS_PER_SCH
 
 
 # ---------------------------------------------------------------------------

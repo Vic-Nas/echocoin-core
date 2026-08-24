@@ -1,4 +1,4 @@
-"""HTTP API and browser UI for Echocoin nodes.
+"""HTTP API and browser UI for Scorchcoin nodes.
 
 Peer communication is handled separately over UDP. This module only serves
 human-facing browser UI and a JSON API for wallets and block explorers.
@@ -23,13 +23,13 @@ Public app  (default port 8333, externally reachable):
           "address", "peer_count", "total_minted", "total_burnt", "can_mint"}
 
     GET  /api/fee_rate
-         {"fee_rate": <rings/byte>, "height": <n>}
+         {"fee_rate": <embers/byte>, "height": <n>}
 
     GET  /api/block/<height>          full block object or {"error": "not found"}
     GET  /api/tx/<hash>               transaction object (confirmed or mempool)
 
     GET  /api/address/<addr>/balance
-         {"address", "balance_rings", "balance_ech"}
+         {"address", "balance_embers", "balance_sch"}
 
     GET  /api/address/<addr>/history
          [{"height", "tx_hash", "direction": "sent"|"received", "tx"}, ...]
@@ -39,7 +39,7 @@ Public app  (default port 8333, externally reachable):
 
     GET  /api/stats
          {"points": [...], "totals": {"minted", "total_burnt", "circulating",
-          "can_mint", "supply_cap", "net_emission_last", "rings_per_ech"}}
+          "can_mint", "supply_cap", "net_emission_last", "embers_per_sch"}}
 
     POST /api/tx/send                 rate-limited: 20 requests/second
          Request body (JSON):
@@ -68,7 +68,7 @@ from flask_limiter.util import get_remote_address
 
 import crypto as crypto_mod
 import tx as tx_mod
-from params import POB_WINDOW, RINGS_PER_ECH, SUPPLY_CAP
+from params import POB_WINDOW, EMBERS_PER_SCH, SUPPLY_CAP
 from pob import BURN_ADDRESS
 
 log = logging.getLogger("ec.api")
@@ -78,17 +78,17 @@ log = logging.getLogger("ec.api")
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
-def fmt_balance(rings):
-    ech = rings // RINGS_PER_ECH
-    rem = rings % RINGS_PER_ECH
-    return f"{ech} ECH {rem:,} rings"
+def fmt_balance(embers):
+    sch = embers // EMBERS_PER_SCH
+    rem = embers % EMBERS_PER_SCH
+    return f"{sch} SCH {rem:,} embers"
 
 
-def fmt_fee_rate(rings_per_byte):
-    ech = rings_per_byte / RINGS_PER_ECH
-    if ech >= 0.001:
-        return f"{ech:.6f} ECH/byte"
-    return f"{ech:.2e} ECH/byte"
+def fmt_fee_rate(embers_per_byte):
+    sch = embers_per_byte / EMBERS_PER_SCH
+    if sch >= 0.001:
+        return f"{sch:.6f} SCH/byte"
+    return f"{sch:.2e} SCH/byte"
 
 
 # ---------------------------------------------------------------------------
@@ -288,8 +288,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
         if not crypto_mod.is_valid_address(addr):
             return jsonify({"error": "invalid address"}), 400
         balance = node.view.state.get_balance(addr)
-        return jsonify({"address": addr, "balance_rings": balance,
-                        "balance_ech": balance / RINGS_PER_ECH})
+        return jsonify({"address": addr, "balance_embers": balance,
+                        "balance_sch": balance / EMBERS_PER_SCH})
 
     @app.route("/api/address/<addr>/history", endpoint=pfx+"api_history")
     def api_history(addr):
@@ -320,7 +320,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "can_mint":         max(0, SUPPLY_CAP - sv.total_minted + sv.total_burnt),
             "supply_cap":       SUPPLY_CAP,
             "net_emission_last": net_last,
-            "rings_per_ech":    RINGS_PER_ECH,
+            "embers_per_sch":    EMBERS_PER_SCH,
         }})
 
     @app.route("/api/tx/send", methods=["POST"], endpoint=pfx+"api_send_tx")
@@ -441,16 +441,16 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
             raw        = request.form.get("amount", "").strip()
             passphrase = request.form.get("passphrase", "").strip()
             try:
-                burn_rings = int(raw)
-                if burn_rings <= 0:
+                burn_embers = int(raw)
+                if burn_embers <= 0:
                     raise ValueError("must be positive")
             except ValueError as e:
                 ctx["alert_err"] = f"Invalid amount: {e}"
             else:
-                if burn_rings > balance:
+                if burn_embers > balance:
                     ctx["alert_err"] = "Insufficient balance."
                 else:
-                    burn_out = {"to": BURN_ADDRESS, "amount": burn_rings}
+                    burn_out = {"to": BURN_ADDRESS, "amount": burn_embers}
                     _submit_and_alert(node, [burn_out], passphrase, ctx)
         return render_template("burn.html", **ctx)
 

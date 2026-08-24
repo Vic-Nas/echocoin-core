@@ -17,7 +17,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import pob as pob_mod
 from pob import BurnWindow, BURN_ADDRESS
-from params import POB_WINDOW, RINGS_PER_ECH
+from params import POB_WINDOW, EMBERS_PER_SCH
 from tests.fixtures import address, genesis, make_block
 
 
@@ -55,25 +55,25 @@ class TestBurnWindowAddBlock:
 
     def test_burn_recorded_for_sender(self):
         g = genesis()
-        blk = make_burn_block(1, g["hash"], sender_index=0, amount=RINGS_PER_ECH)
+        blk = make_burn_block(1, g["hash"], sender_index=0, amount=EMBERS_PER_SCH)
         w = window_from_blocks([g, blk])
-        assert w.sender_totals()[address(0)] == RINGS_PER_ECH
+        assert w.sender_totals()[address(0)] == EMBERS_PER_SCH
 
     def test_burns_accumulate_across_blocks(self):
         g = genesis()
-        b1 = make_burn_block(1, g["hash"], 0, RINGS_PER_ECH)
-        b2 = make_burn_block(2, b1["hash"], 0, 2 * RINGS_PER_ECH)
+        b1 = make_burn_block(1, g["hash"], 0, EMBERS_PER_SCH)
+        b2 = make_burn_block(2, b1["hash"], 0, 2 * EMBERS_PER_SCH)
         w = window_from_blocks([g, b1, b2])
-        assert w.sender_totals()[address(0)] == 3 * RINGS_PER_ECH
+        assert w.sender_totals()[address(0)] == 3 * EMBERS_PER_SCH
 
     def test_burns_from_multiple_senders(self):
         g = genesis()
-        b1 = make_burn_block(1, g["hash"], 0, RINGS_PER_ECH)
-        b2 = make_burn_block(2, b1["hash"], 1, 2 * RINGS_PER_ECH)
+        b1 = make_burn_block(1, g["hash"], 0, EMBERS_PER_SCH)
+        b2 = make_burn_block(2, b1["hash"], 1, 2 * EMBERS_PER_SCH)
         w = window_from_blocks([g, b1, b2])
         totals = w.sender_totals()
-        assert totals[address(0)] == RINGS_PER_ECH
-        assert totals[address(1)] == 2 * RINGS_PER_ECH
+        assert totals[address(0)] == EMBERS_PER_SCH
+        assert totals[address(1)] == 2 * EMBERS_PER_SCH
 
 
 # ---------------------------------------------------------------------------
@@ -85,7 +85,7 @@ class TestBurnWindowExpiry:
         """Burns older than POB_WINDOW blocks drop out."""
         g = genesis()
         chain = [g]
-        b1 = make_burn_block(1, chain[-1]["hash"], 0, RINGS_PER_ECH)
+        b1 = make_burn_block(1, chain[-1]["hash"], 0, EMBERS_PER_SCH)
         chain.append(b1)
         for h in range(2, POB_WINDOW + 2):
             blk = make_block(h, chain[-1]["hash"], [])
@@ -97,13 +97,13 @@ class TestBurnWindowExpiry:
         """A burn POB_WINDOW-1 blocks ago is still within the window."""
         g = genesis()
         chain = [g]
-        b1 = make_burn_block(1, chain[-1]["hash"], 0, RINGS_PER_ECH)
+        b1 = make_burn_block(1, chain[-1]["hash"], 0, EMBERS_PER_SCH)
         chain.append(b1)
         for h in range(2, POB_WINDOW):
             blk = make_block(h, chain[-1]["hash"], [])
             chain.append(blk)
         w = window_from_blocks(chain)
-        assert w.sender_totals()[address(0)] == RINGS_PER_ECH
+        assert w.sender_totals()[address(0)] == EMBERS_PER_SCH
 
 
 # ---------------------------------------------------------------------------
@@ -120,14 +120,14 @@ class TestRewardDistribution:
 
     def test_zero_reward_returns_empty(self):
         g = genesis()
-        blk = make_burn_block(1, g["hash"], 0, RINGS_PER_ECH)
+        blk = make_burn_block(1, g["hash"], 0, EMBERS_PER_SCH)
         w = window_from_blocks([g, blk])
         dist = w.reward_distribution(0)
         assert dist == []
 
     def test_single_sender_gets_full_reward(self):
         g = genesis()
-        blk = make_burn_block(1, g["hash"], 0, RINGS_PER_ECH)
+        blk = make_burn_block(1, g["hash"], 0, EMBERS_PER_SCH)
         w = window_from_blocks([g, blk])
         dist = w.reward_distribution(1000)
         assert len(dist) == 1
@@ -137,8 +137,8 @@ class TestRewardDistribution:
     def test_proportional_split_two_senders(self):
         """Reward splits proportional to burns: 3:1 burn ratio → 3:1 reward ratio."""
         g = genesis()
-        b1 = make_burn_block(1, g["hash"], sender_index=0, amount=3 * RINGS_PER_ECH)
-        b2 = make_burn_block(2, b1["hash"], sender_index=1, amount=RINGS_PER_ECH)
+        b1 = make_burn_block(1, g["hash"], sender_index=0, amount=3 * EMBERS_PER_SCH)
+        b2 = make_burn_block(2, b1["hash"], sender_index=1, amount=EMBERS_PER_SCH)
         w = window_from_blocks([g, b1, b2])
         dist = dict(w.reward_distribution(4000))
         assert dist[address(0)] == 3000
@@ -147,8 +147,8 @@ class TestRewardDistribution:
     def test_distribution_sums_to_at_most_reward(self):
         """Integer rounding means sum may be <= reward."""
         g = genesis()
-        b1 = make_burn_block(1, g["hash"], 0, 3 * RINGS_PER_ECH)
-        b2 = make_burn_block(2, b1["hash"], 1, 7 * RINGS_PER_ECH)
+        b1 = make_burn_block(1, g["hash"], 0, 3 * EMBERS_PER_SCH)
+        b2 = make_burn_block(2, b1["hash"], 1, 7 * EMBERS_PER_SCH)
         w = window_from_blocks([g, b1, b2])
         reward = 9999
         dist = w.reward_distribution(reward)
@@ -157,8 +157,8 @@ class TestRewardDistribution:
 
     def test_large_reward_distributed_accurately(self):
         g = genesis()
-        b1 = make_burn_block(1, g["hash"], 0, RINGS_PER_ECH)
-        b2 = make_burn_block(2, b1["hash"], 1, RINGS_PER_ECH)
+        b1 = make_burn_block(1, g["hash"], 0, EMBERS_PER_SCH)
+        b2 = make_burn_block(2, b1["hash"], 1, EMBERS_PER_SCH)
         w = window_from_blocks([g, b1, b2])
         dist = dict(w.reward_distribution(1_000_000))
         assert dist[address(0)] == 500_000
@@ -177,10 +177,10 @@ class TestSenderTotals:
 
     def test_sender_totals_sums_per_sender(self):
         g = genesis()
-        b1 = make_burn_block(1, g["hash"], 0, RINGS_PER_ECH)
-        b2 = make_burn_block(2, b1["hash"], 0, 2 * RINGS_PER_ECH)
+        b1 = make_burn_block(1, g["hash"], 0, EMBERS_PER_SCH)
+        b2 = make_burn_block(2, b1["hash"], 0, 2 * EMBERS_PER_SCH)
         w = window_from_blocks([g, b1, b2])
-        assert w.sender_totals()[address(0)] == 3 * RINGS_PER_ECH
+        assert w.sender_totals()[address(0)] == 3 * EMBERS_PER_SCH
 
 
 # ---------------------------------------------------------------------------
@@ -195,18 +195,18 @@ class TestBurnHistory:
 
     def test_history_records_burn_entries(self):
         g = genesis()
-        b = make_burn_block(1, g["hash"], 0, RINGS_PER_ECH)
+        b = make_burn_block(1, g["hash"], 0, EMBERS_PER_SCH)
         w = window_from_blocks([g, b])
         h = w.history()
         assert len(h) == 1
         assert h[0]["addr"] == address(0)
-        assert h[0]["amount"] == RINGS_PER_ECH
+        assert h[0]["amount"] == EMBERS_PER_SCH
         assert h[0]["height"] == 1
 
     def test_history_newest_first(self):
         g = genesis()
-        b1 = make_burn_block(1, g["hash"], 0, RINGS_PER_ECH)
-        b2 = make_burn_block(2, b1["hash"], 1, 2 * RINGS_PER_ECH)
+        b1 = make_burn_block(1, g["hash"], 0, EMBERS_PER_SCH)
+        b2 = make_burn_block(2, b1["hash"], 1, 2 * EMBERS_PER_SCH)
         w = window_from_blocks([g, b1, b2])
         h = w.history()
         assert h[0]["height"] >= h[-1]["height"]
@@ -219,17 +219,17 @@ class TestBurnHistory:
 class TestBurnWindowCopy:
     def test_copy_is_independent(self):
         g = genesis()
-        b1 = make_burn_block(1, g["hash"], 0, RINGS_PER_ECH)
+        b1 = make_burn_block(1, g["hash"], 0, EMBERS_PER_SCH)
         w = window_from_blocks([g, b1])
         copy = w.copy()
-        b2 = make_burn_block(2, b1["hash"], 1, 2 * RINGS_PER_ECH)
+        b2 = make_burn_block(2, b1["hash"], 1, 2 * EMBERS_PER_SCH)
         copy.add_block(b2)
         assert w.sender_totals().get(address(1), 0) == 0
-        assert copy.sender_totals()[address(1)] == 2 * RINGS_PER_ECH
+        assert copy.sender_totals()[address(1)] == 2 * EMBERS_PER_SCH
 
     def test_copy_preserves_totals(self):
         g = genesis()
-        b = make_burn_block(1, g["hash"], 0, RINGS_PER_ECH)
+        b = make_burn_block(1, g["hash"], 0, EMBERS_PER_SCH)
         w = window_from_blocks([g, b])
         copy = w.copy()
         assert copy.sender_totals() == w.sender_totals()
