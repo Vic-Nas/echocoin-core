@@ -77,20 +77,6 @@ The `--passphrase` CLI flag has been removed. It was visible in process listings
 | `--max-peers` | `125` | Hard cap on peer table size |
 | `--log-level` | `INFO` | Verbosity: DEBUG, INFO, WARNING, ERROR |
 
-### Shell tab-completion
-
-Flag names and values (`--log-level`, file paths for `--keyfile`/`--db`) can tab-complete in bash/zsh via [argcomplete](https://github.com/kislyuk/argcomplete). Works the same whether you run from source or the packaged binary:
-
-```bash
-# Running from source
-eval "$(register-python-argcomplete main.py)"
-
-# Running the packaged binary (must be on PATH)
-eval "$(register-python-argcomplete scorchcoin)"
-```
-
-Add the relevant line to your shell's rc file (`~/.bashrc`, `~/.zshrc`) to make it permanent.
-
 ## Building from source
 
 Pre-built releases are strongly preferred. If you must build from source:
