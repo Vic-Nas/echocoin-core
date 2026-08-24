@@ -1,4 +1,4 @@
-# Echocoin build targets
+# Scorchcoin build targets
 #
 # make linux   -- regenerate icons, build onedir via PyInstaller,
 #                 then wrap into dist/scorchcoin.AppImage

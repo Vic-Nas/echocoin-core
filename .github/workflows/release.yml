@@ -253,7 +253,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          name: Echocoin ${{ needs.version.outputs.tag }}
+          name: Scorchcoin ${{ needs.version.outputs.tag }}
           body: ${{ steps.changelog.outputs.CHANGELOG }}
           files: |
             artifacts/linux/scorchcoin.AppImage
