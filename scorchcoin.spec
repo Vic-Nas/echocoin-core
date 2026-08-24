@@ -77,6 +77,7 @@ _all_hiddenimports = [
     "oqs", "_cffi_backend", "libtorrent", "miniupnpc",
     "flask", "werkzeug", "werkzeug.serving", "werkzeug.debug",
     "jinja2", "jinja2.ext", "markdown",
+    "argcomplete", "argcomplete.completers",
 ]
 
 a = Analysis(

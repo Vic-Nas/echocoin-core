@@ -11,6 +11,9 @@ import queue
 import sys
 import threading
 
+import argcomplete
+from argcomplete.completers import FilesCompleter
+
 import block as block_mod
 import crypto
 import params
@@ -82,8 +85,10 @@ def main():
     parser = argparse.ArgumentParser(description="Scorchcoin node")
     parser.add_argument("--host",    default="0.0.0.0")
     parser.add_argument("--port",    type=int, default=8333)
-    parser.add_argument("--keyfile", default="scorchcoin_key.json")
-    parser.add_argument("--db",      default=DB_PATH)
+    parser.add_argument("--keyfile", default="scorchcoin_key.json"
+                        ).completer = FilesCompleter()
+    parser.add_argument("--db",      default=DB_PATH
+                        ).completer = FilesCompleter()
     parser.add_argument("--peer",       action="append", default=[])
     parser.add_argument(
         "--private-port", type=int, default=None,
@@ -96,6 +101,7 @@ def main():
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
+    argcomplete.autocomplete(parser)
     args = parser.parse_args()
     logging.getLogger("ec").setLevel(getattr(logging, args.log_level))
 
