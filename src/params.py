@@ -44,10 +44,12 @@ POB_WINDOW = 500
 BUILDER_REWARD_SHARE = 0.02
 
 # VDF iteration count targeting ~120 seconds of sequential computation on
-# commodity hardware. NOT YET CALIBRATED: this is a placeholder value, not
-# a measured one -- no benchmark has been run against real target hardware.
-# Must be replaced with an empirically measured value before genesis.
-VDF_ITERATIONS = 12_200_000  # placeholder -- unmeasured
+# target testnet hardware. Calibrated from real benchmark runs: median of
+# three 500k-iteration timed runs measured ~6,100,000 iterations/61s, then
+# doubled to reach the full ~120s target (see commits 34c65ab, d8616f3,
+# a62e4bb). Re-measure if target/mainnet hardware differs from what was
+# benchmarked for the testnet.
+VDF_ITERATIONS = 12_200_000  # calibrated: ~120s on target hardware
 
 # VDF difficulty adjustment. The iteration count can only increase over time
 # as hardware gets faster. Adjustment happens every VDF_ADJUST_INTERVAL blocks
