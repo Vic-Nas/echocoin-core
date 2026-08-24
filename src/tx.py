@@ -173,9 +173,17 @@ def validate(tx_dict, state, chain_tip_height, get_fee_rate_at_height):
     return True, None
 
 
+def sort_key(t):
+    """Canonical tx ordering key: (fee_height, nonce, tx_hash).
+    Shared by sort_txs() and block._check_tx_ordering() so the two can
+    never independently drift out of agreement on what "canonical" means.
+    """
+    return (t["fee_height"], t["nonce"], tx_hash(t))
+
+
 def sort_txs(tx_list):
     """Sort transactions by the deterministic ordering rule.
     Pre-computes tx_hash for each tx once to avoid O(n log n) rehashing.
     """
-    keyed = [(t["fee_height"], t["nonce"], tx_hash(t), t) for t in tx_list]
-    return [t for _, _, _, t in sorted(keyed)]
+    keyed = [(sort_key(t), t) for t in tx_list]
+    return [t for _, t in sorted(keyed)]

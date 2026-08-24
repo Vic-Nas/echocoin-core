@@ -326,7 +326,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/api/tx/send", methods=["POST"], endpoint=pfx+"api_send_tx")
     @limiter.limit("20 per second")
     def api_send_tx():
-        data = request.get_json()
+        data = request.get_json(silent=True)
         if not data:
             return jsonify({"ok": False, "error": "no JSON body"}), 400
         ok, result = node.submit_tx_from_api(data)
@@ -456,10 +456,13 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
 
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():
-        data = request.get_json()
-        if data and "host" in data and "port" in data:
-            pool.add(f"{data['host']}:{data['port']}")
+        data = request.get_json(silent=True)
+        host = data.get("host") if data else None
+        port = data.get("port") if data else None
+        if (isinstance(host, str) and host
+                and isinstance(port, int) and 0 < port <= 65535):
+            pool.add(f"{host}:{port}")
             return jsonify({"ok": True})
-        return jsonify({"ok": False, "error": "need host and port"}), 400
+        return jsonify({"ok": False, "error": "need valid host and port"}), 400
 
     return app

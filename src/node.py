@@ -347,8 +347,7 @@ class Node:
         cs: the ChainState candidate was built against; passed explicitly so
         this method is immune to self.cs advancing during the drain window.
         """
-        tip     = cs.tip
-        pending = self.mempool.pending_hashes()
+        tip = cs.tip
 
         valid_peers = []
         for blk in peer_blocks:
@@ -504,13 +503,21 @@ class Node:
         return True, None, fork_point, tail, remote_cs
 
     def _salvage_fork_txs(self, fork_point, tail):
-        """Add unconfirmed txs from a rejected fork into the local mempool."""
+        """Add unconfirmed, still-valid txs from a rejected fork into the
+        local mempool. self.cs is unchanged here (the remote chain lost),
+        so txs are checked against the current local state before being
+        re-added -- a stale-nonce or otherwise invalid tx from the losing
+        fork must not silently sit in the mempool."""
         confirmed = {tx_mod.tx_hash(t)
                      for blk in self.cs.chain[fork_point:]
                      for t in blk.get("transactions", [])}
         for blk in tail:
             for t in blk.get("transactions", []):
-                if tx_mod.tx_hash(t) not in confirmed:
+                if tx_mod.tx_hash(t) in confirmed:
+                    continue
+                ok, _ = tx_mod.validate(t, self.cs.state,
+                                         self.cs.height, self.cs.fee_rate_at)
+                if ok:
                     self.mempool.add(t)
 
     def apply_better_chain(self, remote_chain):

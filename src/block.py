@@ -187,8 +187,8 @@ def _check_tx_ordering(blk):
         if missing:
             return False, f"transaction at position {i} missing fields for ordering: {missing}"
     # Verify canonical order in O(n) by checking each adjacent pair.
-    # Order key: (fee_height asc, nonce asc, tx_hash lex). Pre-compute hashes once.
-    keys = [(t["fee_height"], t["nonce"], tx_mod.tx_hash(t)) for t in txs]
+    # Uses tx_mod.sort_key so this can never drift from tx.sort_txs().
+    keys = [tx_mod.sort_key(t) for t in txs]
     for i in range(len(keys) - 1):
         if keys[i] > keys[i + 1]:
             return False, f"transaction ordering violation at position {i + 1}"
