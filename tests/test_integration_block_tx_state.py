@@ -7,8 +7,8 @@ the edge cases documented in the whitepaper.
 
 Flows covered:
   1. Full block with multiple txs validated and applied via chainstate
-  2. Fee burns accumulate in total_burnt and restore emission pool
-  3. Intentional PoB burns accumulate in BurnWindow and affect block scores
+  2. Fees are credited to the block builder, not burned
+  3. Intentional PoB burns accumulate in BurnWindow and affect reward share
   4. Mempool pruning after a block is committed
   5. Multi-block chain replay via ChainState.from_chain
   6. Mixed normal + burn outputs in one block
@@ -97,10 +97,10 @@ class TestBlockCommitFlow:
 
 
 # ---------------------------------------------------------------------------
-# 2. Fee burn accounting (whitepaper Section 2)
+# 2. Fee accounting (whitepaper Section 2)
 # ---------------------------------------------------------------------------
 
-class TestFeeBurnAccounting:
+class TestFeeAccounting:
     def test_fees_go_to_builder_not_total_burnt(self):
         """Fees credit the block builder; they do not accumulate in total_burnt."""
         cs = ChainState.from_genesis()
@@ -136,7 +136,7 @@ class TestFeeBurnAccounting:
 
 
 # ---------------------------------------------------------------------------
-# 3. PoB burns affect block score (whitepaper Section 3)
+# 3. PoB burns tracked in the reward window (whitepaper Section 3)
 # ---------------------------------------------------------------------------
 
 class TestPoBBurnEffect:

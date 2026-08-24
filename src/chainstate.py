@@ -150,7 +150,7 @@ class ChainState:
     # Fork choice: longest chain wins, tip hash breaks ties
     # ------------------------------------------------------------------
 
-    def is_better_than(self, other, fork_point=None):
+    def is_better_than(self, other):
         """Return True if self should replace other.
 
         Fork choice: the longer chain wins. Tip hash breaks any remaining
