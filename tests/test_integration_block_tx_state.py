@@ -101,18 +101,20 @@ class TestBlockCommitFlow:
 # ---------------------------------------------------------------------------
 
 class TestFeeBurnAccounting:
-    def test_fees_accumulate_in_total_burnt(self):
+    def test_fees_go_to_builder_not_total_burnt(self):
+        """Fees credit the block builder; they do not accumulate in total_burnt."""
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
         cs.state.total_minted += 1000 * RINGS_PER_ECH
 
         t = make_tx(0, 1, RINGS_PER_ECH, cs.state, 0)
         fee = t["fee"]
-        b = make_block(1, cs.tip["hash"], [t])
+        b = make_block(1, cs.tip["hash"], [t], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
 
         assert ok is True, err
-        assert cs2.state.total_burnt >= fee
+        assert cs2.state.total_burnt == 0
+        assert cs2.state.get_balance(address(2)) >= fee
 
     def test_burns_replenish_mintable_pool(self):
         """Whitepaper Section 5: burns add back to can_mint."""
@@ -138,30 +140,20 @@ class TestFeeBurnAccounting:
 # ---------------------------------------------------------------------------
 
 class TestPoBBurnEffect:
-    def test_burn_in_block_lowers_builder_score(self):
+    def test_burn_in_block_tracked_in_window(self):
+        """A burn tx in a block is recorded in the BurnWindow under the sender."""
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
         cs.state.total_minted += 1000 * RINGS_PER_ECH
 
-        from pob import _tip_hash_int
-        tip_hash = _tip_hash_int(cs.chain)
-
-        # Score before any burns
-        score_before = cs.burn_window.score(tip_hash, address(0))
-
-        # Add a block with a burn tx
         t = make_burn_tx(0, 50 * RINGS_PER_ECH, cs.state, 0)
         b = make_block(1, cs.tip["hash"], [t])
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
 
-        tip_hash2 = _tip_hash_int(cs2.chain)
-        score_after = cs2.burn_window.score(tip_hash2, address(0))
-        # Score is relative to tip so direct comparison doesn't work;
-        # but builder_burn should be positive
-        assert cs2.burn_window.builder_burn(address(0)) > 0
+        assert cs2.burn_window.sender_totals().get(address(0), 0) > 0
 
-    def test_builder_burn_tracked_in_window(self):
+    def test_sender_burn_tracked_in_window(self):
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
         cs.state.total_minted += 1000 * RINGS_PER_ECH
@@ -170,7 +162,7 @@ class TestPoBBurnEffect:
         b = make_block(1, cs.tip["hash"], [t])
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
-        assert cs2.burn_window.builder_burn(address(0)) == 10 * RINGS_PER_ECH
+        assert cs2.burn_window.sender_totals().get(address(0), 0) == 10 * RINGS_PER_ECH
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +273,7 @@ class TestMixedOutputs:
 
         assert ok is True, err
         assert cs2.state.get_balance(address(1)) == RINGS_PER_ECH
-        # Burn + fee both hit total_burnt
-        assert cs2.state.total_burnt >= RINGS_PER_ECH + fee
+        # Only intentional burns hit total_burnt (not fees)
+        assert cs2.state.total_burnt >= RINGS_PER_ECH
 
 

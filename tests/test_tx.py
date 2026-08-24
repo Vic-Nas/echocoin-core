@@ -277,21 +277,12 @@ class TestValidateFields:
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is True, err
 
-    def test_burn_output_with_valid_beneficiary_passes(self):
-        s = fresh_state()
-        seed_balance(s, 0, 10.0)
-        t = make_burn_tx(0, RINGS_PER_ECH, s, 10, beneficiary_index=1)
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is True, err
-
-    def test_burn_output_with_invalid_beneficiary_fails(self):
+    def test_burn_output_passes(self):
         s = fresh_state()
         seed_balance(s, 0, 10.0)
         t = make_burn_tx(0, RINGS_PER_ECH, s, 10)
-        t["outputs"][0]["beneficiary"] = "not.valid"
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-        assert "beneficiary" in err
+        assert ok is True, err
 
 
 # ---------------------------------------------------------------------------

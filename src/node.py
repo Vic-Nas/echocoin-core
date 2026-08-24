@@ -6,7 +6,7 @@ One cycle:
   3. vdf.evaluate()      blocks ~120s
   4. assemble + broadcast
   5. drain queue (5s)    collect peer blocks
-  6. pick winner         lowest PoB score among valid blocks
+  6. pick winner         first valid peer block received, else own candidate
   7. commit              swap ChainState, persist, publish view
 
 Flask threads read node.view (a NodeView snapshot). The node loop is the
@@ -23,7 +23,6 @@ import time
 import block as block_mod
 import crypto
 import mempool as mempool_mod
-import pob as pob_mod
 import tx as tx_mod
 import vdf as vdf_mod
 from chainstate import ChainState
@@ -67,8 +66,8 @@ class StatsAccumulator:
     from state import compute_reward as _compute_reward
 
     def __init__(self):
-        self.points:    list  = []   # [{height, minted, burned_fees, circulating, net_emission}]
-        self._cum:      int   = 0    # cumulative fee burns for incremental update
+        self.points:    list  = []   # [{height, minted, total_burnt, circulating, net_emission}]
+        self._cum:      int   = 0    # cumulative burns for incremental update
         self._chain_len: int  = 0    # chain length at last update
 
     def update(self, chain, state):
@@ -79,40 +78,41 @@ class StatsAccumulator:
 
         if len(chain) == self._chain_len + 1:
             # Incremental: one new block appended.
-            blk    = chain[-1]
-            fee    = sum(t["fee"] for t in blk.get("transactions", []))
+            blk         = chain[-1]
             prev_minted = self.points[-1]["minted"] if self.points else 0
-            reward = state.total_minted - prev_minted
-            self._cum += fee
+            reward      = state.total_minted - prev_minted
             self.points = self.points + [{
-                "height":      blk["height"],
-                "minted":      state.total_minted,
-                "burned_fees": self._cum,
-                "circulating": state.total_minted - self._cum,
-                "net_emission": reward - fee,
+                "height":       blk["height"],
+                "minted":       state.total_minted,
+                "total_burnt":  state.total_burnt,
+                "circulating":  state.total_minted - state.total_burnt,
+                "net_emission": reward,
             }]
         else:
             # Full rebuild (startup, reorg, or first call).
             from state import compute_reward
-            points, cum = [], 0
+            points = []
             running_minted = running_burnt = 0
             for blk in chain[1:]:
-                fee     = sum(t["fee"] for t in blk.get("transactions", []))
-                cum    += fee
-                reward  = compute_reward(running_minted, running_burnt)
+                reward          = compute_reward(running_minted, running_burnt)
                 running_minted += reward
-                running_burnt  += fee
+                running_burnt  += sum(
+                    out["amount"]
+                    for t in blk.get("transactions", [])
+                    for out in t.get("outputs", [])
+                    if out.get("to") == "burn"
+                )
                 points.append({
-                    "height":      blk["height"],
-                    "minted":      running_minted,
-                    "burned_fees": cum,
-                    "circulating": running_minted - cum,
-                    "net_emission": reward - fee,
+                    "height":       blk["height"],
+                    "minted":       running_minted,
+                    "total_burnt":  running_burnt,
+                    "circulating":  running_minted - running_burnt,
+                    "net_emission": reward,
                 })
             if len(points) > 500:
                 step   = len(points) / 500
                 points = [points[int(i * step)] for i in range(500)]
-            self.points, self._cum = points, cum
+            self.points = points
 
         self._chain_len = len(chain)
 
@@ -374,14 +374,11 @@ class Node:
             log.warning("[vdf] candidate stale (tip advanced during drain), skipping cycle")
             return None, False
 
-        all_valid = valid_peers + [candidate]
-        tip_hash_int = pob_mod._tip_hash_int(cs.chain)
-        winner = min(all_valid, key=lambda b: (
-            cs.burn_window.score(tip_hash_int, b["builder"]), b["hash"]
-        ))
-        is_peer = winner is not candidate
+        # First valid peer block received wins; fall back to own candidate.
+        winner   = valid_peers[0] if valid_peers else candidate
+        is_peer  = winner is not candidate
         log.info("[vdf] winner  hash=%s  peer=%s  candidates=%d  peer_candidates=%d",
-                 winner["hash"][:12], is_peer, len(all_valid), len(valid_peers))
+                 winner["hash"][:12], is_peer, len(valid_peers) + 1, len(valid_peers))
         return winner, is_peer
 
     def _commit(self, blk, relay=False):
@@ -503,9 +500,8 @@ class Node:
             return False, f"chain replay error: {e}", None, None, None
 
         if not remote_cs.is_better_than(self.cs, fork_point=fork_point):
-            log.debug("[sync] remote chain not better  remote_h=%d  local_h=%d  remote_score=%d  local_score=%d",
-                      remote_cs.height, self.cs.height,
-                      remote_cs.cumulative_score, self.cs.cumulative_score)
+            log.debug("[sync] remote chain not better  remote_h=%d  local_h=%d",
+                      remote_cs.height, self.cs.height)
             return False, "remote chain not better", fork_point, tail, None
 
         return True, None, fork_point, tail, remote_cs

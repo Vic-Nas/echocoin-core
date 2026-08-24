@@ -5,10 +5,12 @@ Covers: credit, debit, set_nonce, apply_tx, compute_block_reward,
 apply_reward_distribution, snapshot, from_snapshot, and the whitepaper
 emission formula.
 
-Whitepaper constraints enforced:
-  - can_mint = SUPPLY_CAP - total_minted + total_burnt  (Section 5)
+Covers: credit, debit, set_nonce, apply_tx, compute_block_reward,
+apply_reward_distribution, snapshot, from_snapshot, and the emission formula.
+
+  - can_mint = SUPPLY_CAP - total_minted + total_burnt
   - reward = int(can_mint * (1 - EMISSION_RATE))
-  - fee burns AND intentional PoB burns both increase total_burnt
+  - only intentional PoB burns increase total_burnt (fees go to builder)
   - reward recipients via pob.reward_distribution
 """
 
@@ -132,25 +134,23 @@ class TestApplyTx:
         s.apply_tx(t)
         assert s.get_nonce(address(0)) == t["nonce"]
 
-    def test_fee_burn_increases_total_burnt(self):
-        """Whitepaper Section 2: all fees are burned."""
+    def test_fee_does_not_increase_total_burnt(self):
+        """Fees go to the block builder, not burned."""
         s = fresh_state()
         seed_balance(s, 0, 100.0)
         t = make_tx(0, 1, RINGS_PER_ECH, s, 10)
-        fee = t["fee"]
         s.apply_tx(t)
-        assert s.total_burnt == fee
+        assert s.total_burnt == 0
 
     def test_burn_output_increases_total_burnt(self):
-        """Whitepaper Section 2: intentional PoB burns credited to burn pool."""
+        """Intentional PoB burns increase total_burnt (replenish can_mint)."""
         s = fresh_state()
         seed_balance(s, 0, 100.0)
         from tests.fixtures import make_burn_tx
         t = make_burn_tx(0, RINGS_PER_ECH, s, 10)
         burn_amount = t["outputs"][0]["amount"]
-        fee = t["fee"]
         s.apply_tx(t)
-        assert s.total_burnt == burn_amount + fee
+        assert s.total_burnt == burn_amount
 
     def test_burn_output_does_not_credit_anyone(self):
         """Burn address is a sink: no balance increase for any address."""

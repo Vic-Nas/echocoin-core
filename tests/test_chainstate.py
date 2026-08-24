@@ -5,11 +5,7 @@ Covers: from_genesis, from_chain, from_storage, validate_and_apply,
 apply_block, _apply_block_with_state, is_better_than (fork choice),
 accessors (tip, height, genesis_hash, fee_rate_at).
 
-Whitepaper constraints enforced:
-  - Fork choice: lower cumulative suffix score wins (Section 3 fork resolution)
-  - Burns in the suffix are capped to each contributor's fork-point balance
-  - cumulative_score = sum of all block scores (lower = better burn history)
-  - Burn window and state stay consistent when blocks are appended
+Fork choice: longest chain wins; tip hash breaks ties.
 """
 
 import os
@@ -22,7 +18,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import block as block_mod
 import state as state_mod
-from chainstate import ChainState, _balances_at, _capped_suffix_score
+from chainstate import ChainState
 import pob as pob_mod
 from params import INITIAL_FEE_RATE, RINGS_PER_ECH
 from tests.fixtures import (
@@ -132,14 +128,17 @@ class TestValidateAndApply:
         assert ok is True, err
         assert cs2.state.get_balance(address(1)) == RINGS_PER_ECH
 
-    def test_reward_credited_after_valid_block(self):
+    def test_fees_credited_to_builder_after_valid_block(self):
         cs = ChainState.from_genesis()
+        cs.state.credit(address(0), 100 * RINGS_PER_ECH)
+        cs.state.total_minted += 100 * RINGS_PER_ECH
         g = cs.tip
-        b = make_block(1, g["hash"], [], builder_index=0)
+        t = make_tx(0, 1, RINGS_PER_ECH, cs.state, 0)
+        b = make_block(1, g["hash"], [t], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
-        # Builder should have received block reward
-        assert cs2.state.total_minted > 0
+        # Builder should have received the transaction fee
+        assert cs2.state.get_balance(address(2)) >= t["fee"]
 
 
 # ---------------------------------------------------------------------------
@@ -171,7 +170,6 @@ class TestFromChain:
         assert ok
 
         # Build from_chain replay separately
-        # We can only validate this path by checking heights match
         assert cs1.height == 1
 
     def test_genesis_hash_preserved_in_chain(self):
@@ -202,7 +200,7 @@ class TestFromStorage:
 
 
 # ---------------------------------------------------------------------------
-# 6. is_better_than (fork choice -- whitepaper Section 3)
+# 6. is_better_than (fork choice: longest chain)
 # ---------------------------------------------------------------------------
 
 class TestIsBetterThan:
@@ -214,16 +212,7 @@ class TestIsBetterThan:
         assert cs1.is_better_than(cs0)
         assert not cs0.is_better_than(cs1)
 
-    def test_equal_height_higher_burn_sum_is_better(self):
-        """Whitepaper: higher cumulative burn-sum wins at equal height."""
-        cs = ChainState.from_genesis()
-        # Manually craft two states with same height but different burn totals
-        cs_good = ChainState(cs.chain[:], cs.state.snapshot(), cs.burn_window.copy(), 200)
-        cs_bad  = ChainState(cs.chain[:], cs.state.snapshot(), cs.burn_window.copy(), 100)
-        assert cs_good.is_better_than(cs_bad)
-        assert not cs_bad.is_better_than(cs_good)
-
-    def test_equal_height_equal_score_lower_hash_wins(self):
+    def test_equal_height_lower_hash_wins(self):
         """Tie broken by block hash (deterministic)."""
         cs = ChainState.from_genesis()
         g = cs.tip
@@ -240,31 +229,19 @@ class TestIsBetterThan:
         cs = ChainState.from_genesis()
         assert not cs.is_better_than(cs)
 
-    def test_capped_suffix_score_limits_post_fork_burns(self):
-        """Burns in the suffix beyond the fork-point balance do not count."""
-        g = genesis()
-        builder_addr = address(0)
-
-        # Fork point is after genesis only (fork_point=1, no prefix balance)
-        # Build a chain with one block. The builder has zero pre-fork balance.
-        b1 = make_block(1, g["hash"], [], builder_index=0)
-        chain = [g, b1]
-
-        fork_balances = _balances_at(chain, 1)  # balances at height 1 (after genesis, before b1)
-        # builder had zero balance at fork_point=1 (no rewards yet, no txs)
-        assert fork_balances.get(builder_addr, 0) == 0
-
-        score_with_cap = _capped_suffix_score(chain, 1, fork_balances)
-        score_no_cap   = _capped_suffix_score(chain, 1, {builder_addr: 10**18})
-
-        # With zero fork-point balance, all suffix burns are capped to 0.
-        assert score_with_cap == 0
-        # With a huge cap, eligible burns reflect actual suffix burns (>= 0).
-        assert score_no_cap   >= 0
+    def test_two_block_chain_beats_one_block_chain(self):
+        cs0 = ChainState.from_genesis()
+        g = cs0.tip
+        b1 = make_block(1, g["hash"], [])
+        b2 = make_block(2, b1["hash"], [])
+        _, _, cs1 = cs0.validate_and_apply(b1)
+        _, _, cs2 = cs1.validate_and_apply(b2)
+        assert cs2.is_better_than(cs1)
+        assert not cs1.is_better_than(cs2)
 
 
 # ---------------------------------------------------------------------------
-# 7. cumulative_score tracks burn commitment
+# 7. cumulative_score tracks total intentional burns
 # ---------------------------------------------------------------------------
 
 class TestCumulativeScore:
@@ -272,12 +249,11 @@ class TestCumulativeScore:
         cs = ChainState.from_genesis()
         assert cs.cumulative_score == 0
 
-    def test_score_increases_with_each_block(self):
+    def test_score_non_decreasing_with_blocks(self):
         cs0 = ChainState.from_genesis()
         g = cs0.tip
         b1 = make_block(1, g["hash"], [])
         _, _, cs1 = cs0.validate_and_apply(b1)
-        # cumulative_score is non-decreasing (scores are >= 0)
         assert cs1.cumulative_score >= cs0.cumulative_score
 
 
@@ -300,13 +276,6 @@ class TestApplyBlock:
         cs.apply_block(b1)
         assert cs.height == 0
 
-    def test_apply_block_credits_builder_reward(self):
-        cs = ChainState.from_genesis()
-        g = cs.tip
-        b1 = make_block(1, g["hash"], [], builder_index=0)
-        cs2 = cs.apply_block(b1)
-        assert cs2.state.total_minted > 0
-
     def test_apply_block_applies_transactions(self):
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 100 * RINGS_PER_ECH)
@@ -324,11 +293,8 @@ class TestApplyBlock:
 
 class TestFromChainWithTxs:
     def test_from_chain_applies_txs_and_rewards(self):
-        """Building from_chain with a block that has transactions must produce
-        the same net state as incremental validate_and_apply."""
         cs0 = ChainState.from_genesis()
         g = cs0.tip
-        # Block with no txs -- just reward
         b1 = make_block(1, g["hash"], [])
         _, _, cs1 = cs0.validate_and_apply(b1)
 
@@ -351,5 +317,4 @@ class TestBuildWindowAndScore:
         g = genesis()
         b1 = make_block(1, g["hash"], [])
         window, score = ChainState._build_window_and_score([g, b1])
-        # Builder (address(0)) got one block's score
         assert score >= 0

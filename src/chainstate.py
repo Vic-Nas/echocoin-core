@@ -15,7 +15,7 @@ import tx as tx_mod
 
 
 def _block_burns(blk):
-    """Sum of all burn outputs in a block's transactions."""
+    """Sum of all intentional burn outputs in a block's transactions."""
     total = 0
     for t in blk.get("transactions", []):
         for out in t.get("outputs", []):
@@ -25,7 +25,7 @@ def _block_burns(blk):
 
 
 class ChainState:
-    """Consistent snapshot of chain + ledger state + burn window + PoB score."""
+    """Consistent snapshot of chain + ledger state + burn window + total burns."""
 
     __slots__ = ("chain", "state", "burn_window", "cumulative_score")
 
@@ -33,7 +33,7 @@ class ChainState:
         self.chain            = chain           # list of block dicts
         self.state            = state           # State (balance ledger)
         self.burn_window      = burn_window     # BurnWindow (rolling burns)
-        self.cumulative_score = cumulative_score  # total burns in chain (rings)
+        self.cumulative_score = cumulative_score  # total intentional burns in chain (rings)
 
     # ------------------------------------------------------------------
     # Convenient accessors
@@ -99,8 +99,11 @@ class ChainState:
             score += _block_burns(blk)
             builder = blk.get("builder")
             if builder:
+                total_fees = sum(t.get("fee", 0) for t in blk.get("transactions", []))
+                if total_fees > 0:
+                    state.credit(builder, total_fees)
                 state.apply_reward_distribution(
-                    window.reward_distribution(builder, state.compute_block_reward())
+                    window.reward_distribution(state.compute_block_reward())
                 )
         return cls(list(chain), state, window, score)
 
@@ -153,107 +156,24 @@ class ChainState:
         new_score  = self.cumulative_score + _block_burns(blk)
         builder    = blk.get("builder")
         if builder:
+            total_fees = sum(t.get("fee", 0) for t in blk.get("transactions", []))
+            if total_fees > 0:
+                post_tx_state.credit(builder, total_fees)
             post_tx_state.apply_reward_distribution(
-                new_window.reward_distribution(builder, post_tx_state.compute_block_reward())
+                new_window.reward_distribution(post_tx_state.compute_block_reward())
             )
         return ChainState(self.chain + [blk], post_tx_state, new_window, new_score)
 
     # ------------------------------------------------------------------
-    # Fork choice
+    # Fork choice: longest chain wins, tip hash breaks ties
     # ------------------------------------------------------------------
 
     def is_better_than(self, other, fork_point=None):
         """Return True if self should replace other.
 
-        Fork choice: the chain with the higher total eligible burns in its
-        suffix wins (burn-sum). Burns are capped to each contributor's
-        pre-fork balance, so privately minted rewards on a divergent chain
-        cannot inflate the denominator.
-
-        Tiebreaks in order:
-          1. Longer chain (more blocks = more opportunity to burn)
-          2. Lower tip hash (deterministic)
-
-        fork_point: index of first differing block. If None, defaults to
-        min(self.height+1, other.height+1), which is correct when one chain
-        simply extends the other.
+        Fork choice: the longer chain wins. Tip hash breaks any remaining
+        tie deterministically.
         """
-        if fork_point is None:
-            fork_point = min(self.height + 1, other.height + 1)
-
-        self_suffix_len  = max((self.height  + 1) - fork_point, 0)
-        other_suffix_len = max((other.height + 1) - fork_point, 0)
-
-        if self_suffix_len <= 0 and other_suffix_len <= 0:
-            if self.cumulative_score != other.cumulative_score:
-                return self.cumulative_score > other.cumulative_score
-            if self.height != other.height:
-                return self.height > other.height
-            return self.tip["hash"] < other.tip["hash"]
-        if self_suffix_len <= 0:
-            return False
-        if other_suffix_len <= 0:
-            return True
-
-        fork_balances = _balances_at(self.chain, fork_point)
-        self_burn     = _capped_suffix_score(self.chain,  fork_point, fork_balances)
-        other_burn    = _capped_suffix_score(other.chain, fork_point, fork_balances)
-
-        if self_burn != other_burn:
-            return self_burn > other_burn          # higher burn-sum wins
-        if self_suffix_len != other_suffix_len:
-            return self_suffix_len > other_suffix_len  # longer chain tiebreak
+        if self.height != other.height:
+            return self.height > other.height
         return self.tip["hash"] < other.tip["hash"]
-
-
-# ---------------------------------------------------------------------------
-# Module-level helpers for fork evaluation
-# ---------------------------------------------------------------------------
-
-def _balances_at(chain, fork_point):
-    """Replay chain[:fork_point] and return per-address balance snapshot."""
-    s  = state_mod.State()
-    bw = pob_mod.BurnWindow()
-    for i in range(min(fork_point, len(chain))):
-        blk = chain[i]
-        bw.add_block(blk)
-        if i == 0:
-            continue
-        for t in blk.get("transactions", []):
-            s.apply_tx(t)
-        builder = blk.get("builder")
-        if builder:
-            s.apply_reward_distribution(
-                bw.reward_distribution(builder, s.compute_block_reward())
-            )
-    return s.all_balances()
-
-
-def _capped_suffix_score(chain, fork_point, fork_balances):
-    """Total eligible burns in chain[fork_point:] with pre-fork balance cap.
-
-    Each contributor's suffix burns are capped to their balance at fork_point.
-    Burns beyond the cap came from privately minted rewards and do not count.
-
-    Returns total eligible burn rings (higher = better chain).
-    A chain with no suffix blocks returns 0.
-    """
-    # Accumulate suffix burns per (beneficiary, contributor)
-    suffix_contrib: "dict[tuple, int]" = {}
-
-    for i in range(fork_point, len(chain)):
-        blk = chain[i]
-        for tx in blk.get("transactions", []):
-            sender = tx.get("from", "")
-            for out in tx.get("outputs", []):
-                if out.get("to") != pob_mod.BURN_ADDRESS:
-                    continue
-                beneficiary = out.get("beneficiary") or sender
-                key = (beneficiary, sender)
-                suffix_contrib[key] = suffix_contrib.get(key, 0) + out["amount"]
-
-    total = 0
-    for (_, contributor), suffix_amt in suffix_contrib.items():
-        cap = fork_balances.get(contributor, 0)
-        total += min(suffix_amt, cap)
-    return total

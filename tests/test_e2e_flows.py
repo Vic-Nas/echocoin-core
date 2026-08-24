@@ -53,14 +53,28 @@ def mock_vdf(monkeypatch):
 # ---------------------------------------------------------------------------
 
 class TestE2E_EmissionSchedule:
-    def test_rewards_minted_each_block(self):
+    def test_rewards_minted_when_burns_present(self):
+        """Rewards are only distributed when there are burns in the window."""
+        cs = ChainState.from_genesis()
+        cs.state.credit(address(0), 100 * RINGS_PER_ECH)
+        cs.state.total_minted += 100 * RINGS_PER_ECH
+
+        t = make_burn_tx(0, RINGS_PER_ECH, cs.state, 0)
+        b1 = make_block(1, cs.tip["hash"], [t])
+        ok, err, cs = cs.validate_and_apply(b1)
+        assert ok is True, err
+
+        # Burn in window means reward is distributed
+        assert cs.state.total_minted > 100 * RINGS_PER_ECH
+
+    def test_no_rewards_without_burns(self):
+        """Without any burns, reward stays in can_mint (total_minted stays at pre-seeded value)."""
         cs = ChainState.from_genesis()
         for h in range(1, 6):
             b = make_block(h, cs.tip["hash"], [])
             ok, err, cs = cs.validate_and_apply(b)
             assert ok is True, f"h={h}: {err}"
-        # Some coins should have been minted
-        assert cs.state.total_minted > 0
+        assert cs.state.total_minted == 0
 
     def test_minted_does_not_exceed_supply_cap(self):
         cs = ChainState.from_genesis()
@@ -91,18 +105,15 @@ class TestE2E_EmissionSchedule:
 
 class TestE2E_PoBPoolSplit:
     def test_two_contributors_proportional_split(self):
-        """Whitepaper Section 3: contributor_share = reward * burns / total_burns."""
+        """Reward splits proportional to burns: addr(0) burns 3x more than addr(1)."""
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 1000 * RINGS_PER_ECH)
         cs.state.credit(address(1), 1000 * RINGS_PER_ECH)
         cs.state.total_minted += 2000 * RINGS_PER_ECH
 
-        # addr(0) burns 3 ECH to beneficiary addr(2)
-        t0 = make_burn_tx(0, 3 * RINGS_PER_ECH, cs.state, 0, beneficiary_index=2)
+        t0 = make_burn_tx(0, 3 * RINGS_PER_ECH, cs.state, 0)
         cs.state.apply_tx(t0)
-
-        # addr(1) burns 1 ECH to beneficiary addr(2)
-        t1 = make_burn_tx(1, RINGS_PER_ECH, cs.state, 0, beneficiary_index=2)
+        t1 = make_burn_tx(1, RINGS_PER_ECH, cs.state, 0)
         cs.state.apply_tx(t1)
 
         # Reset state (chainstate will re-apply)
@@ -117,31 +128,23 @@ class TestE2E_PoBPoolSplit:
         ok, err, cs2 = cs.validate_and_apply(b1)
         assert ok is True, err
 
-        # addr(2) is the beneficiary builder -- they won the block
-        dist = cs2.burn_window.reward_distribution(address(2), 4000)
-        dist_map = dict(dist)
-        # 2% builder cut=80 to address(2); remainder 3920 splits 3:1
-        assert dist_map.get(address(2), 0) == 80
-        assert abs(dist_map.get(address(0), 0) - 2940) <= 1
-        assert abs(dist_map.get(address(1), 0) - 980) <= 1
+        dist = dict(cs2.burn_window.reward_distribution(4000))
+        # 3:1 burn ratio → 3000:1000 split
+        assert dist.get(address(0), 0) == 3000
+        assert dist.get(address(1), 0) == 1000
 
-    def test_pool_weight_non_transferable(self):
-        """Whitepaper Section 3: burn weight is address-specific."""
-        w = pob_mod.BurnWindow()
-        w.add_block(genesis())
-        # addr(0) burns to addr(1); addr(0)'s score should NOT improve
+    def test_burn_weight_is_sender_specific(self):
+        """Burn weight accrues to the sender, not any third party."""
         g = genesis()
-        from tests.fixtures import make_block
-        burn_out = {"to": pob_mod.BURN_ADDRESS, "amount": RINGS_PER_ECH,
-                    "beneficiary": address(1)}
+        burn_out = {"to": pob_mod.BURN_ADDRESS, "amount": RINGS_PER_ECH}
         tx = {"from": address(0), "outputs": [burn_out], "nonce": 1, "fee": 0, "fee_height": 1}
         b = make_block(1, g["hash"], [tx])
         w = pob_mod.BurnWindow()
         w.add_block(g)
         w.add_block(b)
-        # addr(0) has zero builder_burn (their burn went to addr(1))
-        assert w.builder_burn(address(0)) == 0
-        assert w.builder_burn(address(1)) == RINGS_PER_ECH
+        totals = w.sender_totals()
+        assert totals.get(address(0), 0) == RINGS_PER_ECH
+        assert totals.get(address(1), 0) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -274,7 +277,7 @@ class TestE2E_BurnExpiry:
         ok, err, cs = cs.validate_and_apply(b1)
         assert ok is True, err
 
-        assert cs.burn_window.builder_burn(address(0)) == 10 * RINGS_PER_ECH
+        assert cs.burn_window.sender_totals().get(address(0), 0) == 10 * RINGS_PER_ECH
 
         # Advance POB_WINDOW blocks
         for h in range(2, POB_WINDOW + 2):
@@ -283,7 +286,7 @@ class TestE2E_BurnExpiry:
             assert ok is True
 
         # Burn should have expired
-        assert cs.burn_window.builder_burn(address(0)) == 0
+        assert cs.burn_window.sender_totals().get(address(0), 0) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -425,4 +428,4 @@ class TestE2E_StatsAccumulator:
         acc = StatsAccumulator()
         acc.update(cs1.chain, cs1.state)
         pt = acc.points[0]
-        assert pt["circulating"] == pt["minted"] - pt["burned_fees"]
+        assert pt["circulating"] == pt["minted"] - pt["total_burnt"]

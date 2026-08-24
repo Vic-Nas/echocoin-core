@@ -67,7 +67,7 @@ class State:
             else:
                 self.credit(out["to"], out["amount"])
         self.set_nonce(sender, tx_dict["nonce"])
-        self.total_burnt += fee                     # fee burn
+        # fee is collected by the block builder, not burned
 
     # ------------------------------------------------------------------
     # Emission

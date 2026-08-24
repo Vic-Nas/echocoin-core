@@ -321,16 +321,15 @@ class TestPickWinner:
         winner, relay = node._pick_winner(node.cs, candidate, [bad_peer])
         assert winner is candidate
 
-    def test_peer_block_accepted_when_lower_score(self, node_env):
+    def test_first_valid_peer_block_wins(self, node_env):
         node, *_ = node_env
-        # Build a valid peer block for the same slot
         g = node.cs.tip
-        peer_blk = make_block(1, g["hash"], [], builder_index=1)
+        peer_blk  = make_block(1, g["hash"], [], builder_index=1)
         candidate = make_block(1, g["hash"], [], builder_index=0)
         winner, relay = node._pick_winner(node.cs, candidate, [peer_blk])
-        # Winner is whichever has lower PoB score; relay should match
-        assert winner in (candidate, peer_blk)
-        assert relay == (winner is peer_blk)
+        # First valid peer block takes priority over own candidate
+        assert winner is peer_blk
+        assert relay is True
 
 
 # ---------------------------------------------------------------------------
