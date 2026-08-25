@@ -4,12 +4,18 @@ from params import EMISSION_RATE, SUPPLY_CAP
 from pob import BURN_ADDRESS
 
 
+def compute_can_mint(total_minted: int, total_burnt: int) -> int:
+    """Embers still mintable: SUPPLY_CAP - total_minted + total_burnt, floored at 0.
+
+    Single source of truth for the mintable pool. Burns feed back into it,
+    which is what sustains emission indefinitely (whitepaper Section 5).
+    """
+    return max(0, SUPPLY_CAP - total_minted + total_burnt)
+
+
 def compute_reward(total_minted: int, total_burnt: int) -> int:
     """Single source of truth for block reward. Used by State and NodeView stats."""
-    can_mint = SUPPLY_CAP - total_minted + total_burnt
-    if can_mint <= 0:
-        return 0
-    return int(can_mint * (1 - EMISSION_RATE))
+    return int(compute_can_mint(total_minted, total_burnt) * (1 - EMISSION_RATE))
 
 
 class State:
@@ -72,6 +78,10 @@ class State:
     # ------------------------------------------------------------------
     # Emission
     # ------------------------------------------------------------------
+
+    def compute_can_mint(self) -> int:
+        """Embers still available to mint."""
+        return compute_can_mint(self.total_minted, self.total_burnt)
 
     def compute_block_reward(self) -> int:
         """Compute the reward for the next accepted block."""

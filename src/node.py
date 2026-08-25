@@ -26,7 +26,8 @@ import mempool as mempool_mod
 import tx as tx_mod
 import vdf as vdf_mod
 from chainstate import ChainState
-from params import BLOCK_SIZE_LIMIT, DB_PATH
+from params import DB_PATH
+from pob import BURN_ADDRESS
 from storage import Storage
 
 log = logging.getLogger("ec.node")
@@ -63,7 +64,6 @@ class StatsAccumulator:
     without NodeView needing to carry forward state from a previous view.
     Flask reads node.stats (GIL-safe reference) directly.
     """
-    from state import compute_reward as _compute_reward
 
     def __init__(self):
         self.points:    list  = []   # [{height, minted, total_burnt, circulating, net_emission}]
@@ -90,17 +90,16 @@ class StatsAccumulator:
             }]
         else:
             # Full rebuild (startup, reorg, or first call).
-            from state import compute_reward
             points = []
             running_minted = running_burnt = 0
             for blk in chain[1:]:
-                reward          = compute_reward(running_minted, running_burnt)
+                reward          = state_mod.compute_reward(running_minted, running_burnt)
                 running_minted += reward
                 running_burnt  += sum(
                     out["amount"]
                     for t in blk.get("transactions", [])
                     for out in t.get("outputs", [])
-                    if out.get("to") == "burn"
+                    if out.get("to") == BURN_ADDRESS
                 )
                 points.append({
                     "height":       blk["height"],
@@ -216,7 +215,8 @@ class Node:
             "peer_count":   self.pool.count(),
             "total_minted": v.state.total_minted,
             "total_burnt":  v.state.total_burnt,
-            "can_mint":     v.state.compute_block_reward(),
+            "can_mint":     v.state.compute_can_mint(),
+            "block_reward": v.state.compute_block_reward(),
         }
 
     def start(self, kek):
@@ -307,8 +307,9 @@ class Node:
         accumulated_blocks = []
         iterations = block_mod.get_vdf_iterations(cs.chain)
         with _cf.ThreadPoolExecutor(max_workers=1) as _pool:
-            _fut = _pool.submit(vdf_mod.evaluate,
-                                bytes.fromhex(cs.tip["hash"]), iterations)
+            _fut = _pool.submit(
+                vdf_mod.evaluate,
+                block_mod.vdf_challenge(cs.tip["hash"], self.addr), iterations)
             while not _fut.done():
                 accumulated_blocks += self._drain_queue(timeout=1)
             vdf_out, vdf_proof, vdf_seconds = _fut.result()

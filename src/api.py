@@ -20,7 +20,8 @@ Public app  (default port 8333, externally reachable):
   JSON API (Content-Type: application/json):
     GET  /api/info
          {"height", "tip_hash", "genesis_hash", "fee_rate", "mempool_size",
-          "address", "peer_count", "total_minted", "total_burnt", "can_mint"}
+          "address", "peer_count", "total_minted", "total_burnt", "can_mint",
+          "block_reward"}
 
     GET  /api/fee_rate
          {"fee_rate": <embers/byte>, "height": <n>}
@@ -317,7 +318,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "minted":           sv.total_minted,
             "total_burnt":      sv.total_burnt,
             "circulating":      sv.total_minted - sv.total_burnt,
-            "can_mint":         max(0, SUPPLY_CAP - sv.total_minted + sv.total_burnt),
+            "can_mint":         sv.compute_can_mint(),
             "supply_cap":       SUPPLY_CAP,
             "net_emission_last": net_last,
             "embers_per_sch":    EMBERS_PER_SCH,

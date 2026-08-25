@@ -44,13 +44,11 @@ Public interface
 
 import json
 import logging
-import queue
 import secrets
 import socket
 import struct
 import threading
 import time
-from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 
 log = logging.getLogger("ec.udp")

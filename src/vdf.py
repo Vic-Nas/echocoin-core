@@ -68,7 +68,7 @@ def evaluate(challenge: bytes,
              iterations: int = VDF_ITERATIONS) -> tuple[str, str, float]:
     """Run the VDF. Blocks for approximately BLOCK_CYCLE_SECONDS.
 
-    challenge:  raw bytes of the previous block hash (32 bytes).
+    challenge:  32 bytes from block.vdf_challenge(previous_hash, builder).
     iterations: number of sequential squarings. Pass block.get_vdf_iterations(chain).
     Returns (output_hex, proof_hex, elapsed_seconds).
     """
@@ -90,7 +90,7 @@ def verify(challenge: bytes, output: str, proof: str,
            iterations: int = VDF_ITERATIONS) -> bool:
     """Verify a VDF proof. Returns in milliseconds.
 
-    challenge:  raw bytes of the previous block hash.
+    challenge:  32 bytes from block.vdf_challenge(previous_hash, builder).
     output, proof: hex strings from evaluate() stored in the block.
     iterations: must match what was used during evaluate().
     """

@@ -11,7 +11,6 @@ The node holds one reference and replaces it atomically (GIL-safe).
 import pob as pob_mod
 import block as block_mod
 import state as state_mod
-import tx as tx_mod
 from params import BUILDER_REWARD_SHARE
 
 

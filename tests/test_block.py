@@ -227,6 +227,82 @@ class TestValidateVDF:
         ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
         assert ok is False
 
+    def test_challenge_binds_previous_hash_and_builder(self):
+        """The challenge covers both inputs, so neither can be varied freely."""
+        g = genesis()
+        base  = block_mod.vdf_challenge(g["hash"], address(0))
+        other_builder = block_mod.vdf_challenge(g["hash"], address(1))
+        other_parent  = block_mod.vdf_challenge("cc" * 32, address(0))
+        assert base != other_builder
+        assert base != other_parent
+        assert len(base) == 32
+        # Deterministic: same inputs always give the same challenge.
+        assert base == block_mod.vdf_challenge(g["hash"], address(0))
+
+    def test_validate_uses_builder_bound_challenge(self, monkeypatch):
+        """validate() must verify against vdf_challenge, not the bare parent hash."""
+        seen = {}
+        monkeypatch.setattr("block.vdf_mod.verify",
+                            lambda challenge, *a, **kw: seen.setdefault("c", challenge) or True)
+        g = genesis()
+        b = make_block(1, g["hash"], [], builder_index=0)
+        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        assert ok is True, err
+        assert seen["c"] == block_mod.vdf_challenge(g["hash"], address(0))
+        assert seen["c"] != bytes.fromhex(g["hash"])
+
+    def test_stolen_vdf_proof_rejected_under_new_builder(self, monkeypatch):
+        """A VDF output is not a bearer token.
+
+        Replay of the real attack: a node receives a broadcast block, keeps
+        vdf_output/vdf_proof, swaps in its own builder address to claim the
+        reward, and rebroadcasts. The proof only verifies against the
+        original builder's challenge, so the copy is rejected.
+        """
+        g = genesis()
+        victim, thief = address(0), address(1)
+        honest_challenge = block_mod.vdf_challenge(g["hash"], victim)
+        # Stand-in for real VDF verification: a proof verifies only against
+        # the challenge it was actually evaluated over.
+        monkeypatch.setattr("block.vdf_mod.verify",
+                            lambda challenge, *a, **kw: challenge == honest_challenge)
+
+        original = make_block(1, g["hash"], [], builder_index=0)
+        ok, err = block_mod.validate(original, fresh_state(), [g], noop_fee_rate)
+        assert ok is True, err
+
+        stolen = dict(original)
+        stolen["builder"] = thief
+        stolen["hash"]    = block_mod.block_hash(stolen)
+        ok, err = block_mod.validate(stolen, fresh_state(), [g], noop_fee_rate)
+        assert ok is False
+        assert "VDF" in err
+
+    def test_transactions_not_bound_into_challenge(self, monkeypatch):
+        """Content stays swappable on top of a valid proof.
+
+        A block whose transaction list is replaced keeps a verifying VDF
+        proof, so a rejected transaction list can be corrected without
+        redoing the ~120 s of sequential work.
+        """
+        g = genesis()
+        builder = address(0)
+        honest_challenge = block_mod.vdf_challenge(g["hash"], builder)
+        monkeypatch.setattr("block.vdf_mod.verify",
+                            lambda challenge, *a, **kw: challenge == honest_challenge)
+
+        st = fresh_state()
+        seed_balance(st, 2, 100.0)
+        t = make_tx(2, 3, EMBERS_PER_SCH, st, 0)
+
+        empty    = make_block(1, g["hash"], [],  builder_index=0)
+        refilled = make_block(1, g["hash"], [t], builder_index=0,
+                              vdf_output=empty["vdf_output"],
+                              vdf_proof=empty["vdf_proof"])
+        assert refilled["vdf_output"] == empty["vdf_output"]
+        ok, err = block_mod.validate(refilled, st, [g], noop_fee_rate)
+        assert ok is True, err
+
     def test_genesis_skips_vdf_check(self):
         g = genesis()
         # Genesis has vdf_output=None -- should still pass

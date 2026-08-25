@@ -229,6 +229,24 @@ class TestEmission:
         """Guard against can_mint going negative (shouldn't happen normally)."""
         assert compute_reward(SUPPLY_CAP + EMBERS_PER_SCH, 0) == 0
 
+    def test_compute_can_mint_is_the_shared_pool_formula(self):
+        """compute_reward is derived from compute_can_mint, not a second copy."""
+        minted = 5_000_000 * EMBERS_PER_SCH
+        burnt  = 500_000  * EMBERS_PER_SCH
+        pool   = state_mod.compute_can_mint(minted, burnt)
+        assert pool == SUPPLY_CAP - minted + burnt
+        assert compute_reward(minted, burnt) == int(pool * (1 - EMISSION_RATE))
+
+    def test_compute_can_mint_floors_at_zero(self):
+        assert state_mod.compute_can_mint(SUPPLY_CAP + EMBERS_PER_SCH, 0) == 0
+
+    def test_state_compute_can_mint_uses_state_totals(self):
+        s = fresh_state()
+        s.total_minted = SUPPLY_CAP // 4
+        s.total_burnt  = 1000 * EMBERS_PER_SCH
+        assert s.compute_can_mint() == state_mod.compute_can_mint(
+            s.total_minted, s.total_burnt)
+
 
 # ---------------------------------------------------------------------------
 # 4. apply_reward_distribution

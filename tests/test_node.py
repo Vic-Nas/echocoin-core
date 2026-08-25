@@ -204,8 +204,22 @@ class TestSimpleAccessors:
         info = node.get_info()
         for key in ["height", "tip_hash", "genesis_hash", "fee_rate",
                     "mempool_size", "address", "peer_count", "total_minted",
-                    "total_burnt", "can_mint"]:
+                    "total_burnt", "can_mint", "block_reward"]:
             assert key in info
+
+    def test_get_info_can_mint_is_the_pool_not_the_reward(self, node_env):
+        """can_mint is the mintable pool; block_reward is one block's cut of it.
+
+        These were once the same key holding two different values: /api/info
+        returned the per-block reward under the name can_mint while
+        /api/stats returned the pool under that same name.
+        """
+        node, *_ = node_env
+        info = node.get_info()
+        sv   = node.view.state
+        assert info["can_mint"]     == sv.compute_can_mint()
+        assert info["block_reward"] == sv.compute_block_reward()
+        assert info["block_reward"] < info["can_mint"]
 
     def test_get_info_height_is_zero_at_genesis(self, node_env):
         node, *_ = node_env

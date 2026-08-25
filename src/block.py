@@ -60,6 +60,26 @@ def get_vdf_iterations(chain) -> int:
     return prior_iterations
 
 
+def vdf_challenge(previous_hash: str, builder: str) -> bytes:
+    """Challenge a block's VDF must be evaluated over.
+
+    Binds the sequential work to the address that will be paid for it.
+    Without the builder in the challenge, a VDF output is a bearer token:
+    any node that receives a broadcast block can keep vdf_output and
+    vdf_proof, swap in its own builder address and its own transaction
+    list, and rebroadcast a block that verifies just as well as the
+    original. Whoever's copy arrives first wins, so the node that actually
+    spent the ~120 s loses the reward to a node that spent nothing.
+
+    Folding the builder in makes every builder evaluate a different VDF,
+    so a stolen output verifies against nobody else's challenge. The
+    transaction list is deliberately not folded in: content stays
+    swappable on top of a valid proof, which is what lets a block whose
+    transactions are rejected be corrected without redoing the ~120 s.
+    """
+    return crypto.sha256(bytes.fromhex(previous_hash) + builder.encode())
+
+
 def create_genesis():
     """
     Create the genesis block (block 0). Hardcoded and deterministic.
@@ -143,7 +163,6 @@ def _check_parent(blk, chain):
 
 
 def _check_timestamp(blk, chain):
-    height = blk["height"]
     ts = blk.get("timestamp")
     if not isinstance(ts, (int, float)):
         return False, "block missing timestamp"
@@ -170,7 +189,7 @@ def _check_builder_and_vdf(blk, chain):
         return False, (f"vdf_iterations mismatch: block has {block_iterations}, "
                        f"chain expects {expected_iterations}")
 
-    challenge = bytes.fromhex(chain[-1]["hash"])
+    challenge = vdf_challenge(chain[-1]["hash"], builder)
     if not vdf_mod.verify(challenge, vdf_output, vdf_proof, block_iterations):
         return False, "invalid VDF proof"
     return True, None
