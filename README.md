@@ -1,6 +1,6 @@
 # LapseCoin
 
-A peer-to-peer electronic cash system. Most cumulative proven work wins, first valid block received: Bitcoin-style consensus. Block timing is enforced by a Verifiable Delay Function anchored to real elapsed time. Every transaction is submitted as a time-lock-encrypted ciphertext rather than plaintext, and blocks must resolve these ciphertexts in strict, gapless, global order -- a builder can't selectively censor one transaction without either resolving it or stopping block production entirely. Fees are deterministic and go to whichever resolver's solution lands first. Signatures are quantum-resistant (FALCON-512).
+A peer-to-peer electronic cash system. Most cumulative proven work wins, first valid block received: Bitcoin-style consensus. Block timing is enforced by a Verifiable Delay Function anchored to real elapsed time. Every transaction is submitted as a time-lock-encrypted ciphertext rather than plaintext, and blocks must resolve these ciphertexts in strict, gapless, global order. A builder can't selectively censor one transaction without either resolving it or stopping block production entirely. Fees are deterministic and go to whichever resolver's solution lands first. Signatures are quantum-resistant (FALCON-512).
 
 See [docs/whitepaper.md](docs/whitepaper.md) for the full protocol specification.
 
