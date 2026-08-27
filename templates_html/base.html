@@ -77,14 +77,12 @@
 </head>
 <body>
 <nav>
-  <span class="brand">SCORCHCOIN</span>
+  <span class="brand">LAPSECOIN</span>
   <a href="/">Dashboard</a>
   {% if is_private %}
   <a href="/send">Send</a>
-  <a href="/burn">Burn</a>
   {% else %}
   <a class="nav-disabled" title="Only available on localhost:{{ private_port }}">Send</a>
-  <a class="nav-disabled" title="Only available on localhost:{{ private_port }}">Burn</a>
   {% endif %}
   <a href="/explorer">Explorer</a>
   <a href="/address">Address</a>

@@ -2,16 +2,14 @@
 End-to-end protocol flow tests
 
 These tests exercise complete protocol scenarios from genesis through
-multi-block chains, reorgs, PoB reward splits, fee dynamics, and the
-emission schedule -- all without network or disk I/O.
+multi-block chains, reorgs, fee dynamics, and the emission schedule --
+all without network or disk I/O.
 
 Flows covered:
   E2E-1:  Genesis -> mine blocks -> emit rewards -> verify circulating supply
-  E2E-2:  PoB: two senders burn different amounts -> proportional reward split
   E2E-3:  Fork choice: most cumulative proven work wins; ties broken by tip hash
   E2E-4:  Reorg: a shorter chain that becomes longer is accepted
   E2E-5:  Fee rate dynamics: spam attack inflates fee, inactivity decays it
-  E2E-6:  Burn expiry: burns age out of the POB_WINDOW
   E2E-8:  Full tx lifecycle: create -> mempool -> block -> confirmed
   E2E-9:  Block assembly: assemble() fills to limit, skips oversized single txs
   E2E-10: Multi-sender block with correct nonce sequencing
@@ -28,16 +26,15 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import block as block_mod
 import state as state_mod
 import tx as tx_mod
-import pob as pob_mod
 import mempool as mempool_mod
 from chainstate import ChainState
 from node import StatsAccumulator
 from params import (
-    BLOCK_SIZE_TARGET_BYTES, INITIAL_FEE_RATE, POB_WINDOW,
+    BLOCK_SIZE_TARGET_BYTES, INITIAL_FEE_RATE,
     EMBERS_PER_SCH, SUPPLY_CAP,
 )
 from tests.fixtures import (
-    address, genesis, keypair, make_block, make_burn_tx,
+    address, genesis, keypair, make_block,
     make_tx, pubkey_hex, seed_balance,
 )
 
@@ -52,29 +49,14 @@ def mock_vdf(monkeypatch):
 # ---------------------------------------------------------------------------
 
 class TestE2E_EmissionSchedule:
-    def test_rewards_minted_when_burns_present(self):
-        """Rewards are only distributed when there are burns in the window."""
-        cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
-        cs.state.total_minted += 100 * EMBERS_PER_SCH
-
-        t = make_burn_tx(0, EMBERS_PER_SCH, cs.state, 0)
-        b1 = make_block(1, cs.tip["hash"], [t])
-        ok, err, cs = cs.validate_and_apply(b1)
-        assert ok is True, err
-
-        # Burn in window means reward is distributed
-        assert cs.state.total_minted > 100 * EMBERS_PER_SCH
-
-    def test_only_builder_floor_minted_without_burns(self):
-        """Without any burns, only the builder's flat floor share mints;
-        the rest of each block's reward stays in can_mint."""
+    def test_rewards_minted_every_block(self):
+        """The full block reward mints unconditionally, every block."""
         cs = ChainState.from_genesis()
         for h in range(1, 6):
             b = make_block(h, cs.tip["hash"], [])
             ok, err, cs = cs.validate_and_apply(b)
             assert ok is True, f"h={h}: {err}"
-        assert 0 < cs.state.total_minted < cs.state.compute_block_reward() * 5
+        assert cs.state.total_minted > 0
 
     def test_minted_does_not_exceed_supply_cap(self):
         cs = ChainState.from_genesis()
@@ -86,65 +68,9 @@ class TestE2E_EmissionSchedule:
     def test_reward_decreases_as_supply_fills(self):
         """Emission should shrink as more coins are minted."""
         from state import compute_reward
-        r_early = compute_reward(0, 0)
-        r_late  = compute_reward(SUPPLY_CAP // 2, 0)
+        r_early = compute_reward(0)
+        r_late  = compute_reward(SUPPLY_CAP // 2)
         assert r_late < r_early
-
-    def test_burn_fees_replenish_can_mint(self):
-        """Whitepaper Section 5: burnt fees sustain rewards indefinitely."""
-        from state import compute_reward
-        minted = SUPPLY_CAP - 1000 * EMBERS_PER_SCH
-        r_no_burn   = compute_reward(minted, 0)
-        r_with_burn = compute_reward(minted, 500 * EMBERS_PER_SCH)
-        assert r_with_burn > r_no_burn
-
-
-# ---------------------------------------------------------------------------
-# E2E-2: PoB reward split
-# ---------------------------------------------------------------------------
-
-class TestE2E_PoBRewardSplit:
-    def test_two_contributors_proportional_split(self):
-        """Reward splits proportional to burns: addr(0) burns 3x more than addr(1)."""
-        cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
-        cs.state.credit(address(1), 1000 * EMBERS_PER_SCH)
-        cs.state.total_minted += 2000 * EMBERS_PER_SCH
-
-        t0 = make_burn_tx(0, 3 * EMBERS_PER_SCH, cs.state, 0)
-        cs.state.apply_tx(t0)
-        t1 = make_burn_tx(1, EMBERS_PER_SCH, cs.state, 0)
-        cs.state.apply_tx(t1)
-
-        # Reset state (chainstate will re-apply)
-        cs.state._balances[address(0)] += 3 * EMBERS_PER_SCH + t0["fee"]
-        cs.state._nonces[address(0)] = 0
-        cs.state._balances[address(1)] += EMBERS_PER_SCH + t1["fee"]
-        cs.state._nonces[address(1)] = 0
-        cs.state.total_burnt = 0
-
-        txs = tx_mod.sort_txs([t0, t1])
-        b1 = make_block(1, cs.tip["hash"], txs)
-        ok, err, cs2 = cs.validate_and_apply(b1)
-        assert ok is True, err
-
-        dist = dict(cs2.burn_window.reward_distribution(4000))
-        # 3:1 burn ratio → 3000:1000 split
-        assert dist.get(address(0), 0) == 3000
-        assert dist.get(address(1), 0) == 1000
-
-    def test_burn_weight_is_sender_specific(self):
-        """Burn weight accrues to the sender, not any third party."""
-        g = genesis()
-        burn_out = {"to": pob_mod.BURN_ADDRESS, "amount": EMBERS_PER_SCH}
-        tx = {"from": address(0), "outputs": [burn_out], "nonce": 1, "fee": 0, "fee_height": 1}
-        b = make_block(1, g["hash"], [tx])
-        w = pob_mod.BurnWindow()
-        w.add_block(g)
-        w.add_block(b)
-        totals = w.sender_totals()
-        assert totals.get(address(0), 0) == EMBERS_PER_SCH
-        assert totals.get(address(1), 0) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -221,16 +147,16 @@ class TestE2E_Reorg:
 
 
 # ---------------------------------------------------------------------------
-# E2E-5: Fee rate dynamics (whitepaper Section 2)
+# E2E-5: Fee rate dynamics
 # ---------------------------------------------------------------------------
 
 class TestE2E_FeeDynamics:
     def test_spam_doubles_fee_in_roughly_14_blocks(self):
         """
-        Whitepaper Section 2: sustained full blocks apply adjustment=1.05 each block.
-        At 1.05^14 ≈ 1.98, the rate nearly doubles.  int() truncation means this is
-        only observable once the base rate is high enough.  Start from rate=100 embers/byte
-        so the doubling is clearly visible.
+        Sustained full blocks apply adjustment=1.05 each block.
+        At 1.05^14 ~= 1.98, the rate nearly doubles.  int() truncation means this
+        is only observable once the base rate is high enough.  Start from rate=100
+        embers/byte so the doubling is clearly visible.
         """
         g = genesis()
         chain = [g]
@@ -255,35 +181,6 @@ class TestE2E_FeeDynamics:
         final_rate = block_mod.compute_expected_fee_rate(chain)
         # Should decay but not crash to zero
         assert 1 <= final_rate < INITIAL_FEE_RATE
-
-
-# ---------------------------------------------------------------------------
-# E2E-6: Burn expiry (whitepaper Section 3)
-# ---------------------------------------------------------------------------
-
-class TestE2E_BurnExpiry:
-    def test_burn_expires_after_pob_window(self):
-        """Whitepaper: burns older than POB_WINDOW fall out of the denominator."""
-        cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
-        cs.state.total_minted += 1000 * EMBERS_PER_SCH
-
-        # Burn at block 1
-        t = make_burn_tx(0, 10 * EMBERS_PER_SCH, cs.state, 0)
-        b1 = make_block(1, cs.tip["hash"], [t])
-        ok, err, cs = cs.validate_and_apply(b1)
-        assert ok is True, err
-
-        assert cs.burn_window.sender_totals().get(address(0), 0) == 10 * EMBERS_PER_SCH
-
-        # Advance POB_WINDOW blocks
-        for h in range(2, POB_WINDOW + 2):
-            b = make_block(h, cs.tip["hash"], [])
-            ok, err, cs = cs.validate_and_apply(b)
-            assert ok is True
-
-        # Burn should have expired
-        assert cs.burn_window.sender_totals().get(address(0), 0) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -413,7 +310,7 @@ class TestE2E_StatsAccumulator:
         acc.update(cs2.chain, cs2.state)
         assert len(acc.points) == 2
 
-    def test_stats_circulating_is_minted_minus_fees(self):
+    def test_stats_circulating_equals_minted(self):
         cs0 = ChainState.from_genesis()
         cs0.state.credit(address(0), 100 * EMBERS_PER_SCH)
         cs0.state.total_minted += 100 * EMBERS_PER_SCH
@@ -425,4 +322,4 @@ class TestE2E_StatsAccumulator:
         acc = StatsAccumulator()
         acc.update(cs1.chain, cs1.state)
         pt = acc.points[0]
-        assert pt["circulating"] == pt["minted"] - pt["total_burnt"]
+        assert pt["circulating"] == pt["minted"]

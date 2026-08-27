@@ -4,7 +4,7 @@ Chain and state persistence via SQLite + peewee ORM.
 Schema:
   Block      full block JSON, indexed by height
   State      per-address balance and nonce
-  Emission   total_minted, total_burnt singletons
+  Emission   total_minted singleton
   TxIndex    tx_hash -> block_height lookup
   AddrIndex  addr -> (tx_hash, block_height) lookup
 
@@ -158,7 +158,6 @@ class Storage:
         if rows:
             State.insert_many(rows).execute()
         Emission.insert(key="total_minted", value=state.total_minted).on_conflict_replace().execute()
-        Emission.insert(key="total_burnt",  value=state.total_burnt).on_conflict_replace().execute()
 
     def save_state(self, state):
         with db.atomic():
@@ -169,7 +168,7 @@ class Storage:
         balances = {r.addr: r.balance for r in rows}
         nonces   = {r.addr: r.nonce   for r in rows}
         em       = {r.key: r.value for r in Emission.select()}
-        return balances, nonces, em.get("total_minted", 0), em.get("total_burnt", 0)
+        return balances, nonces, em.get("total_minted", 0)
 
     def state_exists(self):
         return State.select().exists()

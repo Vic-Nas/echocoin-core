@@ -1,29 +1,26 @@
 """Balance ledger, nonce tracking, and emission accounting. No disk I/O."""
 
 from params import EMISSION_RATE, SUPPLY_CAP
-from pob import BURN_ADDRESS
 
 
-def compute_can_mint(total_minted: int, total_burnt: int) -> int:
-    """Embers still mintable: SUPPLY_CAP - total_minted + total_burnt, floored at 0.
+def compute_can_mint(total_minted: int) -> int:
+    """Ticks still mintable: SUPPLY_CAP - total_minted, floored at 0.
 
-    Single source of truth for the mintable pool. Burns feed back into it,
-    which is what sustains emission indefinitely (whitepaper Section 5).
+    Single source of truth for the mintable pool.
     """
-    return max(0, SUPPLY_CAP - total_minted + total_burnt)
+    return max(0, SUPPLY_CAP - total_minted)
 
 
-def compute_reward(total_minted: int, total_burnt: int) -> int:
+def compute_reward(total_minted: int) -> int:
     """Single source of truth for block reward. Used by State and NodeView stats."""
-    return int(compute_can_mint(total_minted, total_burnt) * (1 - EMISSION_RATE))
+    return int(compute_can_mint(total_minted) * (1 - EMISSION_RATE))
 
 
 class State:
     def __init__(self):
-        self._balances    = {}  # addr -> int (embers)
+        self._balances    = {}  # addr -> int (ticks)
         self._nonces      = {}  # addr -> int (last used nonce, 0 = never transacted)
-        self.total_minted = 0   # embers minted via block rewards since genesis
-        self.total_burnt  = 0   # embers destroyed via fee burns since genesis
+        self.total_minted = 0   # ticks minted via block rewards since genesis
 
     # ------------------------------------------------------------------
     # Balance and nonce access
@@ -57,21 +54,14 @@ class State:
 
     def apply_tx(self, tx_dict):
         """Apply a validated transaction. Debits sender (outputs + fee),
-        credits recipients, advances nonce.
-
-        Fee burns and intentional PoB burns (outputs to BURN_ADDRESS) both
-        increase total_burnt, which feeds back into the emission formula.
-        """
+        credits recipients, advances nonce."""
         sender    = tx_dict["from"]
         total_out = sum(o["amount"] for o in tx_dict["outputs"])
         fee       = tx_dict["fee"]
 
         self.debit(sender, total_out + fee)
         for out in tx_dict["outputs"]:
-            if out["to"] == BURN_ADDRESS:
-                self.total_burnt += out["amount"]   # intentional PoB burn
-            else:
-                self.credit(out["to"], out["amount"])
+            self.credit(out["to"], out["amount"])
         self.set_nonce(sender, tx_dict["nonce"])
         # fee is collected by the block builder, not burned
 
@@ -80,15 +70,15 @@ class State:
     # ------------------------------------------------------------------
 
     def compute_can_mint(self) -> int:
-        """Embers still available to mint."""
-        return compute_can_mint(self.total_minted, self.total_burnt)
+        """Ticks still available to mint."""
+        return compute_can_mint(self.total_minted)
 
     def compute_block_reward(self) -> int:
         """Compute the reward for the next accepted block."""
-        return compute_reward(self.total_minted, self.total_burnt)
+        return compute_reward(self.total_minted)
 
     def apply_reward_distribution(self, distribution):
-        """Credit a pre-computed reward distribution from pob.reward_distribution().
+        """Credit a pre-computed reward distribution.
 
         distribution: list of (address, amount) pairs.
         Each amount is credited independently. total_minted is incremented
@@ -106,13 +96,12 @@ class State:
 
     @classmethod
     def from_snapshot(cls, balances: dict, nonces: dict,
-                      total_minted: int, total_burnt: int) -> "State":
+                      total_minted: int) -> "State":
         """Restore a State from persisted data. Replaces direct field assignment."""
         s = cls()
         s._balances    = balances
         s._nonces      = nonces
         s.total_minted = total_minted
-        s.total_burnt  = total_burnt
         return s
 
     # ------------------------------------------------------------------
@@ -126,7 +115,6 @@ class State:
         s._balances    = self._balances.copy()
         s._nonces      = self._nonces.copy()
         s.total_minted = self.total_minted
-        s.total_burnt  = self.total_burnt
         return s
 
     # ------------------------------------------------------------------

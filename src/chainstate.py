@@ -1,50 +1,41 @@
-"""ChainState: the three values that always move together.
+"""ChainState: the two values that always move together.
 
-chain, state, and burn_window are always consistent with each other.
-ChainState groups them so the node can swap them as a unit and methods
-that read chain state get one object instead of three.
+chain and state are always consistent with each other. ChainState groups
+them so the node can swap them as a unit and methods that read chain state
+get one object instead of two.
 
 ChainState is immutable after construction; mutations return a new one.
 The node holds one reference and replaces it atomically (GIL-safe).
 """
 
-import pob as pob_mod
 import block as block_mod
 import state as state_mod
-from params import BUILDER_REWARD_SHARE
 
 
-def _apply_builder_reward(state, window, builder, blk):
-    """Credit tx fees and distribute the block reward for one block.
+def _apply_builder_reward(state, builder, blk):
+    """Credit tx fees and the full newly-minted block reward to the builder.
 
-    The builder always receives BUILDER_REWARD_SHARE of the newly minted
-    reward, regardless of burn activity -- this floor keeps block
-    production profitable even with an empty mempool and no burns, and
-    removes any incentive to suppress burn transactions (the builder's
-    cut doesn't change whether burns exist or not). The remainder splits
-    proportionally among burners in the window; if none exist, it stays
-    unminted in can_mint.
+    No Proof-of-Burn split: the builder receives the entire block reward
+    unconditionally. This keeps block production profitable regardless of
+    mempool contents and removes any incentive structure tied to burning.
     """
     total_fees = sum(t.get("fee", 0) for t in blk.get("transactions", []))
     if total_fees > 0:
         state.credit(builder, total_fees)
 
-    reward        = state.compute_block_reward()
-    builder_share = int(reward * BUILDER_REWARD_SHARE)
-    if builder_share >= 1:
-        state.apply_reward_distribution([(builder, builder_share)])
-    state.apply_reward_distribution(window.reward_distribution(reward - builder_share))
+    reward = state.compute_block_reward()
+    if reward >= 1:
+        state.apply_reward_distribution([(builder, reward)])
 
 
 class ChainState:
-    """Consistent snapshot of chain + ledger state + burn window."""
+    """Consistent snapshot of chain + ledger state."""
 
-    __slots__ = ("chain", "state", "burn_window", "cumulative_iterations")
+    __slots__ = ("chain", "state", "cumulative_iterations")
 
-    def __init__(self, chain, state, burn_window, cumulative_iterations=0):
-        self.chain       = chain       # list of block dicts
-        self.state       = state       # State (balance ledger)
-        self.burn_window = burn_window  # BurnWindow (rolling burns)
+    def __init__(self, chain, state, cumulative_iterations=0):
+        self.chain = chain       # list of block dicts
+        self.state = state       # State (balance ledger)
         # Sum of vdf_iterations actually proven across the chain (excludes
         # genesis, which has no VDF proof). Used for fork choice instead of
         # raw block count -- see is_better_than().
@@ -76,16 +67,6 @@ class ChainState:
     # ------------------------------------------------------------------
 
     @classmethod
-    def _build_window(cls, chain):
-        """Build BurnWindow by replaying chain headers.
-        Shared by from_storage.
-        """
-        window = pob_mod.BurnWindow()
-        for blk in chain:
-            window.add_block(blk)
-        return window
-
-    @classmethod
     def _cumulative_iterations(cls, chain):
         """Sum of vdf_iterations actually proven, excluding genesis."""
         return sum(blk.get("vdf_iterations", 0) for blk in chain if blk["height"] > 0)
@@ -94,19 +75,15 @@ class ChainState:
     def from_genesis(cls):
         """Bootstrap a ChainState from the genesis block only."""
         genesis = block_mod.create_genesis()
-        window  = pob_mod.BurnWindow()
-        window.add_block(genesis)
-        return cls([genesis], state_mod.State(), window)
+        return cls([genesis], state_mod.State())
 
     @classmethod
     def from_chain(cls, chain):
         """Build a ChainState by replaying a fully trusted chain.
         Used at startup and after sync/reorg.
         """
-        state  = state_mod.State()
-        window = pob_mod.BurnWindow()
+        state = state_mod.State()
         for blk in chain:
-            window.add_block(blk)
             h = blk["height"]
             if h == 0:
                 continue
@@ -114,17 +91,15 @@ class ChainState:
                 state.apply_tx(t)
             builder = blk.get("builder")
             if builder:
-                _apply_builder_reward(state, window, builder, blk)
-        return cls(list(chain), state, window, cls._cumulative_iterations(chain))
+                _apply_builder_reward(state, builder, blk)
+        return cls(list(chain), state, cls._cumulative_iterations(chain))
 
     @classmethod
     def from_storage(cls, chain, stored_state):
         """Build a ChainState from a chain and a pre-loaded State snapshot.
-        Avoids replaying txs (balances come from the snapshot). Builds the
-        burn window from the chain since it isn't persisted.
+        Avoids replaying txs (balances come from the snapshot).
         """
-        window = cls._build_window(chain)
-        return cls(list(chain), stored_state, window, cls._cumulative_iterations(chain))
+        return cls(list(chain), stored_state, cls._cumulative_iterations(chain))
 
     # ------------------------------------------------------------------
     # Produce a new ChainState by appending one block
@@ -160,13 +135,11 @@ class ChainState:
         validate_and_apply (which gets post_tx from the validation probe,
         avoiding a second application of all transactions).
         """
-        new_window = self.burn_window.copy()
-        new_window.add_block(blk)
         builder = blk.get("builder")
         if builder:
-            _apply_builder_reward(post_tx_state, new_window, builder, blk)
+            _apply_builder_reward(post_tx_state, builder, blk)
         new_iterations = self.cumulative_iterations + blk.get("vdf_iterations", 0)
-        return ChainState(self.chain + [blk], post_tx_state, new_window, new_iterations)
+        return ChainState(self.chain + [blk], post_tx_state, new_iterations)
 
     # ------------------------------------------------------------------
     # Fork choice: most cumulative proven VDF work wins, tip hash breaks ties

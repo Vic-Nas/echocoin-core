@@ -2,16 +2,11 @@
 Unit tests for state.py
 
 Covers: credit, debit, set_nonce, apply_tx, compute_block_reward,
-apply_reward_distribution, snapshot, from_snapshot, and the whitepaper
-emission formula.
-
-Covers: credit, debit, set_nonce, apply_tx, compute_block_reward,
 apply_reward_distribution, snapshot, from_snapshot, and the emission formula.
 
-  - can_mint = SUPPLY_CAP - total_minted + total_burnt
+  - can_mint = SUPPLY_CAP - total_minted
   - reward = int(can_mint * (1 - EMISSION_RATE))
-  - only intentional PoB burns increase total_burnt (fees go to builder)
-  - reward recipients via pob.reward_distribution
+  - the full block reward mints to the builder (no burn-based split)
 """
 
 import os
@@ -23,7 +18,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import state as state_mod
 from state import compute_reward
-from pob import BURN_ADDRESS
 from params import (
     EMISSION_RATE, SUPPLY_CAP, EMBERS_PER_SCH
 )
@@ -134,37 +128,6 @@ class TestApplyTx:
         s.apply_tx(t)
         assert s.get_nonce(address(0)) == t["nonce"]
 
-    def test_fee_does_not_increase_total_burnt(self):
-        """Fees go to the block builder, not burned."""
-        s = fresh_state()
-        seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
-        s.apply_tx(t)
-        assert s.total_burnt == 0
-
-    def test_burn_output_increases_total_burnt(self):
-        """Intentional PoB burns increase total_burnt (replenish can_mint)."""
-        s = fresh_state()
-        seed_balance(s, 0, 100.0)
-        from tests.fixtures import make_burn_tx
-        t = make_burn_tx(0, EMBERS_PER_SCH, s, 10)
-        burn_amount = t["outputs"][0]["amount"]
-        s.apply_tx(t)
-        assert s.total_burnt == burn_amount
-
-    def test_burn_output_does_not_credit_anyone(self):
-        """Burn address is a sink: no balance increase for any address."""
-        s = fresh_state()
-        seed_balance(s, 0, 100.0)
-        from tests.fixtures import make_burn_tx
-        t = make_burn_tx(0, EMBERS_PER_SCH, s, 10)
-        balances_before = dict(s.all_balances())
-        s.apply_tx(t)
-        for addr, bal in s.all_balances().items():
-            if addr == address(0):
-                continue
-            assert addr not in balances_before or bal == balances_before[addr]
-
     def test_multiple_outputs_all_credited(self):
         s = fresh_state()
         seed_balance(s, 0, 1000.0)
@@ -186,66 +149,54 @@ class TestApplyTx:
 
 
 # ---------------------------------------------------------------------------
-# 3. Emission formula (whitepaper Section 5)
+# 3. Emission formula
 # ---------------------------------------------------------------------------
 
 class TestEmission:
     def test_initial_reward_positive(self):
-        reward = compute_reward(0, 0)
+        reward = compute_reward(0)
         assert reward > 0
 
     def test_reward_decreases_as_minted_increases(self):
-        r1 = compute_reward(0, 0)
-        r2 = compute_reward(SUPPLY_CAP // 2, 0)
+        r1 = compute_reward(0)
+        r2 = compute_reward(SUPPLY_CAP // 2)
         assert r2 < r1
 
     def test_reward_zero_when_cap_exhausted(self):
-        """If all coins minted and none burned, reward is 0."""
-        assert compute_reward(SUPPLY_CAP, 0) == 0
+        assert compute_reward(SUPPLY_CAP) == 0
 
-    def test_burns_restore_mintable_pool(self):
-        """Whitepaper Section 5: burns feed back into can_mint."""
-        r_no_burn   = compute_reward(SUPPLY_CAP // 2, 0)
-        r_with_burn = compute_reward(SUPPLY_CAP // 2, EMBERS_PER_SCH * 1000)
-        assert r_with_burn > r_no_burn
-
-    def test_reward_formula_matches_whitepaper(self):
-        """can_mint = SUPPLY_CAP - total_minted + total_burnt;  reward = int(can_mint * (1 - RATE))"""
+    def test_reward_formula(self):
+        """can_mint = SUPPLY_CAP - total_minted;  reward = int(can_mint * (1 - RATE))"""
         minted = 5_000_000 * EMBERS_PER_SCH
-        burnt  = 500_000  * EMBERS_PER_SCH
-        can_mint = SUPPLY_CAP - minted + burnt
+        can_mint = SUPPLY_CAP - minted
         expected = int(can_mint * (1 - EMISSION_RATE))
-        assert compute_reward(minted, burnt) == expected
+        assert compute_reward(minted) == expected
 
     def test_state_compute_block_reward_uses_state_totals(self):
         s = fresh_state()
         s.total_minted = SUPPLY_CAP // 4
-        s.total_burnt  = 1000 * EMBERS_PER_SCH
         r_state = s.compute_block_reward()
-        r_direct = compute_reward(s.total_minted, s.total_burnt)
+        r_direct = compute_reward(s.total_minted)
         assert r_state == r_direct
 
     def test_negative_can_mint_returns_zero(self):
         """Guard against can_mint going negative (shouldn't happen normally)."""
-        assert compute_reward(SUPPLY_CAP + EMBERS_PER_SCH, 0) == 0
+        assert compute_reward(SUPPLY_CAP + EMBERS_PER_SCH) == 0
 
     def test_compute_can_mint_is_the_shared_pool_formula(self):
         """compute_reward is derived from compute_can_mint, not a second copy."""
         minted = 5_000_000 * EMBERS_PER_SCH
-        burnt  = 500_000  * EMBERS_PER_SCH
-        pool   = state_mod.compute_can_mint(minted, burnt)
-        assert pool == SUPPLY_CAP - minted + burnt
-        assert compute_reward(minted, burnt) == int(pool * (1 - EMISSION_RATE))
+        pool   = state_mod.compute_can_mint(minted)
+        assert pool == SUPPLY_CAP - minted
+        assert compute_reward(minted) == int(pool * (1 - EMISSION_RATE))
 
     def test_compute_can_mint_floors_at_zero(self):
-        assert state_mod.compute_can_mint(SUPPLY_CAP + EMBERS_PER_SCH, 0) == 0
+        assert state_mod.compute_can_mint(SUPPLY_CAP + EMBERS_PER_SCH) == 0
 
     def test_state_compute_can_mint_uses_state_totals(self):
         s = fresh_state()
         s.total_minted = SUPPLY_CAP // 4
-        s.total_burnt  = 1000 * EMBERS_PER_SCH
-        assert s.compute_can_mint() == state_mod.compute_can_mint(
-            s.total_minted, s.total_burnt)
+        assert s.compute_can_mint() == state_mod.compute_can_mint(s.total_minted)
 
 
 # ---------------------------------------------------------------------------
@@ -298,10 +249,8 @@ class TestSnapshot:
     def test_snapshot_preserves_totals(self):
         s = fresh_state()
         s.total_minted = 12345
-        s.total_burnt  = 678
         snap = s.snapshot()
         assert snap.total_minted == 12345
-        assert snap.total_burnt  == 678
 
     def test_snapshot_modification_does_not_affect_original(self):
         s = fresh_state()
@@ -313,13 +262,11 @@ class TestSnapshot:
     def test_from_snapshot_restores_state(self):
         s = fresh_state()
         seed_balance(s, 0, 10.0)
-        s.total_burnt = 500
         balances = s.all_balances()
         nonces   = s.all_nonces()
-        s2 = state_mod.State.from_snapshot(balances, nonces, s.total_minted, s.total_burnt)
+        s2 = state_mod.State.from_snapshot(balances, nonces, s.total_minted)
         assert s2.get_balance(address(0)) == s.get_balance(address(0))
         assert s2.total_minted == s.total_minted
-        assert s2.total_burnt  == s.total_burnt
 
     def test_all_balances_returns_copy(self):
         s = fresh_state()

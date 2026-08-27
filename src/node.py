@@ -27,7 +27,6 @@ import tx as tx_mod
 import vdf as vdf_mod
 from chainstate import ChainState
 from params import DB_PATH
-from pob import BURN_ADDRESS
 from storage import Storage
 
 log = logging.getLogger("ec.node")
@@ -66,14 +65,13 @@ class StatsAccumulator:
     """
 
     def __init__(self):
-        self.points:    list  = []   # [{height, minted, total_burnt, circulating, net_emission}]
-        self._cum:      int   = 0    # cumulative burns for incremental update
+        self.points:    list  = []   # [{height, minted, circulating, net_emission}]
         self._chain_len: int  = 0    # chain length at last update
 
     def update(self, chain, state):
         """Extend or rebuild points to match chain. Call after every commit."""
         if len(chain) <= 1:
-            self.points, self._cum, self._chain_len = [], 0, len(chain)
+            self.points, self._chain_len = [], len(chain)
             return
 
         if len(chain) == self._chain_len + 1:
@@ -84,28 +82,20 @@ class StatsAccumulator:
             self.points = self.points + [{
                 "height":       blk["height"],
                 "minted":       state.total_minted,
-                "total_burnt":  state.total_burnt,
-                "circulating":  state.total_minted - state.total_burnt,
+                "circulating":  state.total_minted,
                 "net_emission": reward,
             }]
         else:
             # Full rebuild (startup, reorg, or first call).
             points = []
-            running_minted = running_burnt = 0
+            running_minted = 0
             for blk in chain[1:]:
-                reward          = state_mod.compute_reward(running_minted, running_burnt)
+                reward          = state_mod.compute_reward(running_minted)
                 running_minted += reward
-                running_burnt  += sum(
-                    out["amount"]
-                    for t in blk.get("transactions", [])
-                    for out in t.get("outputs", [])
-                    if out.get("to") == BURN_ADDRESS
-                )
                 points.append({
                     "height":       blk["height"],
                     "minted":       running_minted,
-                    "total_burnt":  running_burnt,
-                    "circulating":  running_minted - running_burnt,
+                    "circulating":  running_minted,
                     "net_emission": reward,
                 })
             if len(points) > 500:
@@ -125,7 +115,7 @@ class NodeView:
     Flask reads node.view; one reference swap, GIL-atomic, no lock needed.
     stats_points comes from node.stats, not carried here.
     """
-    __slots__ = ("chain", "height", "tip", "genesis_hash", "state", "burn_window")
+    __slots__ = ("chain", "height", "tip", "genesis_hash", "state")
 
     def __init__(self, cs):
         self.chain        = cs.chain
@@ -133,7 +123,6 @@ class NodeView:
         self.height       = cs.height
         self.genesis_hash = cs.genesis_hash
         self.state        = cs.state.snapshot()
-        self.burn_window  = cs.burn_window
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +203,6 @@ class Node:
             "address":      self.addr,
             "peer_count":   self.pool.count(),
             "total_minted": v.state.total_minted,
-            "total_burnt":  v.state.total_burnt,
             "can_mint":     v.state.compute_can_mint(),
             "block_reward": v.state.compute_block_reward(),
         }

@@ -5,11 +5,10 @@
 <div id="stats-content" style="display:none">
   <div class="stats" style="margin-bottom:1rem" id="stat-cards"></div>
   <div class="chart-wrap">
-    <div class="chart-title">Mint vs burn (cumulative)</div>
-    <svg id="chart-mintburn" viewBox="0 0 800 220" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div class="chart-title">Minted (cumulative)</div>
+    <svg id="chart-minted" viewBox="0 0 800 220" xmlns="http://www.w3.org/2000/svg"></svg>
     <div class="legend">
       <span><span class="legend-dot" style="background:var(--accent)"></span>Minted</span>
-      <span><span class="legend-dot" style="background:var(--red)"></span>Burned fees</span>
     </div>
   </div>
 </div>
@@ -87,11 +86,10 @@ fetch('/api/stats')
     const pts = data.points;
     if (!pts.length) return;
     const maxX = pts[pts.length - 1].height;
-    const maxYBurn = Math.max(...pts.map(p => p.minted)) * 1.05 || 1;
-    drawChart('chart-mintburn', pts, [
-      {key: 'minted',      color: 'var(--accent)', width: 2},
-      {key: 'total_burnt', color: 'var(--red)',    width: 2},
-    ], maxX, maxYBurn);
+    const maxYMinted = Math.max(...pts.map(p => p.minted)) * 1.05 || 1;
+    drawChart('chart-minted', pts, [
+      {key: 'minted', color: 'var(--accent)', width: 2},
+    ], maxX, maxYMinted);
   })
   .catch(() => {
     document.getElementById('stats-loading').textContent = 'Failed to load stats.';

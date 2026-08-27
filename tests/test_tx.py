@@ -22,10 +22,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import crypto
 import tx as tx_mod
 import state as state_mod
-from pob import BURN_ADDRESS
 from params import INITIAL_FEE_RATE, EMBERS_PER_SCH
 from tests.fixtures import (
-    keypair, address, pubkey_hex, make_tx, make_burn_tx, seed_balance
+    keypair, address, pubkey_hex, make_tx, seed_balance
 )
 
 
@@ -269,20 +268,6 @@ class TestValidateFields:
         t["fee"] = -1
         ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
         assert ok is False
-
-    def test_burn_output_is_accepted(self):
-        s = fresh_state()
-        seed_balance(s, 0, 10.0)
-        t = make_burn_tx(0, EMBERS_PER_SCH, s, 10)
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is True, err
-
-    def test_burn_output_passes(self):
-        s = fresh_state()
-        seed_balance(s, 0, 10.0)
-        t = make_burn_tx(0, EMBERS_PER_SCH, s, 10)
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is True, err
 
 
 # ---------------------------------------------------------------------------

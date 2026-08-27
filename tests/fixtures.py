@@ -17,7 +17,6 @@ import crypto
 import block as block_mod
 import state as state_mod
 import tx as tx_mod
-import pob as pob_mod
 from params import (
     GENESIS_TIMESTAMP,
     INITIAL_FEE_RATE,
@@ -89,26 +88,6 @@ def make_tx(
     return tx_mod.create(
         from_addr, pk_hex, outputs, nonce, fee_height, fee, sk
     )
-
-
-def make_burn_tx(
-    sender_index: int,
-    amount: int,
-    state: "state_mod.State",
-    chain_tip_height: int,
-    fee_rate: int = INITIAL_FEE_RATE,
-):
-    """Build a transaction with a single burn output."""
-    sk, _ = keypair(sender_index)
-    from_addr = address(sender_index)
-    pk_hex_val = pubkey_hex(sender_index)
-    nonce = state.get_nonce(from_addr) + 1
-
-    burn_out = {"to": pob_mod.BURN_ADDRESS, "amount": amount}
-    fee = tx_mod.compute_fee(
-        from_addr, pk_hex_val, [burn_out], nonce, chain_tip_height, fee_rate
-    )
-    return tx_mod.create(from_addr, pk_hex_val, [burn_out], nonce, chain_tip_height, fee, sk)
 
 
 # ---------------------------------------------------------------------------

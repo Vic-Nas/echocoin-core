@@ -5,8 +5,7 @@
 EMBERS_PER_SCH = 100_000_000
 
 # Emission. Supply is bounded at 21M SCH with smooth exponential decay
-# over a 20-year half-life. Burnt fees replenish can_mint, sustaining
-# rewards indefinitely. No halvings, no supply shock.
+# over a 20-year half-life. No halvings, no supply shock.
 SUPPLY_CAP        = 21_000_000 * EMBERS_PER_SCH
 EMISSION_HALFLIFE = 5_000_000  # blocks (~20 years at 2 min/block)
 EMISSION_RATE     = 0.5 ** (1 / EMISSION_HALFLIFE)  # per-block decay factor
@@ -27,21 +26,6 @@ ADDRESS_WORD_COUNT = 12
 WORD_BITS          = 11
 
 INITIAL_FEE_RATE = 10     # embers/byte; low start, fee formula rises under load
-
-# Proof-of-Burn sliding window. Burns older than this many blocks no longer
-# count toward a sender's reward share. 500 blocks ~ 17 hours at 2 min/block:
-# long enough for daily participation cycles, short enough to prevent
-# permanent whale dominance from a one-time burn.
-POB_WINDOW = 500
-
-# Fraction of the newly-minted block reward paid unconditionally to the
-# block builder, regardless of burn activity. Keeps block production
-# profitable even with an empty mempool and no burns in the PoB window,
-# and removes any incentive to suppress burn transactions -- the
-# builder's cut is constant whether burns exist or not. The remainder
-# splits proportionally among burners in the window, or stays unminted
-# in can_mint if none exist.
-BUILDER_REWARD_SHARE = 0.02
 
 # VDF iteration count targeting ~120 seconds of sequential computation on
 # target testnet hardware. Calibrated from real benchmark runs: median of
@@ -68,6 +52,34 @@ VDF_ITERATIONS = 12_200_000  # calibrated: ~120s on target hardware
 VDF_ADJUST_INTERVAL    = 10_080  # blocks between adjustments (~2 weeks)
 VDF_ADJUST_MIN_SECONDS = 100    # trigger increase if median falls below this
 VDF_ADJUST_FACTOR      = 1.02   # max 2% increase per adjustment period
+
+# Time-lock puzzle (RSW construction, see timelock.py) difficulty. This is a
+# protocol-wide constant: every transaction uses the same T. A sender-chosen
+# T would leak a visible metadata signal even before decryption, defeating
+# the content-blindness the ciphertext format is meant to provide.
+#
+# Calibration mirrors vdf.py's methodology (see that module's docstring),
+# but the underlying operation here is RSA-style modular squaring, not
+# class-group arithmetic, so the throughput numbers differ. Published
+# benchmarks (a 2023 time-lock-puzzle paper measuring 2048-bit modular
+# squaring) show roughly 0.6-0.85 million squarings/second on modern
+# single-core hardware: about 0.85M/s on an Apple M1 Pro, 0.6-0.7M/s on
+# server-class Xeon/EPYC parts. Targeting the same ~120 s floor used for
+# VDF_ITERATIONS at the slower, more conservative end of that range gives
+# roughly 80-100 million iterations; 90,000,000 is chosen as the midpoint.
+TIMELOCK_ITERATIONS = 90_000_000  # calibrated: ~120-150s on target hardware
+
+# RSA modulus size for each disposable puzzle. 2048 bits (two ~1024-bit
+# safe-prime-derived factors) matches conventional RSA security margins.
+TIMELOCK_MODULUS_BITS = 2048
+
+# Safety margin applied when TIMELOCK_ITERATIONS is bumped in lockstep with
+# a VDF_ADJUST_FACTOR increase (see timelock.get_timelock_iterations). RSA
+# modular squaring has far more mature, widely-deployed dedicated hardware
+# acceleration in the wild (TLS/crypto accelerators, ASICs) than class-group
+# arithmetic does, so tracking VDF hardware improvements 1:1 would be
+# optimistic. This multiplier is a heuristic margin, not a guarantee.
+TIMELOCK_MARGIN_MULTIPLIER = 1.5
 
 # Genesis message. Embedded in block 0 and hashed into the genesis block hash.
 # Cannot change after launch without breaking network identity.

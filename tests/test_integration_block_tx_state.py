@@ -7,11 +7,9 @@ the edge cases documented in the whitepaper.
 
 Flows covered:
   1. Full block with multiple txs validated and applied via chainstate
-  2. Fees are credited to the block builder, not burned
-  3. Intentional PoB burns accumulate in BurnWindow and affect reward share
-  4. Mempool pruning after a block is committed
-  5. Multi-block chain replay via ChainState.from_chain
-  6. Mixed normal + burn outputs in one block
+  2. Fees are credited to the block builder
+  3. Mempool pruning after a block is committed
+  4. Multi-block chain replay via ChainState.from_chain
 """
 
 import os
@@ -25,12 +23,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import block as block_mod
 import state as state_mod
 import tx as tx_mod
-import pob as pob_mod
 import mempool as mempool_mod
 from chainstate import ChainState
 from params import INITIAL_FEE_RATE, EMBERS_PER_SCH, SUPPLY_CAP
 from tests.fixtures import (
-    address, genesis, make_block, make_burn_tx, make_tx, seed_balance,
+    address, genesis, make_block, make_tx, seed_balance,
 )
 
 
@@ -97,12 +94,12 @@ class TestBlockCommitFlow:
 
 
 # ---------------------------------------------------------------------------
-# 2. Fee accounting (whitepaper Section 2)
+# 2. Fee accounting
 # ---------------------------------------------------------------------------
 
 class TestFeeAccounting:
-    def test_fees_go_to_builder_not_total_burnt(self):
-        """Fees credit the block builder; they do not accumulate in total_burnt."""
+    def test_fees_go_to_builder(self):
+        """Fees credit the block builder."""
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
         cs.state.total_minted += 1000 * EMBERS_PER_SCH
@@ -113,60 +110,23 @@ class TestFeeAccounting:
         ok, err, cs2 = cs.validate_and_apply(b)
 
         assert ok is True, err
-        assert cs2.state.total_burnt == 0
         assert cs2.state.get_balance(address(2)) >= fee
 
-    def test_burns_replenish_mintable_pool(self):
-        """Whitepaper Section 5: burns add back to can_mint, outweighing
-        the small amount minted for the block that contains them."""
+    def test_builder_receives_full_block_reward(self):
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
         cs.state.total_minted += 1000 * EMBERS_PER_SCH
 
-        reward_before = cs.state.compute_block_reward()
-
-        # Commit a block with a burn tx
-        t = make_burn_tx(0, 10 * EMBERS_PER_SCH, cs.state, 0)
-        b = make_block(1, cs.tip["hash"], [t])
+        reward = cs.state.compute_block_reward()
+        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
+        b = make_block(1, cs.tip["hash"], [t], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
-
-        assert cs2.state.total_burnt == 10 * EMBERS_PER_SCH
-        assert cs2.state.compute_block_reward() > reward_before
+        assert cs2.state.get_balance(address(2)) == t["fee"] + reward
 
 
 # ---------------------------------------------------------------------------
-# 3. PoB burns tracked in the reward window (whitepaper Section 3)
-# ---------------------------------------------------------------------------
-
-class TestPoBBurnEffect:
-    def test_burn_in_block_tracked_in_window(self):
-        """A burn tx in a block is recorded in the BurnWindow under the sender."""
-        cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
-        cs.state.total_minted += 1000 * EMBERS_PER_SCH
-
-        t = make_burn_tx(0, 50 * EMBERS_PER_SCH, cs.state, 0)
-        b = make_block(1, cs.tip["hash"], [t])
-        ok, err, cs2 = cs.validate_and_apply(b)
-        assert ok is True, err
-
-        assert cs2.burn_window.sender_totals().get(address(0), 0) > 0
-
-    def test_sender_burn_tracked_in_window(self):
-        cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
-        cs.state.total_minted += 1000 * EMBERS_PER_SCH
-
-        t = make_burn_tx(0, 10 * EMBERS_PER_SCH, cs.state, 0)
-        b = make_block(1, cs.tip["hash"], [t])
-        ok, err, cs2 = cs.validate_and_apply(b)
-        assert ok is True, err
-        assert cs2.burn_window.sender_totals().get(address(0), 0) == 10 * EMBERS_PER_SCH
-
-
-# ---------------------------------------------------------------------------
-# 4. Mempool pruning after block commit
+# 3. Mempool pruning after block commit
 # ---------------------------------------------------------------------------
 
 class TestMempoolPruning:
@@ -213,7 +173,7 @@ class TestMempoolPruning:
 
 
 # ---------------------------------------------------------------------------
-# 5. Multi-block chain replay (from_chain)
+# 4. Multi-block chain replay (from_chain)
 # ---------------------------------------------------------------------------
 
 class TestChainReplay:
@@ -244,36 +204,3 @@ class TestChainReplay:
         cs_replayed = ChainState.from_chain(chain)
         assert cs_replayed.height == cs.height
         assert cs_replayed.state.total_minted == cs.state.total_minted
-
-
-# ---------------------------------------------------------------------------
-# 6. Mixed normal + burn outputs in one transaction
-# ---------------------------------------------------------------------------
-
-class TestMixedOutputs:
-    def test_mixed_outputs_applied_correctly(self):
-        cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
-        cs.state.total_minted += 1000 * EMBERS_PER_SCH
-
-        from_addr = address(0)
-        from tests.fixtures import keypair, pubkey_hex
-        pk_hex = pubkey_hex(0)
-        sk, _ = keypair(0)
-
-        normal_out = {"to": address(1), "amount": EMBERS_PER_SCH}
-        burn_out   = {"to": pob_mod.BURN_ADDRESS, "amount": EMBERS_PER_SCH}
-        outputs = [normal_out, burn_out]
-
-        fee = tx_mod.compute_fee(from_addr, pk_hex, outputs, 1, 0, INITIAL_FEE_RATE)
-        t = tx_mod.create(from_addr, pk_hex, outputs, 1, 0, fee, sk)
-
-        b = make_block(1, cs.tip["hash"], [t])
-        ok, err, cs2 = cs.validate_and_apply(b)
-
-        assert ok is True, err
-        assert cs2.state.get_balance(address(1)) == EMBERS_PER_SCH
-        # Only intentional burns hit total_burnt (not fees)
-        assert cs2.state.total_burnt >= EMBERS_PER_SCH
-
-

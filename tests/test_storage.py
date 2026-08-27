@@ -105,24 +105,22 @@ class TestStatePersistence:
         s = fresh_state()
         s.credit(address(0), 5000)
         store.save_state(s)
-        balances, nonces, minted, burnt = store.load_state()
+        balances, nonces, minted = store.load_state()
         assert balances[address(0)] == 5000
 
     def test_load_state_restores_nonces(self, store):
         s = fresh_state()
         s.set_nonce(address(0), 7)
         store.save_state(s)
-        _, nonces, _, _ = store.load_state()
+        _, nonces, _ = store.load_state()
         assert nonces[address(0)] == 7
 
     def test_load_state_restores_emission(self, store):
         s = fresh_state()
         s.total_minted = 12345
-        s.total_burnt  = 678
         store.save_state(s)
-        _, _, minted, burnt = store.load_state()
+        _, _, minted = store.load_state()
         assert minted == 12345
-        assert burnt == 678
 
     def test_save_state_replaces_previous(self, store):
         s1 = fresh_state()
@@ -131,7 +129,7 @@ class TestStatePersistence:
         s2 = fresh_state()
         s2.credit(address(0), 9999)
         store.save_state(s2)
-        balances, _, _, _ = store.load_state()
+        balances, _, _ = store.load_state()
         assert balances[address(0)] == 9999
 
 
@@ -222,7 +220,7 @@ class TestSaveBlockAndState:
         s.credit(address(0), 42_000)
         store.save_block_and_state(b1, s)
         assert store.chain_height() == 1
-        balances, _, _, _ = store.load_state()
+        balances, _, _ = store.load_state()
         assert balances[address(0)] == 42_000
 
 
@@ -246,7 +244,7 @@ class TestReplaceChainAndState:
         store.replace_chain_and_state(fork_point=1, blocks=[b1_new], state=s2)
 
         assert store.chain_height() == 1
-        balances, _, _, _ = store.load_state()
+        balances, _, _ = store.load_state()
         assert balances[address(0)] == 9999
 
 

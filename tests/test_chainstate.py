@@ -19,10 +19,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import block as block_mod
 import state as state_mod
 from chainstate import ChainState
-import pob as pob_mod
 from params import INITIAL_FEE_RATE, EMBERS_PER_SCH
 from tests.fixtures import (
-    address, genesis, make_block, make_burn_tx, make_tx, seed_balance,
+    address, genesis, make_block, make_tx, seed_balance,
 )
 
 
@@ -56,7 +55,6 @@ class TestFromGenesis:
     def test_state_is_empty(self):
         cs = ChainState.from_genesis()
         assert cs.state.total_minted == 0
-        assert cs.state.total_burnt == 0
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +123,6 @@ class TestValidateAndApply:
         assert cs2.state.get_balance(address(1)) == EMBERS_PER_SCH
 
     def test_fees_credited_to_builder_after_valid_block(self):
-        from params import BUILDER_REWARD_SHARE
-
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
         cs.state.total_minted += 100 * EMBERS_PER_SCH
@@ -136,53 +132,31 @@ class TestValidateAndApply:
         b = make_block(1, g["hash"], [t], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
-        # Builder receives the fee plus its fixed floor share of the reward
-        expected = t["fee"] + int(reward * BUILDER_REWARD_SHARE)
+        # Builder receives the fee plus the full block reward.
+        expected = t["fee"] + reward
         assert cs2.state.get_balance(address(2)) == expected
 
 
 # ---------------------------------------------------------------------------
-# 3b. Builder reward floor (unconditional, independent of burn activity)
+# 3b. Builder reward (unconditional, full reward, no split)
 # ---------------------------------------------------------------------------
 
-class TestBuilderRewardFloor:
-    def test_builder_earns_floor_share_with_no_burns_and_no_txs(self):
+class TestBuilderReward:
+    def test_builder_earns_full_reward_with_no_txs(self):
         cs = ChainState.from_genesis()
+        reward = cs.state.compute_block_reward()
         b = make_block(1, cs.tip["hash"], [], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
-        assert cs2.state.get_balance(address(2)) > 0
+        assert cs2.state.get_balance(address(2)) == reward
 
-    def test_floor_share_is_constant_regardless_of_burns(self):
-        """The builder's floor share is the same fraction of the reward
-        whether or not anyone burned in the window -- no incentive to
-        exclude burn transactions."""
-        from params import BUILDER_REWARD_SHARE
-
-        cs_no_burn = ChainState.from_genesis()
-        reward = cs_no_burn.state.compute_block_reward()
-        b1 = make_block(1, cs_no_burn.tip["hash"], [], builder_index=2)
-        _, _, cs1 = cs_no_burn.validate_and_apply(b1)
-        floor_no_burn = cs1.state.get_balance(address(2))
-        assert floor_no_burn == int(reward * BUILDER_REWARD_SHARE)
-
-        cs_burn = ChainState.from_genesis()
-        cs_burn.state.credit(address(0), 1000 * EMBERS_PER_SCH)
-        t = make_burn_tx(0, 10 * EMBERS_PER_SCH, cs_burn.state, 0)
-        # The intentional burn increases total_burnt, which bumps can_mint
-        # (and therefore the reward) -- compute it post-tx to match what
-        # _apply_builder_reward actually sees.
-        post_tx = cs_burn.state.snapshot()
-        post_tx.apply_tx(t)
-        reward2 = post_tx.compute_block_reward()
-
-        b2 = make_block(1, cs_burn.tip["hash"], [t], builder_index=2)
-        ok, err, cs2 = cs_burn.validate_and_apply(b2)
-        assert ok is True, err
-        floor_with_burn = int(reward2 * BUILDER_REWARD_SHARE)
-        # Builder (not the burner) gets exactly its fee plus the fixed floor
-        # share -- the same fraction of the reward as the no-burn case above.
-        assert cs2.state.get_balance(address(2)) == t["fee"] + floor_with_burn
+    def test_reward_is_full_amount_not_a_fraction(self):
+        cs = ChainState.from_genesis()
+        reward = cs.state.compute_block_reward()
+        b1 = make_block(1, cs.tip["hash"], [], builder_index=2)
+        _, _, cs1 = cs.validate_and_apply(b1)
+        assert cs1.state.get_balance(address(2)) == reward
+        assert reward > 0
 
 
 # ---------------------------------------------------------------------------
@@ -222,11 +196,6 @@ class TestFromStorage:
         # The state provided is used directly
         assert cs.state.get_balance(address(99)) == 999_999
 
-    def test_from_storage_builds_burn_window(self):
-        g = genesis()
-        cs = ChainState.from_storage([g], state_mod.State())
-        assert cs.burn_window is not None
-
 
 # ---------------------------------------------------------------------------
 # 6. is_better_than (fork choice: cumulative proven work)
@@ -249,8 +218,8 @@ class TestIsBetterThan:
         blk_b = dict(g)
         blk_a["hash"] = "aa" * 32
         blk_b["hash"] = "bb" * 32
-        cs_a = ChainState([blk_a], cs.state.snapshot(), cs.burn_window.copy())
-        cs_b = ChainState([blk_b], cs.state.snapshot(), cs.burn_window.copy())
+        cs_a = ChainState([blk_a], cs.state.snapshot())
+        cs_b = ChainState([blk_b], cs.state.snapshot())
         assert cs_a.is_better_than(cs_b)  # "aa..." < "bb..."
         assert not cs_b.is_better_than(cs_a)
 
@@ -273,10 +242,10 @@ class TestIsBetterThan:
         count: a shorter chain whose blocks each proved more iterations
         can outweigh a longer chain of cheaper blocks."""
         cs = ChainState.from_genesis()
-        heavy = ChainState(cs.chain, cs.state, cs.burn_window,
+        heavy = ChainState(cs.chain, cs.state,
                             cumulative_iterations=1_000_000)
         light = ChainState(cs.chain + [make_block(1, cs.tip["hash"], [])],
-                            cs.state, cs.burn_window,
+                            cs.state,
                             cumulative_iterations=500_000)
         assert heavy.is_better_than(light)
         assert not light.is_better_than(heavy)
@@ -310,24 +279,3 @@ class TestApplyBlock:
         b1 = make_block(1, g["hash"], [t])
         cs2 = cs.apply_block(b1)
         assert cs2.state.get_balance(address(1)) == EMBERS_PER_SCH
-
-
-# ---------------------------------------------------------------------------
-# 9. from_chain with transactions -- verifies state is correctly accumulated
-# ---------------------------------------------------------------------------
-
-# ---------------------------------------------------------------------------
-# 10. _build_window -- shared by from_storage
-# ---------------------------------------------------------------------------
-
-class TestBuildWindow:
-    def test_build_window_for_genesis_only(self):
-        g = genesis()
-        window = ChainState._build_window([g])
-        assert window.sender_totals() == {}
-
-    def test_build_window_for_two_blocks(self):
-        g = genesis()
-        b1 = make_block(1, g["hash"], [])
-        window = ChainState._build_window([g, b1])
-        assert window.sender_totals() == {}

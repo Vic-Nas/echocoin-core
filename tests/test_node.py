@@ -204,7 +204,7 @@ class TestSimpleAccessors:
         info = node.get_info()
         for key in ["height", "tip_hash", "genesis_hash", "fee_rate",
                     "mempool_size", "address", "peer_count", "total_minted",
-                    "total_burnt", "can_mint", "block_reward"]:
+                    "can_mint", "block_reward"]:
             assert key in info
 
     def test_get_info_can_mint_is_the_pool_not_the_reward(self, node_env):

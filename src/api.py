@@ -13,14 +13,13 @@ Public app  (default port 8333, externally reachable):
     GET  /explorer/tx/<hash>          transaction detail
     GET  /address?addr=<addr>         address balance and history
     GET  /whitepaper                  protocol whitepaper
-    GET  /stats                       emission and burn chart
-    GET  /send                        403 — local interface only
-    GET  /burn                        403 — local interface only
+    GET  /stats                       emission chart
+    GET  /send                        403 (local interface only)
 
   JSON API (Content-Type: application/json):
     GET  /api/info
          {"height", "tip_hash", "genesis_hash", "fee_rate", "mempool_size",
-          "address", "peer_count", "total_minted", "total_burnt", "can_mint",
+          "address", "peer_count", "total_minted", "can_mint",
           "block_reward"}
 
     GET  /api/fee_rate
@@ -39,7 +38,7 @@ Public app  (default port 8333, externally reachable):
          {"size": <n>, "transactions": [{"hash", "from", "outputs", "fee"}, ...]}
 
     GET  /api/stats
-         {"points": [...], "totals": {"minted", "total_burnt", "circulating",
+         {"points": [...], "totals": {"minted", "circulating",
           "can_mint", "supply_cap", "net_emission_last", "embers_per_sch"}}
 
     POST /api/tx/send                 rate-limited: 20 requests/second
@@ -54,7 +53,6 @@ Public app  (default port 8333, externally reachable):
 Private app  (default port 8334, 127.0.0.1 only):
   All public UI and JSON API endpoints, plus:
     GET/POST /send                    build and sign a send transaction
-    GET/POST /burn                    build and sign a burn transaction
     POST     /api/peers/add           {"host": <str>, "port": <int>}
 """
 
@@ -69,8 +67,7 @@ from flask_limiter.util import get_remote_address
 
 import crypto as crypto_mod
 import tx as tx_mod
-from params import POB_WINDOW, EMBERS_PER_SCH, SUPPLY_CAP
-from pob import BURN_ADDRESS
+from params import EMBERS_PER_SCH, SUPPLY_CAP
 
 log = logging.getLogger("ec.api")
 
@@ -316,8 +313,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         net_last = pts[-1]["net_emission"] if pts else 0
         return jsonify({"points": pts, "totals": {
             "minted":           sv.total_minted,
-            "total_burnt":      sv.total_burnt,
-            "circulating":      sv.total_minted - sv.total_burnt,
+            "circulating":      sv.total_minted,
             "can_mint":         sv.compute_can_mint(),
             "supply_cap":       SUPPLY_CAP,
             "net_emission_last": net_last,
@@ -369,17 +365,11 @@ def create_app(node, pool, private_port=8334, public_port=8333):
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=False)
 
-    # Send/Burn disabled on public port; show locked page
+    # Send disabled on public port; show locked page
     @app.route("/send")
     def send_locked():
         return render_template("error.html", title="Send",
             message=f"Send is only available on the local interface "
-                    f"(localhost:{private_port})."), 403
-
-    @app.route("/burn")
-    def burn_locked():
-        return render_template("error.html", title="Burn",
-            message=f"Burn is only available on the local interface "
                     f"(localhost:{private_port})."), 403
 
     return app
@@ -427,36 +417,6 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
                 if ctx["alert_ok"]:
                     ctx["alert_ok"] = ctx["alert_ok"].replace("Submitted.", "Sent.")
         return render_template("send.html", **ctx)
-
-    @app.route("/burn", methods=["GET", "POST"])
-    def burn():
-        v = node.view
-        balance     = v.state.get_balance(node.addr)
-        bw          = v.burn_window
-        burn_totals = bw.sender_totals()
-        total_burn  = sum(burn_totals.values())
-        ctx = dict(title="Burn", from_addr=node.addr, balance=balance,
-                   my_burn=burn_totals.get(node.addr, 0),
-                   total_burn=total_burn,
-                   sorted_burners=sorted(burn_totals.items(), key=lambda x: -x[1]),
-                   burn_history=bw.history(),
-                   pob_window=POB_WINDOW, alert_ok="", alert_err="")
-        if request.method == "POST":
-            raw        = request.form.get("amount", "").strip()
-            passphrase = request.form.get("passphrase", "").strip()
-            try:
-                burn_embers = int(raw)
-                if burn_embers <= 0:
-                    raise ValueError("must be positive")
-            except ValueError as e:
-                ctx["alert_err"] = f"Invalid amount: {e}"
-            else:
-                if burn_embers > balance:
-                    ctx["alert_err"] = "Insufficient balance."
-                else:
-                    burn_out = {"to": BURN_ADDRESS, "amount": burn_embers}
-                    _submit_and_alert(node, [burn_out], passphrase, ctx)
-        return render_template("burn.html", **ctx)
 
     @app.route("/api/peers/add", methods=["POST"])
     def api_add_peer():
