@@ -50,6 +50,16 @@ class Emission(_Base):
     value = IntegerField(default=0)
 
 
+class Escrow(_Base):
+    """Fees debited from a confirmation's broadcaster, held until whichever
+    resolver's solution lands first (state.py apply_confirmation/
+    apply_resolution). Must be persisted like balances -- an unresolved
+    confirmation's fee otherwise vanishes on restart instead of eventually
+    reaching a resolver."""
+    confirmed_tx_hash = TextField(primary_key=True)
+    fee               = IntegerField()
+
+
 class Meta(_Base):
     key   = TextField(primary_key=True)
     value = TextField()
@@ -70,7 +80,7 @@ class AddrIndex(_Base):
         indexes = ((("addr",), False),)
 
 
-_TABLES = [Block, State, Emission, Meta, TxIndex, AddrIndex]
+_TABLES = [Block, State, Emission, Escrow, Meta, TxIndex, AddrIndex]
 
 
 class Storage:
@@ -176,6 +186,13 @@ class Storage:
             State.insert_many(rows).execute()
         Emission.insert(key="total_minted", value=state.total_minted).on_conflict_replace().execute()
 
+        escrow = state.all_escrow()
+        Escrow.delete().execute()
+        if escrow:
+            Escrow.insert_many([
+                {"confirmed_tx_hash": h, "fee": fee} for h, fee in escrow.items()
+            ]).execute()
+
     def save_state(self, state):
         with db.atomic():
             self._save_state_inner(state)
@@ -185,7 +202,8 @@ class Storage:
         balances    = {r.addr: r.balance for r in rows}
         used_nonces = {r.addr: json.loads(r.used_nonces) for r in rows}
         em          = {r.key: r.value for r in Emission.select()}
-        return balances, used_nonces, em.get("total_minted", 0)
+        escrow      = {r.confirmed_tx_hash: r.fee for r in Escrow.select()}
+        return balances, used_nonces, em.get("total_minted", 0), escrow
 
     def state_exists(self):
         return State.select().exists()

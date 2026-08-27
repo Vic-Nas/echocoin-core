@@ -105,22 +105,34 @@ class TestStatePersistence:
         s = fresh_state()
         s.credit(address(0), 5000)
         store.save_state(s)
-        balances, used_nonces, minted = store.load_state()
+        balances, used_nonces, minted, escrow = store.load_state()
         assert balances[address(0)] == 5000
 
     def test_load_state_restores_used_nonces(self, store):
         s = fresh_state()
         s.mark_nonce_used(address(0), "ab" * 16)
         store.save_state(s)
-        _, used_nonces, _ = store.load_state()
+        _, used_nonces, _, _ = store.load_state()
         assert used_nonces[address(0)] == ["ab" * 16]
 
     def test_load_state_restores_emission(self, store):
         s = fresh_state()
         s.total_minted = 12345
         store.save_state(s)
-        _, _, minted = store.load_state()
+        _, _, minted, _ = store.load_state()
         assert minted == 12345
+
+    def test_load_state_restores_escrow(self, store):
+        """An unresolved confirmation's escrowed fee must survive a
+        restart, or it would silently vanish instead of eventually
+        reaching whichever resolver solves the puzzle."""
+        s = fresh_state()
+        s.credit(address(0), 1000)
+        confirm = {"broadcaster": address(0), "fee": 100}
+        s.apply_confirmation(confirm, "deadbeef")
+        store.save_state(s)
+        _, _, _, escrow = store.load_state()
+        assert escrow["deadbeef"] == 100
 
     def test_save_state_replaces_previous(self, store):
         s1 = fresh_state()
@@ -129,7 +141,7 @@ class TestStatePersistence:
         s2 = fresh_state()
         s2.credit(address(0), 9999)
         store.save_state(s2)
-        balances, _, _ = store.load_state()
+        balances, _, _, _ = store.load_state()
         assert balances[address(0)] == 9999
 
 
@@ -236,7 +248,7 @@ class TestSaveBlockAndState:
         s.credit(address(0), 42_000)
         store.save_block_and_state(b1, s)
         assert store.chain_height() == 1
-        balances, _, _ = store.load_state()
+        balances, _, _, _ = store.load_state()
         assert balances[address(0)] == 42_000
 
 
@@ -260,7 +272,7 @@ class TestReplaceChainAndState:
         store.replace_chain_and_state(fork_point=1, blocks=[b1_new], state=s2)
 
         assert store.chain_height() == 1
-        balances, _, _ = store.load_state()
+        balances, _, _, _ = store.load_state()
         assert balances[address(0)] == 9999
 
 

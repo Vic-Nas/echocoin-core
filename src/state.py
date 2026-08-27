@@ -132,15 +132,20 @@ class State:
 
     @classmethod
     def from_snapshot(cls, balances: dict, used_nonces: dict,
-                      total_minted: int) -> "State":
+                      total_minted: int, escrow: dict | None = None) -> "State":
         """Restore a State from persisted data. Replaces direct field assignment.
 
         used_nonces: addr -> set/list of nonce strings already spent.
+        escrow: confirmed_tx_hash -> fee ticks still awaiting a resolver.
+        Without this, a confirmation still pending at restart would have
+        its escrowed fee silently vanish instead of eventually reaching
+        whichever resolver solves it.
         """
         s = cls()
         s._balances    = balances
         s._used_nonces = {addr: set(nonces) for addr, nonces in used_nonces.items()}
         s.total_minted = total_minted
+        s._escrow      = dict(escrow) if escrow else {}
         return s
 
     def all_escrow(self):

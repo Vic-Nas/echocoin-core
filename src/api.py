@@ -73,7 +73,7 @@ log = logging.getLogger("ec.api")
 # Nodes keep full history, so both the block list and an address's
 # transaction history are paginated rather than truncated to "recent N".
 BLOCKS_PER_PAGE  = 12
-HISTORY_PER_PAGE = 12
+HISTORY_PER_PAGE = 3
 
 
 # ---------------------------------------------------------------------------
