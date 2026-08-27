@@ -1,3 +1,4 @@
+# PYTHON_ARGCOMPLETE_OK
 """Entry point. Creates PeerPool, UDPTransport, Discovery, Gossip, Syncer, Node, API."""
 
 import os as _os, sys as _sys
