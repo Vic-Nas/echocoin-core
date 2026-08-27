@@ -23,7 +23,7 @@
     <thead><tr><th>Height</th><th>Tx hash</th><th>Direction</th><th>Amount</th></tr></thead>
     <tbody>
     {% if history %}
-      {% for height, h, direction, t in history | reverse %}
+      {% for height, h, direction, t in history %}
       <tr>
         <td>{{ height }}</td>
         <td><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
@@ -37,5 +37,7 @@
     </tbody>
   </table>
 </div>
+{% if has_prev %}<a href="/address?addr={{ addr }}&page={{ page - 1 }}" style="margin-right:1rem">&larr; newer</a>{% endif %}
+{% if has_next %}<a href="/address?addr={{ addr }}&page={{ page + 1 }}">older &rarr;</a>{% endif %}
 {% endif %}
 {% endblock %}

@@ -21,4 +21,6 @@
     </tbody>
   </table>
 </div>
+{% if has_prev %}<a href="/explorer?page={{ page - 1 }}" style="margin-right:1rem">&larr; newer</a>{% endif %}
+{% if has_next %}<a href="/explorer?page={{ page + 1 }}">older &rarr;</a>{% endif %}
 {% endblock %}

@@ -70,6 +70,11 @@ from params import TICKS_PER_LAPSE, SUPPLY_CAP
 
 log = logging.getLogger("ec.api")
 
+# Nodes keep full history, so both the block list and an address's
+# transaction history are paginated rather than truncated to "recent N".
+BLOCKS_PER_PAGE  = 12
+HISTORY_PER_PAGE = 12
+
 
 # ---------------------------------------------------------------------------
 # Formatting helpers
@@ -172,8 +177,14 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/explorer", endpoint=pfx+"explorer")
     def explorer():
+        chain = node.view.chain
+        page  = max(request.args.get("page", 1, type=int) or 1, 1)
+        total = len(chain)
+        end   = max(total - (page - 1) * BLOCKS_PER_PAGE, 0)
+        start = max(end - BLOCKS_PER_PAGE, 0)
         return render_template("explorer.html", title="Explorer",
-            recent=node.view.chain[-20:][::-1])
+            recent=chain[start:end][::-1], page=page,
+            has_prev=page > 1, has_next=start > 0)
 
     @app.route("/explorer/block/<int:height>", endpoint=pfx+"block_detail")
     def block_detail(height):
@@ -216,8 +227,9 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/address", methods=["GET", "POST"], endpoint=pfx+"address_lookup")
     def address_lookup():
         addr = request.args.get("addr", "").strip()
-        ctx = dict(title="Address", addr=addr, alert_err="",
-                   history=None, balance=0, tx_count=0)
+        page = max(request.args.get("page", 1, type=int) or 1, 1)
+        ctx = dict(title="Address", addr=addr, alert_err="", page=page,
+                   history=None, balance=0, tx_count=0, has_prev=False, has_next=False)
         if addr and not crypto_mod.is_valid_address(addr):
             ctx["alert_err"] = "Invalid address format."
             ctx["addr"] = ""
@@ -225,7 +237,12 @@ def _shared_read_only_routes(app, node, pool, limiter,
             v = node.view
             ctx["balance"]  = v.state.get_balance(addr)
             ctx["tx_count"] = v.state.nonce_count(addr)
-            ctx["history"]  = _get_address_history(addr, node)
+            newest_first = _get_address_history(addr, node)[::-1]
+            start = (page - 1) * HISTORY_PER_PAGE
+            end   = start + HISTORY_PER_PAGE
+            ctx["history"]  = newest_first[start:end]
+            ctx["has_prev"] = page > 1
+            ctx["has_next"] = end < len(newest_first)
         return render_template("address.html", **ctx)
 
     @app.route("/whitepaper", endpoint=pfx+"whitepaper")
