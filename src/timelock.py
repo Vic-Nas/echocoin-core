@@ -136,23 +136,56 @@ def generate_puzzle(payload: bytes, iterations: int = TIMELOCK_ITERATIONS) -> di
     }
 
 
-def solve_puzzle(N: int, x: int, ciphertext_hex: str,
-                  iterations: int = TIMELOCK_ITERATIONS) -> bytes:
-    """Solve a puzzle by brute-force sequential squaring, then decrypt.
+def solve_for_key(N: int, x: int, iterations: int = TIMELOCK_ITERATIONS) -> int:
+    """Recover K = x^(2^T) mod N by brute-force sequential squaring.
 
-    Public and reproducible: anyone with (N, x, ciphertext, iterations) can
-    run this. No shortcut exists without the factorization of N. Raises
-    ValueError (via AESGCM) if the derived key is wrong, which cannot
-    happen for a correctly-solved puzzle.
+    Public and reproducible: anyone with (N, x, iterations) can run this.
+    No shortcut exists without the factorization of N. This is the
+    expensive step (~T squarings); verifying a published K afterward is
+    cheap (see verify_resolution) since it only requires one AEAD decrypt.
     """
     y = x
     for _ in range(iterations):
         y = pow(y, 2, N)
-    key = _derive_key(y, N.bit_length())
+    return y
 
+
+def decrypt_with_key(K: int, modulus_bit_len: int, ciphertext_hex: str) -> bytes:
+    """Decrypt a puzzle's ciphertext given the already-solved K.
+
+    Raises (via AESGCM) if K is wrong -- the AEAD tag check fails, so a
+    forged or incorrect K cannot be used to produce a plausible-looking
+    fake payload.
+    """
+    key = _derive_key(K, modulus_bit_len)
     blob = bytes.fromhex(ciphertext_hex)
     nonce, ct = blob[:_NONCE_LEN], blob[_NONCE_LEN:]
     return AESGCM(key).decrypt(nonce, ct, None)
+
+
+def solve_puzzle(N: int, x: int, ciphertext_hex: str,
+                  iterations: int = TIMELOCK_ITERATIONS) -> bytes:
+    """Convenience wrapper: solve for K, then decrypt. See solve_for_key
+    and decrypt_with_key for the two steps this composes."""
+    K = solve_for_key(N, x, iterations)
+    return decrypt_with_key(K, N.bit_length(), ciphertext_hex)
+
+
+def verify_resolution(N: int, K: int, ciphertext_hex: str,
+                       expected_payload: bytes) -> bool:
+    """Cheaply verify a published resolution (N, K, ciphertext) decrypts to
+    exactly expected_payload. O(1) crypto (one AEAD decrypt + compare) --
+    does NOT require redoing the T squarings, which is what makes
+    resolutions fast for every node to check even though solving them was
+    slow. There is deliberately no way to verify who performed the T
+    squarings first; only that the published K is correct (whitepaper:
+    fee-fairness limitation, not a security one).
+    """
+    try:
+        payload = decrypt_with_key(K, N.bit_length(), ciphertext_hex)
+    except Exception:
+        return False
+    return payload == expected_payload
 
 
 def get_timelock_iterations(chain) -> int:

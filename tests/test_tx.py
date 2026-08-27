@@ -1,15 +1,14 @@
 """
-Unit tests for tx.py
+Unit tests for tx.py: the ciphertext transaction format.
 
-Covers: create, tx_hash, tx_size, tx_size_in_block, compute_fee, validate
-(fields/outputs, signature, nonce, fee, balance checks), sort_txs.
+Covers: inner payload creation/validation, confirmation creation/
+validation (fields, signature, fee, balance), resolution creation/
+validation, tx_hash/tx_size, sort_txs.
 
-All tests are pure and local -- no network, no chain, no disk.
-Whitepaper constraints enforced:
-  - fee = tx_size_bytes * fee_rate  (Section 2)
-  - fee goes to block builder
-  - burn output "to" == "burn"
-  - outputs must be non-empty, amounts positive
+All tests are pure and local -- no network, no chain, no disk. Uses
+fixtures.TEST_ITERATIONS (a tiny puzzle difficulty) so solving is instant;
+the real TIMELOCK_ITERATIONS is a separate, much larger protocol constant
+never exercised directly in unit tests.
 """
 
 import os
@@ -24,13 +23,10 @@ import tx as tx_mod
 import state as state_mod
 from params import INITIAL_FEE_RATE, TICKS_PER_LAPSE
 from tests.fixtures import (
-    keypair, address, pubkey_hex, make_tx, seed_balance
+    keypair, address, pubkey_hex, make_tx, make_confirmation,
+    solve_confirmation, apply_transfer, seed_balance,
 )
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 def fresh_state():
     return state_mod.State()
@@ -41,379 +37,308 @@ def get_fee_rate(height):
 
 
 # ---------------------------------------------------------------------------
-# 1. Transaction creation
+# 1. Inner payload
 # ---------------------------------------------------------------------------
 
-class TestCreate:
+class TestInnerPayload:
     def test_create_returns_dict_with_required_fields(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        for field in ["from", "pubkey", "outputs", "nonce", "fee_height", "fee", "signature"]:
-            assert field in t
+        inner = tx_mod.create_inner_payload(
+            address(0), pubkey_hex(0), [{"to": address(1), "amount": 1}],
+            1, keypair(0)[0])
+        for field in ["from", "pubkey", "outputs", "nonce", "signature"]:
+            assert field in inner
 
-    def test_signature_is_hex_string(self):
+    def test_valid_inner_payload_passes(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        assert isinstance(t["signature"], str)
-        bytes.fromhex(t["signature"])  # must not raise
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        ok, err = tx_mod.validate_inner_payload(resolve["payload"], s)
+        assert ok is True, err
 
-    def test_pubkey_is_hex_string(self):
+    def test_inner_signature_must_match_from_address(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        assert isinstance(t["pubkey"], str)
-        bytes.fromhex(t["pubkey"])
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        payload = dict(resolve["payload"])
+        payload["pubkey"] = pubkey_hex(2)
+        ok, err = tx_mod.validate_inner_payload(payload, s)
+        assert ok is False
 
-    def test_from_address_matches_pubkey(self):
+    def test_inner_nonce_must_be_sequential(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        pk_bytes = bytes.fromhex(t["pubkey"])
-        expected_addr = crypto.public_key_to_address(pk_bytes)
-        assert t["from"] == expected_addr
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10,
+                                    nonce_override=5)
+        ok, err = tx_mod.validate_inner_payload(resolve["payload"], s)
+        assert ok is False
+        assert "nonce" in err
 
-    def test_nonce_increments(self):
+    def test_inner_balance_checked_against_outputs_only_no_fee(self):
+        """The inner payload carries no fee (fee is collected from the
+        broadcaster at confirmation time), so its balance check is against
+        total outputs alone."""
         s = fresh_state()
-        seed_balance(s, 0, 1000.0)
-        t1 = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        s.apply_tx(t1)
-        t2 = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        assert t2["nonce"] == t1["nonce"] + 1
+        s.credit(address(0), TICKS_PER_LAPSE)
+        s.total_minted += TICKS_PER_LAPSE
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        ok, err = tx_mod.validate_inner_payload(resolve["payload"], s)
+        assert ok is True, err
 
 
 # ---------------------------------------------------------------------------
-# 2. tx_hash
+# 2. Confirmation: fields, signature, fee, balance
 # ---------------------------------------------------------------------------
 
-class TestTxHash:
+class TestConfirmationFields:
+    def test_valid_confirmation_passes(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
+        assert ok is True, err
+
+    def test_missing_field_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        del confirm["broadcaster"]
+        ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
+        assert ok is False
+        assert "missing field" in err
+
+    def test_wrong_kind_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        confirm["kind"] = "resolve"
+        ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
+        assert ok is False
+
+    def test_malformed_puzzle_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        confirm["puzzle"]["N"] = "not hex!!"
+        ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
+        assert ok is False
+
+    def test_negative_fee_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        confirm["fee"] = -1
+        ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
+        assert ok is False
+
+
+class TestConfirmationSignature:
+    def test_wrong_pubkey_for_broadcaster_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        confirm["pubkey"] = pubkey_hex(2)
+        ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
+        assert ok is False
+        assert "pubkey" in err or "signature" in err
+
+    def test_tampered_signature_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        confirm["signature"] = "00" * 752
+        ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
+        assert ok is False
+
+    def test_broadcaster_need_not_be_real_sender(self):
+        """Protocol requirement: broadcaster != sender must be accepted."""
+        s = fresh_state()
+        seed_balance(s, 0)
+        seed_balance(s, 9)  # broadcaster needs balance to cover the fee
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, broadcaster_index=9)
+        assert confirm["broadcaster"] == address(9)
+        assert resolve["payload"]["from"] == address(0)
+        ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
+        assert ok is True, err
+
+
+class TestConfirmationFeeAndBalance:
+    def test_fee_mismatch_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        sk, _ = keypair(0)
+        confirm["fee"] = confirm["fee"] + 999
+        msg = crypto.serialize_for_signing(confirm)
+        confirm["signature"] = crypto.sign(msg, sk).hex()
+        ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
+        assert ok is False
+        assert "fee mismatch" in err
+
+    def test_fee_height_in_future_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, fee_height_override=15)
+        ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
+        assert ok is False
+        assert "future" in err
+
+    def test_insufficient_balance_for_fee_fails(self):
+        s = fresh_state()  # broadcaster has zero balance
+        inner = tx_mod.create_inner_payload(
+            address(0), pubkey_hex(0), [{"to": address(1), "amount": 1}], 1, keypair(0)[0])
+        confirm = make_confirmation(0, inner, fee_height=10)
+        ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
+        assert ok is False
+        assert "insufficient" in err
+
+    def test_only_fee_is_checked_not_transfer_amount(self):
+        """The broadcaster's balance check covers the fee only -- the real
+        transfer amount is invisible until resolution."""
+        s = fresh_state()
+        s.credit(address(0), 1)  # tiny balance: can't cover a real transfer
+        s.total_minted += 1
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        # Give exactly the fee as balance (already credited 1 tick, bump to fee amount)
+        s.credit(address(0), confirm["fee"])
+        ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
+        assert ok is True, err
+
+
+# ---------------------------------------------------------------------------
+# 3. Resolution
+# ---------------------------------------------------------------------------
+
+class TestResolution:
+    def test_valid_resolution_passes(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        ok, err = tx_mod.validate_resolution(resolve, confirm, s)
+        assert ok is True, err
+
+    def test_unknown_confirmation_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        ok, err = tx_mod.validate_resolution(resolve, None, s)
+        assert ok is False
+        assert "confirmed_tx_hash" in err
+
+    def test_wrong_key_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        resolve = dict(resolve)
+        resolve["K_hex"] = format(int(resolve["K_hex"], 16) ^ 1, "x")
+        ok, err = tx_mod.validate_resolution(resolve, confirm, s)
+        assert ok is False
+
+    def test_tampered_payload_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        resolve = dict(resolve)
+        resolve["payload"] = dict(resolve["payload"])
+        resolve["payload"]["outputs"] = [{"to": address(9), "amount": 999}]
+        ok, err = tx_mod.validate_resolution(resolve, confirm, s)
+        assert ok is False
+
+    def test_invalid_resolver_address_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        resolve = dict(resolve)
+        resolve["resolver"] = "not.an.address"
+        ok, err = tx_mod.validate_resolution(resolve, confirm, s)
+        assert ok is False
+
+    def test_first_solver_identity_cannot_be_proven(self):
+        """Whitepaper: no cryptographic way exists to prove who solved
+        first. Anyone who has seen a published resolution can resubmit it
+        under their own resolver address and it still validates -- this
+        is a known, accepted fee-fairness limitation, not a bug."""
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, resolver_index=1)
+        hijacked = dict(resolve)
+        hijacked["resolver"] = address(7)
+        ok, err = tx_mod.validate_resolution(hijacked, confirm, s)
+        assert ok is True, err
+
+
+# ---------------------------------------------------------------------------
+# 4. tx_hash / tx_size
+# ---------------------------------------------------------------------------
+
+class TestTxHashAndSize:
     def test_hash_returns_64_char_hex(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        h = tx_mod.tx_hash(t)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        h = tx_mod.tx_hash(confirm)
         assert isinstance(h, str) and len(h) == 64
 
     def test_hash_is_deterministic(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        assert tx_mod.tx_hash(t) == tx_mod.tx_hash(t)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        assert tx_mod.tx_hash(confirm) == tx_mod.tx_hash(confirm)
 
-    def test_different_txs_have_different_hashes(self):
+    def test_different_confirmations_have_different_hashes(self):
         s = fresh_state()
         seed_balance(s, 0, 1000.0)
-        t1 = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        s.apply_tx(t1)
-        t2 = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        assert tx_mod.tx_hash(t1) != tx_mod.tx_hash(t2)
+        confirm1, resolve1 = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        apply_transfer(s, confirm1, resolve1)
+        confirm2, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        assert tx_mod.tx_hash(confirm1) != tx_mod.tx_hash(confirm2)
 
-    def test_hash_includes_signature(self):
-        """tx_hash covers the entire tx dict including signature."""
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        h1 = tx_mod.tx_hash(t)
-        t2 = dict(t)
-        t2["signature"] = "00" * 100
-        h2 = tx_mod.tx_hash(t2)
-        assert h1 != h2
-
-
-# ---------------------------------------------------------------------------
-# 3. tx_size and tx_size_in_block
-# ---------------------------------------------------------------------------
-
-class TestTxSize:
     def test_tx_size_excludes_signature(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        size = tx_mod.tx_size(t)
-        assert isinstance(size, int) and size > 0
-        # signature is NOT priced per whitepaper Section 2
-        fields_no_sig = {k: v for k, v in t.items() if k != "signature"}
-        import json
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        size = tx_mod.tx_size(confirm)
+        fields_no_sig = {k: v for k, v in confirm.items() if k != "signature"}
         raw_size = len(crypto.canonical_json(fields_no_sig))
         assert size == raw_size
 
     def test_tx_size_in_block_first_position_no_comma(self):
         s = fresh_state()
         seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        s0 = tx_mod.tx_size_in_block(t, position=0)
-        s1 = tx_mod.tx_size_in_block(t, position=1)
-        assert s1 == s0 + 1  # comma added for non-first
-
-    def test_tx_size_positive(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        assert tx_mod.tx_size(t) > 0
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        s0 = tx_mod.tx_size_in_block(confirm, position=0)
+        s1 = tx_mod.tx_size_in_block(confirm, position=1)
+        assert s1 == s0 + 1
 
 
 # ---------------------------------------------------------------------------
-# 4. compute_fee -- whitepaper: fee = tx_size_bytes * fee_rate
+# 5. compute_fee
 # ---------------------------------------------------------------------------
 
 class TestComputeFee:
-    def test_fee_equals_size_times_rate(self):
+    def test_fee_positive_for_realistic_confirmation(self):
         s = fresh_state()
         seed_balance(s, 0)
-        # Build skeleton to measure size
-        from_addr = address(0)
-        pk_hex_val = pubkey_hex(0)
-        outputs = [{"to": address(1), "amount": TICKS_PER_LAPSE}]
-        nonce = 1
-        fee_height = 10
-        fee = tx_mod.compute_fee(from_addr, pk_hex_val, outputs, nonce, fee_height, INITIAL_FEE_RATE)
-        # The fee, when plugged back in, must equal size * rate
-        skeleton = {"from": from_addr, "pubkey": pk_hex_val, "outputs": outputs,
-                    "nonce": nonce, "fee_height": fee_height, "fee": fee}
-        size = tx_mod.tx_size(skeleton)
-        assert fee == size * INITIAL_FEE_RATE
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        assert confirm["fee"] > 0
 
-    def test_fee_converges_for_realistic_tx(self):
-        from_addr = address(0)
-        pk_hex_val = pubkey_hex(0)
-        outputs = [{"to": address(1), "amount": 50 * TICKS_PER_LAPSE}]
-        fee = tx_mod.compute_fee(from_addr, pk_hex_val, outputs, 1, 10, INITIAL_FEE_RATE)
-        assert fee > 0
-
-    def test_fee_zero_rate_yields_zero(self):
-        from_addr = address(0)
-        pk_hex_val = pubkey_hex(0)
-        outputs = [{"to": address(1), "amount": TICKS_PER_LAPSE}]
-        fee = tx_mod.compute_fee(from_addr, pk_hex_val, outputs, 1, 10, 0)
-        assert fee == 0
+    def test_zero_rate_yields_zero_fee(self):
+        inner = tx_mod.create_inner_payload(
+            address(0), pubkey_hex(0), [{"to": address(1), "amount": 1}], 1, keypair(0)[0])
+        confirm = make_confirmation(0, inner, fee_height=10, fee_rate=0)
+        assert confirm["fee"] == 0
 
     def test_higher_rate_yields_higher_fee(self):
-        from_addr = address(0)
-        pk_hex_val = pubkey_hex(0)
-        outputs = [{"to": address(1), "amount": TICKS_PER_LAPSE}]
-        fee_low  = tx_mod.compute_fee(from_addr, pk_hex_val, outputs, 1, 10, 1)
-        fee_high = tx_mod.compute_fee(from_addr, pk_hex_val, outputs, 1, 10, 100)
-        assert fee_high > fee_low
-
-    def test_more_outputs_increases_fee(self):
-        from_addr = address(0)
-        pk_hex_val = pubkey_hex(0)
-        out1 = [{"to": address(1), "amount": TICKS_PER_LAPSE}]
-        out2 = [{"to": address(1), "amount": TICKS_PER_LAPSE},
-                {"to": address(2), "amount": TICKS_PER_LAPSE}]
-        fee1 = tx_mod.compute_fee(from_addr, pk_hex_val, out1, 1, 10, INITIAL_FEE_RATE)
-        fee2 = tx_mod.compute_fee(from_addr, pk_hex_val, out2, 1, 10, INITIAL_FEE_RATE)
-        assert fee2 > fee1
+        inner = tx_mod.create_inner_payload(
+            address(0), pubkey_hex(0), [{"to": address(1), "amount": 1}], 1, keypair(0)[0])
+        low  = make_confirmation(0, inner, fee_height=10, fee_rate=1)
+        high = make_confirmation(0, inner, fee_height=10, fee_rate=100)
+        assert high["fee"] > low["fee"]
 
 
 # ---------------------------------------------------------------------------
-# 5. validate -- field / output checks
-# ---------------------------------------------------------------------------
-
-class TestValidateFields:
-    def test_valid_tx_passes(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is True, err
-
-    def test_missing_from_field_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        del t["from"]
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-        assert "missing field" in err
-
-    def test_empty_outputs_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        t["outputs"] = []
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-
-    def test_output_with_zero_amount_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, 0, s, 10,
-                    outputs_override=[{"to": address(1), "amount": 0}])
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-
-    def test_output_with_negative_amount_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, -1, s, 10,
-                    outputs_override=[{"to": address(1), "amount": -1}])
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-
-    def test_invalid_recipient_address_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10,
-                    outputs_override=[{"to": "not_an_address", "amount": TICKS_PER_LAPSE}])
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-        assert "invalid address" in err
-
-    def test_negative_fee_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        t["fee"] = -1
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-
-
-# ---------------------------------------------------------------------------
-# 6. validate -- signature check
-# ---------------------------------------------------------------------------
-
-class TestValidateSignature:
-    def test_wrong_pubkey_for_address_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        # Replace pubkey with a different key's hex
-        _, pk2 = keypair(2)
-        t["pubkey"] = pk2.hex()
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-        assert "pubkey" in err or "address" in err
-
-    def test_tampered_signature_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        t["signature"] = "00" * 752
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-
-    def test_non_hex_signature_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        t["signature"] = 12345
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-
-
-# ---------------------------------------------------------------------------
-# 7. validate -- nonce check
-# ---------------------------------------------------------------------------
-
-class TestValidateNonce:
-    def test_correct_nonce_passes(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is True, err
-
-    def test_nonce_too_high_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0, 1000.0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, nonce_override=5)
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-        assert "nonce" in err
-
-    def test_nonce_already_used_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0, 1000.0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        s.apply_tx(t)
-        # Replay the same tx (same nonce)
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-        assert "nonce" in err
-
-
-# ---------------------------------------------------------------------------
-# 8. validate -- fee_height check (whitepaper: fee_height within FEE_HEIGHT_MAX_AGE)
-# ---------------------------------------------------------------------------
-
-class TestValidateFeeHeight:
-    def test_fee_height_in_future_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, fee_height_override=15)
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-        assert "future" in err
-
-    def test_fee_height_too_old_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        # fee_height 0 is too old when tip is 25 and max_age is 20
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 25, fee_height_override=0)
-        ok, err = tx_mod.validate(t, s, 25, get_fee_rate)
-        assert ok is False
-        assert "old" in err
-
-    def test_fee_rate_unavailable_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        ok, err = tx_mod.validate(t, s, 10, lambda h: None)
-        assert ok is False
-
-    def test_wrong_fee_amount_fails(self):
-        """Modify fee then re-sign so the signature check passes and the fee check fires."""
-        s = fresh_state()
-        seed_balance(s, 0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        sk, _ = keypair(0)
-        t["fee"] = t["fee"] + 999  # wrong fee
-        # Re-sign so signature is valid over the tampered fee
-        msg = crypto.serialize_for_signing(t)
-        t["signature"] = crypto.sign(msg, sk).hex()
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-        assert "fee mismatch" in err
-
-
-# ---------------------------------------------------------------------------
-# 9. validate -- balance check (whitepaper: outputs + fee <= balance)
-# ---------------------------------------------------------------------------
-
-class TestValidateBalance:
-    def test_insufficient_balance_fails(self):
-        s = fresh_state()
-        seed_balance(s, 0, 0.001)  # nearly nothing
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        assert ok is False
-        assert "insufficient" in err
-
-    def test_exact_balance_passes(self):
-        s = fresh_state()
-        seed_balance(s, 0, 100.0)
-        # Make a tx that spends everything (balance - fee)
-        from_addr = address(0)
-        pk_hex_val = pubkey_hex(0)
-        bal = s.get_balance(from_addr)
-        # Determine fee first, then send bal - fee
-        outputs_trial = [{"to": address(1), "amount": bal // 2}]
-        fee = tx_mod.compute_fee(from_addr, pk_hex_val, outputs_trial, 1, 10, INITIAL_FEE_RATE)
-        send_amt = bal - fee
-        outputs = [{"to": address(1), "amount": send_amt}]
-        fee2 = tx_mod.compute_fee(from_addr, pk_hex_val, outputs, 1, 10, INITIAL_FEE_RATE)
-        sk, _ = keypair(0)
-        t = tx_mod.create(from_addr, pk_hex_val, outputs, 1, 10, fee2, sk)
-        # Adjust if fee changed (send_amt - fee2 delta)
-        ok, err = tx_mod.validate(t, s, 10, get_fee_rate)
-        # Either ok or insufficient -- depends on fee convergence detail, but no crash
-        assert isinstance(ok, bool)
-
-
-# ---------------------------------------------------------------------------
-# 10. sort_txs
+# 6. sort_txs (confirmations only, no per-broadcaster nonce component)
 # ---------------------------------------------------------------------------
 
 class TestSortTxs:
@@ -423,19 +348,19 @@ class TestSortTxs:
     def test_sorted_by_fee_height_asc(self):
         s = fresh_state()
         seed_balance(s, 0, 1000.0)
-        t1 = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, fee_height_override=10)
-        s.apply_tx(t1)
-        t2 = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, fee_height_override=8)
-        txs = tx_mod.sort_txs([t1, t2])
+        c1, r1 = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, fee_height_override=10)
+        apply_transfer(s, c1, r1)
+        c2, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, fee_height_override=8)
+        txs = tx_mod.sort_txs([c1, c2])
         assert txs[0]["fee_height"] <= txs[1]["fee_height"]
 
     def test_sort_is_stable_by_hash_tiebreak(self):
-        """When fee_height and nonce are equal, tx_hash breaks the tie deterministically."""
         s = fresh_state()
         seed_balance(s, 0, 1000.0)
         seed_balance(s, 1, 1000.0)
-        t1 = make_tx(0, 2, TICKS_PER_LAPSE, s, 10)
-        t2 = make_tx(1, 2, TICKS_PER_LAPSE, s, 10)
-        sorted_once = tx_mod.sort_txs([t1, t2])
-        sorted_twice = tx_mod.sort_txs([t2, t1])
-        assert [tx_mod.tx_hash(t) for t in sorted_once] == [tx_mod.tx_hash(t) for t in sorted_twice]
+        c1, _ = make_tx(0, 2, TICKS_PER_LAPSE, s, 10)
+        c2, _ = make_tx(1, 2, TICKS_PER_LAPSE, s, 10)
+        sorted_once  = tx_mod.sort_txs([c1, c2])
+        sorted_twice = tx_mod.sort_txs([c2, c1])
+        assert ([tx_mod.tx_hash(t) for t in sorted_once]
+                == [tx_mod.tx_hash(t) for t in sorted_twice])

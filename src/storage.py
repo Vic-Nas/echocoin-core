@@ -85,14 +85,30 @@ class Storage:
     # ------------------------------------------------------------------
 
     def _index_block(self, blk):
-        """Insert TxIndex and AddrIndex rows for all transactions in blk."""
+        """Insert TxIndex and AddrIndex rows for all transactions in blk.
+
+        A "confirm" tx only reveals its broadcaster (the real sender/
+        recipients are encrypted and invisible until resolution). A
+        "resolve" tx reveals the resolver plus, via its decrypted payload,
+        the real sender and recipients -- those become indexable only now.
+        """
         height = blk["height"]
         txs = blk.get("transactions", [])
         tx_rows, addr_rows = [], []
         for t in txs:
             h = tx_mod.tx_hash(t)
             tx_rows.append({"tx_hash": h, "block_height": height})
-            addrs = {t["from"]} | {o["to"] for o in t.get("outputs", [])}
+            kind = t.get("kind")
+            if kind == "confirm":
+                addrs = {t["broadcaster"]}
+            elif kind == "resolve":
+                payload = t.get("payload", {})
+                addrs = {t["resolver"]}
+                if "from" in payload:
+                    addrs.add(payload["from"])
+                addrs |= {o["to"] for o in payload.get("outputs", [])}
+            else:
+                addrs = set()
             for addr in addrs:
                 addr_rows.append({"addr": addr, "tx_hash": h, "block_height": height})
         if tx_rows:

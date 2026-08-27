@@ -16,19 +16,26 @@
 <div class="card">
   <div class="card-title">Transactions</div>
   <table>
-    <thead><tr><th>Hash</th><th>From</th><th>Total sent</th><th>Fee</th></tr></thead>
+    <thead><tr><th>Hash</th><th>Kind</th><th>From</th><th>Total sent</th><th>Fee</th></tr></thead>
     <tbody>
     {% if tx_rows %}
       {% for h, t, total in tx_rows %}
       <tr>
         <td class="hash-short"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
-        <td class="hash-short">{{ t.from[:24] }}…</td>
+        <td>{{ t.kind }}</td>
+        {% if t.kind == "resolve" %}
+        <td class="hash-short">{{ t.payload.from[:24] }}…</td>
         <td>{{ total }}</td>
+        <td>&mdash;</td>
+        {% else %}
+        <td class="hash-short">{{ t.broadcaster[:24] }}… (encrypted)</td>
+        <td>&mdash;</td>
         <td>{{ t.fee }}</td>
+        {% endif %}
       </tr>
       {% endfor %}
     {% else %}
-      <tr><td colspan="4" style="color:var(--muted);text-align:center">No transactions</td></tr>
+      <tr><td colspan="5" style="color:var(--muted);text-align:center">No transactions</td></tr>
     {% endif %}
     </tbody>
   </table>

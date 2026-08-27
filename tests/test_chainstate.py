@@ -17,8 +17,9 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import block as block_mod
+import tx as tx_mod
 import state as state_mod
-from chainstate import ChainState
+from chainstate import ChainState, TxQueue
 from params import INITIAL_FEE_RATE, TICKS_PER_LAPSE
 from tests.fixtures import (
     address, genesis, make_block, make_tx, seed_balance,
@@ -116,25 +117,23 @@ class TestValidateAndApply:
         cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         cs.state.total_minted += 100 * TICKS_PER_LAPSE
         g = cs.tip
-        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        b = make_block(1, g["hash"], [t])
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
+        b = make_block(1, g["hash"], [confirm, resolve])
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
         assert cs2.state.get_balance(address(1)) == TICKS_PER_LAPSE
 
-    def test_fees_credited_to_builder_after_valid_block(self):
+    def test_resolver_credited_the_fee_after_valid_block(self):
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         cs.state.total_minted += 100 * TICKS_PER_LAPSE
         g = cs.tip
-        reward = cs.state.compute_block_reward()
-        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        b = make_block(1, g["hash"], [t], builder_index=2)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0, resolver_index=7)
+        b = make_block(1, g["hash"], [confirm, resolve], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
-        # Builder receives the fee plus the full block reward.
-        expected = t["fee"] + reward
-        assert cs2.state.get_balance(address(2)) == expected
+        # The resolver -- not the builder -- receives the confirmation's fee.
+        assert cs2.state.get_balance(address(7)) == confirm["fee"]
 
 
 # ---------------------------------------------------------------------------
@@ -275,7 +274,50 @@ class TestApplyBlock:
         cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         cs.state.total_minted += 100 * TICKS_PER_LAPSE
         g = cs.tip
-        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        b1 = make_block(1, g["hash"], [t])
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
+        b1 = make_block(1, g["hash"], [confirm, resolve])
         cs2 = cs.apply_block(b1)
         assert cs2.state.get_balance(address(1)) == TICKS_PER_LAPSE
+
+
+# ---------------------------------------------------------------------------
+# 9. TxQueue: canonical global queue position for confirmed ciphertexts
+# ---------------------------------------------------------------------------
+
+class TestTxQueue:
+    def test_empty_queue_has_no_front(self):
+        assert TxQueue().front() is None
+
+    def test_confirm_appends_to_order_and_confirmations(self):
+        cs = ChainState.from_genesis()
+        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 100 * TICKS_PER_LAPSE
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
+        b = make_block(1, cs.tip["hash"], [confirm])
+        ok, err, cs2 = cs.validate_and_apply(b)
+        assert ok is True, err
+        h = tx_mod.tx_hash(confirm)
+        assert cs2.queue.front() == h
+        assert cs2.queue.lookup(h) == confirm
+
+    def test_resolve_advances_front(self):
+        cs = ChainState.from_genesis()
+        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 100 * TICKS_PER_LAPSE
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
+        b1 = make_block(1, cs.tip["hash"], [confirm])
+        _, _, cs1 = cs.validate_and_apply(b1)
+        b2 = make_block(2, cs1.tip["hash"], [resolve])
+        ok, err, cs2 = cs1.validate_and_apply(b2)
+        assert ok is True, err
+        assert cs2.queue.front() is None
+
+    def test_queue_rebuilt_by_from_storage(self):
+        cs = ChainState.from_genesis()
+        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 100 * TICKS_PER_LAPSE
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
+        b = make_block(1, cs.tip["hash"], [confirm])
+        _, _, cs1 = cs.validate_and_apply(b)
+        rebuilt = ChainState.from_storage(cs1.chain, cs1.state)
+        assert rebuilt.queue.front() == cs1.queue.front()

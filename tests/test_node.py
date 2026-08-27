@@ -235,8 +235,8 @@ class TestSubmitTx:
         node, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
-        ok, result = node.submit_tx(t)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        ok, result = node.submit_tx(confirm)
         assert ok is True
         assert len(result) == 64
 
@@ -244,32 +244,32 @@ class TestSubmitTx:
         node, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
-        node.submit_tx(t)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        node.submit_tx(confirm)
         assert node.mempool.size() == 1
 
     def test_submit_tx_relays_via_gossip(self, node_env):
         node, _, __, gossip, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
-        node.submit_tx(t)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        node.submit_tx(confirm)
         gossip.relay_tx.assert_called_once()
 
     def test_submit_invalid_tx_returns_false(self, node_env):
         node, *_ = node_env
-        # No balance for address(5)
-        t = make_tx(5, 1, TICKS_PER_LAPSE, node.cs.state, 0)
-        ok, err = node.submit_tx(t)
+        # No balance for broadcaster address(5)
+        confirm, _ = make_tx(5, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        ok, err = node.submit_tx(confirm)
         assert ok is False
 
     def test_submit_duplicate_tx_returns_false(self, node_env):
         node, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
-        node.submit_tx(t)
-        ok, err = node.submit_tx(t)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        node.submit_tx(confirm)
+        ok, err = node.submit_tx(confirm)
         assert ok is False
 
 
@@ -299,8 +299,8 @@ class TestBuildAndSignTx:
         node.view = NodeView(node.cs)
         outputs = [{"to": address(1), "amount": TICKS_PER_LAPSE}]
         t, _ = node.build_and_sign_tx(outputs, passphrase="testpass")
-        ok, err = tx_mod.validate(t, node.cs.state, node.cs.height,
-                                   node.cs.fee_rate_at)
+        ok, err = tx_mod.validate_confirmation(t, node.cs.state, node.cs.height,
+                                                node.cs.fee_rate_at)
         assert ok is True, err
 
 
@@ -361,7 +361,7 @@ class TestCommit:
         node, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        t, _ = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
         node.mempool.add(t)
         blk = make_block(1, node.cs.tip["hash"], [t])
         node._commit(blk)
@@ -410,7 +410,7 @@ class TestDrainQueue:
         node, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        t, _ = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
         reply = queue.Queue()
         node.net_in_q.put({"type": "submit_tx", "tx": t, "reply": reply})
         node._drain_queue()
@@ -433,7 +433,7 @@ class TestHandleInboundTx:
         node, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        t, _ = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
         msg = {"tx": t, "relay_type": "tx_fluff", "remaining_hops": 0}
         node._handle_inbound_tx(msg)
         assert node.mempool.size() == 1
@@ -441,7 +441,7 @@ class TestHandleInboundTx:
     def test_fluff_invalid_tx_not_added(self, node_env):
         node, *_ = node_env
         # No balance for address(5)
-        t = make_tx(5, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        t, _ = make_tx(5, 1, TICKS_PER_LAPSE, node.cs.state, 0)
         msg = {"tx": t, "relay_type": "tx_fluff", "remaining_hops": 0}
         node._handle_inbound_tx(msg)
         assert node.mempool.size() == 0
@@ -450,7 +450,7 @@ class TestHandleInboundTx:
         node, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        t, _ = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
         msg = {"tx": t, "relay_type": "tx_fluff", "remaining_hops": 0}
         node._handle_inbound_tx(msg)
         node._handle_inbound_tx(msg)  # second time -- duplicate
@@ -459,7 +459,7 @@ class TestHandleInboundTx:
     def test_stem_tx_forwarded_without_validation(self, node_env):
         node, _, __, gossip, *_ = node_env
         # Even an invalid tx (no balance) should be forwarded on stem
-        t = make_tx(5, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        t, _ = make_tx(5, 1, TICKS_PER_LAPSE, node.cs.state, 0)
         msg = {"tx": t, "relay_type": "tx_stem", "remaining_hops": 3}
         node._handle_inbound_tx(msg)
         gossip.dandelion_send.assert_called_once()
@@ -469,7 +469,7 @@ class TestHandleInboundTx:
         node, _, __, gossip, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        t, _ = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
         msg = {"tx": t, "relay_type": "tx_fluff", "remaining_hops": 0}
         node._handle_inbound_tx(msg)
         gossip.relay_tx.assert_called_once()
@@ -578,7 +578,7 @@ class TestReorgMempool:
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
 
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        t, _ = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
         g = node.cs.chain[0]
         b1_old = make_block(1, g["hash"], [t])
         # Commit the block so t is now confirmed in the old chain
@@ -608,7 +608,7 @@ class TestReorgMempool:
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
 
-        t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
+        t, _ = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state, 0)
         h = tx_mod.tx_hash(t)
         g = node.cs.chain[0]
 

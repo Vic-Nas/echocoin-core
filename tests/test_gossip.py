@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from gossip import Gossip, STEM_HOPS_MAX as STEM_HOPS, SEEN_TX_CACHE_SIZE
 import tx as tx_mod
 import state as state_mod
-from tests.fixtures import address, make_tx, seed_balance
+from tests.fixtures import address, make_tx, apply_transfer, seed_balance
 from params import TICKS_PER_LAPSE
 
 
@@ -36,7 +36,8 @@ def make_gossip(peers=None):
 def sample_tx():
     s = state_mod.State()
     seed_balance(s, 0, 100.0)
-    return make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+    confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+    return confirm
 
 
 # ---------------------------------------------------------------------------
@@ -101,12 +102,12 @@ class TestRelayTx:
         g, pool, udp = make_gossip(peers=["1.2.3.4:9000"])
         s = state_mod.State()
         seed_balance(s, 0, 1000.0)
-        t1 = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        s.apply_tx(t1)
-        t2 = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        c1, r1 = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        apply_transfer(s, c1, r1)
+        c2, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
         with patch.object(g, "dandelion_send") as mock_send:
-            g.relay_tx(t1)
-            g.relay_tx(t2)
+            g.relay_tx(c1)
+            g.relay_tx(c2)
             assert mock_send.call_count == 2
 
 

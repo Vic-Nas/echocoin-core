@@ -101,7 +101,9 @@ def _get_address_history(addr, node):
         if 0 <= h_height < len(chain):
             for t in chain[h_height]["transactions"]:
                 if tx_mod.tx_hash(t) == h:
-                    direction = "sent" if t["from"] == addr else "received"
+                    real_from = t.get("payload", {}).get("from") if t.get("kind") == "resolve" else None
+                    sent_addr = real_from or t.get("broadcaster")
+                    direction = "sent" if sent_addr == addr else "received"
                     history.append((h_height, h, direction, t))
                     break
     return history
@@ -181,8 +183,13 @@ def _shared_read_only_routes(app, node, pool, limiter,
             return render_template("error.html", title="Not found",
                 message="Block not found."), 404
         b = chain[height]
-        tx_rows = [(tx_mod.tx_hash(t), t, sum(o["amount"] for o in t["outputs"]))
-                   for t in b["transactions"]]
+
+        def _tx_amount(t):
+            if t.get("kind") == "resolve":
+                return sum(o["amount"] for o in t.get("payload", {}).get("outputs", []))
+            return 0  # "confirm": amount is encrypted, not visible yet
+
+        tx_rows = [(tx_mod.tx_hash(t), t, _tx_amount(t)) for t in b["transactions"]]
         return render_template("block_detail.html", title=f"Block {height}",
             b=b, tx_rows=tx_rows, has_next=height + 1 < len(chain))
 
@@ -301,9 +308,16 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/api/mempool", endpoint=pfx+"api_mempool")
     def api_mempool():
         txs = node.mempool.all_txs()
-        return jsonify({"size": len(txs), "transactions": [
-            {"hash": tx_mod.tx_hash(t), "from": t["from"],
-             "outputs": t["outputs"], "fee": t["fee"]} for t in txs]})
+
+        def _summarize(t):
+            if t.get("kind") == "confirm":
+                return {"hash": tx_mod.tx_hash(t), "kind": "confirm",
+                        "broadcaster": t["broadcaster"], "fee": t["fee"]}
+            return {"hash": tx_mod.tx_hash(t), "kind": "resolve",
+                    "confirmed_tx_hash": t["confirmed_tx_hash"],
+                    "resolver": t["resolver"]}
+
+        return jsonify({"size": len(txs), "transactions": [_summarize(t) for t in txs]})
 
     @app.route("/api/stats", endpoint=pfx+"api_stats")
     def api_stats():

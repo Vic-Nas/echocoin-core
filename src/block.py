@@ -20,7 +20,18 @@ from params import (
     VDF_ADJUST_FACTOR,
 )
 
-_TX_SORT_FIELDS = {"fee_height", "nonce"}
+_TX_SORT_FIELDS = {"fee_height"}
+
+
+class _EmptyQueue:
+    """Fallback used when validate()/assemble() are called without a real
+    queue (e.g. genesis, or tests that don't exercise the queue rule)."""
+
+    def remaining(self):
+        return []
+
+    def lookup(self, confirmed_tx_hash):
+        return None
 
 
 def get_vdf_iterations(chain) -> int:
@@ -196,21 +207,23 @@ def _check_builder_and_vdf(blk, chain):
 
 
 def _check_tx_ordering(blk):
-    txs = blk["transactions"]
-    if not txs:
+    """Canonical order applies to "confirm" ciphertext submissions only.
+    "resolve" txs are governed by the separate gapless front-of-queue rule
+    (_check_queue_resolution), not by this sort order -- assemble() puts
+    due resolutions first, ahead of any confirmations."""
+    confirms = [t for t in blk["transactions"] if isinstance(t, dict) and t.get("kind") == "confirm"]
+    if not confirms:
         return True, None
-    for i, t in enumerate(txs):
-        if not isinstance(t, dict):
-            return False, f"transaction at position {i} is not a dict"
+    for i, t in enumerate(confirms):
         missing = _TX_SORT_FIELDS - t.keys()
         if missing:
-            return False, f"transaction at position {i} missing fields for ordering: {missing}"
+            return False, f"confirmation at position {i} missing fields for ordering: {missing}"
     # Verify canonical order in O(n) by checking each adjacent pair.
     # Uses tx_mod.sort_key so this can never drift from tx.sort_txs().
-    keys = [tx_mod.sort_key(t) for t in txs]
+    keys = [tx_mod.sort_key(t) for t in confirms]
     for i in range(len(keys) - 1):
         if keys[i] > keys[i + 1]:
-            return False, f"transaction ordering violation at position {i + 1}"
+            return False, f"confirmation ordering violation at position {i + 1}"
     return True, None
 
 
@@ -223,23 +236,75 @@ def _check_fee_rate(blk, chain):
     return True, None
 
 
-def _apply_transactions(blk, state, get_fee_rate_at_height):
-    height = blk["height"]
-    for t in blk["transactions"]:
-        ok, err = tx_mod.validate(t, state, height - 1, get_fee_rate_at_height)
-        if not ok:
-            return False, f"invalid tx: {err}"
-        state.apply_tx(t)
+def _check_queue_resolution(blk, queue):
+    """A block is valid only if it resolves at least the current front of
+    the ciphertext queue, and any additional resolutions are a gapless
+    continuation from the front -- no skipping ahead.
+
+    This is a pure, positional rule: no deadline/window, no self-dealing
+    exploit from tying block weight to "how much backlog cleared" (both
+    were tried and rejected during design -- see timelock.py / tx.py
+    module docstrings). It is what makes even a fully dominant builder
+    face an all-or-nothing choice: resolve the front and keep building, or
+    stop building entirely. It cannot selectively stall one target while
+    operating normally on everything else.
+    """
+    if blk["height"] == 0:
+        return True, None
+    remaining = queue.remaining()
+    if not remaining:
+        return True, None  # nothing pending; resolutions are optional
+    resolve_hashes = [t["confirmed_tx_hash"] for t in blk["transactions"]
+                      if isinstance(t, dict) and t.get("kind") == "resolve"]
+    if not resolve_hashes:
+        return False, "block must resolve at least the current front of the queue"
+    n = len(resolve_hashes)
+    if resolve_hashes != remaining[:n]:
+        return False, "resolutions are not a gapless continuation from the front of the queue"
     return True, None
 
 
-def validate(blk, state, chain, get_fee_rate_at_height):
+def _apply_transactions(blk, state, get_fee_rate_at_height, queue):
+    height = blk["height"]
+    local_confirmations = {}
+    for t in blk["transactions"]:
+        if not isinstance(t, dict):
+            return False, "transaction entry is not a dict"
+        kind = t.get("kind")
+        if kind == "confirm":
+            ok, err = tx_mod.validate_confirmation(t, state, height - 1, get_fee_rate_at_height)
+            if not ok:
+                return False, f"invalid confirmation: {err}"
+            h = tx_mod.tx_hash(t)
+            state.apply_confirmation(t, h)
+            local_confirmations[h] = t
+        elif kind == "resolve":
+            confirmed = (queue.lookup(t.get("confirmed_tx_hash"))
+                        or local_confirmations.get(t.get("confirmed_tx_hash")))
+            ok, err = tx_mod.validate_resolution(t, confirmed, state)
+            if not ok:
+                return False, f"invalid resolution: {err}"
+            state.apply_resolution(t)
+        else:
+            return False, f"unknown transaction kind: {kind!r}"
+    return True, None
+
+
+def validate(blk, state, chain, get_fee_rate_at_height, queue=None):
     """Full block validation. Returns (True, None) or (False, error_string).
 
     Applies transactions to `state` in place. Callers must pass
     state.snapshot() (not the live state) so a failure leaves it clean.
     Rewards are NOT applied here; the caller applies them after success.
+
+    queue: a TxQueue-like object (see chainstate.TxQueue) reflecting the
+    ciphertext queue state as of `chain`, i.e. before this block. Defaults
+    to an empty queue when omitted (e.g. genesis, or callers not exercising
+    the queue rule).
     """
+    if queue is None:
+        queue = _EmptyQueue()
+
     size = block_size(blk)
     if size > BLOCK_SIZE_LIMIT:
         return False, f"block exceeds size limit: {size} > {BLOCK_SIZE_LIMIT}"
@@ -251,7 +316,8 @@ def validate(blk, state, chain, get_fee_rate_at_height):
         (_check_builder_and_vdf, (blk, chain)),
         (_check_tx_ordering,     (blk,)),
         (_check_fee_rate,        (blk, chain)),
-        (_apply_transactions,    (blk, state, get_fee_rate_at_height)),
+        (_check_queue_resolution, (blk, queue)),
+        (_apply_transactions,    (blk, state, get_fee_rate_at_height, queue)),
     ):
         ok, err = check(*args)
         if not ok:
@@ -306,21 +372,30 @@ def compute_expected_fee_rate(chain):
     return max(1, int(current_rate * adjustment))
 
 
-def assemble(tip, txs, builder_addr, fee_rate, iterations, deadline=None):
+def assemble(tip, txs, builder_addr, fee_rate, iterations, queue=None, deadline=None):
     """Assemble a candidate block from a mempool snapshot.
 
-    Pure function: does not touch node state. Adds txs one at a time,
-    stopping before the block would exceed the size limit or the deadline
-    (if given). Returns a block dict without a VDF proof attached; the
-    caller adds vdf_output, vdf_proof, and recomputes the hash.
+    Pure function: does not touch node state. Pulls due (front-of-queue,
+    in order) resolutions first -- the same priority pattern
+    _check_tx_ordering/_check_queue_resolution enforce as a validity rule
+    -- then confirmations in canonical sort order. Adds them one at a
+    time, stopping before the block would exceed the size limit or the
+    deadline (if given). Returns a block dict without a VDF proof
+    attached; the caller adds vdf_output, vdf_proof, and recomputes the
+    hash.
 
-    txs:        pre-sorted list from tx.sort_txs()
+    txs:        candidate txs from the mempool, both "confirm" and
+                "resolve" kinds, in any order.
+    queue:      a TxQueue-like object (see chainstate.TxQueue) reflecting
+                the ciphertext queue as of `tip`. Defaults to empty.
     iterations: this block's required vdf_iterations, from
                 get_vdf_iterations(chain). Taken directly rather than
                 a chain argument so callers that already computed it
                 (to run the VDF itself) don't pay for it twice.
     deadline:   float unix time; stop packing if exceeded
     """
+    if queue is None:
+        queue = _EmptyQueue()
     next_height = tip["height"] + 1
 
     skeleton = create(
@@ -336,14 +411,32 @@ def assemble(tip, txs, builder_addr, fee_rate, iterations, deadline=None):
     running     = base_size
     valid_txs   = []
 
-    for t in txs:
+    # Due resolutions first: a gapless prefix of queue.remaining() for which
+    # a solved resolution is already available in the mempool. Stops at the
+    # first missing one -- a later, out-of-order resolution can't be
+    # substituted without breaking the gapless rule.
+    resolutions_by_hash = {t["confirmed_tx_hash"]: t for t in txs
+                           if isinstance(t, dict) and t.get("kind") == "resolve"}
+    due_resolutions = []
+    for h in queue.remaining():
+        if h in resolutions_by_hash:
+            due_resolutions.append(resolutions_by_hash[h])
+        else:
+            break
+
+    confirms = tx_mod.sort_txs([t for t in txs if isinstance(t, dict) and t.get("kind") == "confirm"])
+    ordered  = due_resolutions + confirms
+
+    for t in ordered:
         if deadline is not None and _time.time() >= deadline:
             break
         # Size of this tx as it would appear serialized inside the block.
         # We add 1 for the "," separator between txs (except the first).
         t_size = tx_mod.tx_size_in_block(t, position=len(valid_txs))
         if running + t_size > BLOCK_SIZE_LIMIT:
-            continue  # not break: a later smaller tx might still fit
+            if t in due_resolutions:
+                break  # a due resolution can't be skipped without a gap
+            continue  # not break: a later smaller confirmation might still fit
         valid_txs.append(t)
         running += t_size
 

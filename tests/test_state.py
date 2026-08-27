@@ -17,11 +17,12 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import state as state_mod
+import tx as tx_mod
 from state import compute_reward
 from params import (
     EMISSION_RATE, SUPPLY_CAP, TICKS_PER_LAPSE
 )
-from tests.fixtures import address, make_tx, seed_balance
+from tests.fixtures import address, make_tx, apply_transfer, seed_balance
 
 
 def fresh_state():
@@ -109,43 +110,55 @@ class TestApplyTx:
         seed_balance(s, 0, 100.0)
         addr0 = address(0)
         bal_before = s.get_balance(addr0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        s.apply_tx(t)
-        expected = bal_before - TICKS_PER_LAPSE - t["fee"]
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        apply_transfer(s, confirm, resolve)
+        expected = bal_before - TICKS_PER_LAPSE - confirm["fee"]
         assert s.get_balance(addr0) == expected
 
     def test_apply_tx_credits_recipient(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        s.apply_tx(t)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        apply_transfer(s, confirm, resolve)
         assert s.get_balance(address(1)) == TICKS_PER_LAPSE
 
     def test_apply_tx_advances_nonce(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        s.apply_tx(t)
-        assert s.get_nonce(address(0)) == t["nonce"]
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        apply_transfer(s, confirm, resolve)
+        assert s.get_nonce(address(0)) == resolve["payload"]["nonce"]
 
     def test_multiple_outputs_all_credited(self):
         s = fresh_state()
         seed_balance(s, 0, 1000.0)
-        from_addr = address(0)
-        from tests.fixtures import keypair as kp, pubkey_hex
-        import tx as tx_mod
-        from params import INITIAL_FEE_RATE
         outputs = [
             {"to": address(1), "amount": TICKS_PER_LAPSE},
             {"to": address(2), "amount": 2 * TICKS_PER_LAPSE},
         ]
-        pk_hex = pubkey_hex(0)
-        fee = tx_mod.compute_fee(from_addr, pk_hex, outputs, 1, 10, INITIAL_FEE_RATE)
-        sk, _ = kp(0)
-        t = tx_mod.create(from_addr, pk_hex, outputs, 1, 10, fee, sk)
-        s.apply_tx(t)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, outputs_override=outputs)
+        apply_transfer(s, confirm, resolve)
         assert s.get_balance(address(1)) == TICKS_PER_LAPSE
         assert s.get_balance(address(2)) == 2 * TICKS_PER_LAPSE
+
+    def test_fee_escrowed_at_confirmation(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        h = tx_mod.tx_hash(confirm)
+        s.apply_confirmation(confirm, h)
+        assert s.escrowed_fee(h) == confirm["fee"]
+
+    def test_resolution_pays_resolver_the_escrowed_fee(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, resolver_index=3)
+        h = tx_mod.tx_hash(confirm)
+        s.apply_confirmation(confirm, h)
+        resolver_before = s.get_balance(address(3))
+        s.apply_resolution(resolve)
+        assert s.get_balance(address(3)) == resolver_before + confirm["fee"]
+        assert s.escrowed_fee(h) == 0
 
 
 # ---------------------------------------------------------------------------

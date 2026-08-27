@@ -21,6 +21,7 @@ class State:
         self._balances    = {}  # addr -> int (ticks)
         self._nonces      = {}  # addr -> int (last used nonce, 0 = never transacted)
         self.total_minted = 0   # ticks minted via block rewards since genesis
+        self._escrow      = {}  # confirmed_tx_hash -> fee ticks awaiting a resolver
 
     # ------------------------------------------------------------------
     # Balance and nonce access
@@ -52,18 +53,40 @@ class State:
     # Transaction application
     # ------------------------------------------------------------------
 
-    def apply_tx(self, tx_dict):
-        """Apply a validated transaction. Debits sender (outputs + fee),
-        credits recipients, advances nonce."""
-        sender    = tx_dict["from"]
-        total_out = sum(o["amount"] for o in tx_dict["outputs"])
-        fee       = tx_dict["fee"]
+    def apply_confirmation(self, confirm_tx, confirmed_tx_hash):
+        """Apply a "confirm" ciphertext submission: debits the broadcaster's
+        fee into escrow, to be paid out to whichever resolver's solution
+        lands first (tx.py module docstring). The real transfer inside the
+        encrypted payload is not touched here -- it isn't visible yet."""
+        fee = confirm_tx["fee"]
+        broadcaster = confirm_tx["broadcaster"]
+        if fee > 0:
+            self.debit(broadcaster, fee)
+            self._escrow[confirmed_tx_hash] = fee
 
-        self.debit(sender, total_out + fee)
-        for out in tx_dict["outputs"]:
+    def apply_inner_payload(self, payload):
+        """Apply the real transfer revealed by a resolution. No fee here --
+        the fee was already collected from the broadcaster at confirmation
+        time (see apply_confirmation)."""
+        sender    = payload["from"]
+        total_out = sum(o["amount"] for o in payload["outputs"])
+
+        self.debit(sender, total_out)
+        for out in payload["outputs"]:
             self.credit(out["to"], out["amount"])
-        self.set_nonce(sender, tx_dict["nonce"])
-        # fee is collected by the block builder, not burned
+        self.set_nonce(sender, payload["nonce"])
+
+    def apply_resolution(self, res_dict):
+        """Apply a validated resolution: releases escrow (if any) to the
+        resolver, then applies the revealed inner transfer."""
+        confirmed_hash = res_dict["confirmed_tx_hash"]
+        fee = self._escrow.pop(confirmed_hash, 0)
+        if fee > 0:
+            self.credit(res_dict["resolver"], fee)
+        self.apply_inner_payload(res_dict["payload"])
+
+    def escrowed_fee(self, confirmed_tx_hash):
+        return self._escrow.get(confirmed_tx_hash, 0)
 
     # ------------------------------------------------------------------
     # Emission
@@ -104,6 +127,9 @@ class State:
         s.total_minted = total_minted
         return s
 
+    def all_escrow(self):
+        return dict(self._escrow)
+
     # ------------------------------------------------------------------
     # Snapshot / restore
     # ------------------------------------------------------------------
@@ -115,6 +141,7 @@ class State:
         s._balances    = self._balances.copy()
         s._nonces      = self._nonces.copy()
         s.total_minted = self.total_minted
+        s._escrow      = self._escrow.copy()
         return s
 
     # ------------------------------------------------------------------

@@ -28,7 +28,7 @@
         <td>{{ height }}</td>
         <td><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
         <td style="color:{{ 'var(--red)' if direction == 'sent' else 'var(--green)' }}">{{ direction }}</td>
-        <td>{{ t.outputs | sum(attribute='amount') }}</td>
+        <td>{{ t.payload.outputs | sum(attribute='amount') if t.kind == "resolve" else "(encrypted)" }}</td>
       </tr>
       {% endfor %}
     {% else %}

@@ -141,42 +141,58 @@ class TestTxAndAddrIndex:
     def test_tx_not_indexed_before_block_save(self, store):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
-        h = tx_mod.tx_hash(t)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
+        h = tx_mod.tx_hash(confirm)
         assert store.get_tx_height(h) is None
 
     def test_tx_indexed_after_block_save(self, store):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
-        h = tx_mod.tx_hash(t)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
+        h = tx_mod.tx_hash(confirm)
         g = genesis()
-        b1 = make_block(1, g["hash"], [t])
+        b1 = make_block(1, g["hash"], [confirm, resolve])
         store.save_block(g)
         store.save_block(b1)
         assert store.get_tx_height(h) == 1
 
     def test_addr_index_for_sender(self, store):
+        """The real sender is only indexable once resolved."""
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
         g = genesis()
-        b1 = make_block(1, g["hash"], [t])
+        b1 = make_block(1, g["hash"], [confirm, resolve])
         store.save_block(g)
         store.save_block(b1)
         rows = store.get_tx_heights_for_addr(address(0))
-        assert len(rows) == 1
+        # address(0) is both broadcaster (indexed at confirm) and real
+        # sender (indexed at resolve) by default, so it appears twice.
+        assert len(rows) == 2
         assert rows[0][0] == 1  # block height
 
     def test_addr_index_for_recipient(self, store):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
         g = genesis()
-        b1 = make_block(1, g["hash"], [t])
+        b1 = make_block(1, g["hash"], [confirm, resolve])
         store.save_block(g)
         store.save_block(b1)
         rows = store.get_tx_heights_for_addr(address(1))
+        assert len(rows) == 1
+
+    def test_addr_index_for_broadcaster(self, store):
+        """The broadcaster is indexable immediately at confirmation, even
+        before resolution reveals the real sender."""
+        s = fresh_state()
+        seed_balance(s, 9, 100.0)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 0, broadcaster_index=9)
+        g = genesis()
+        b1 = make_block(1, g["hash"], [confirm])
+        store.save_block(g)
+        store.save_block(b1)
+        rows = store.get_tx_heights_for_addr(address(9))
         assert len(rows) == 1
 
 

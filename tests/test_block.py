@@ -32,7 +32,7 @@ from params import (
     GENESIS_MESSAGE, GENESIS_TIMESTAMP, INITIAL_FEE_RATE, TICKS_PER_LAPSE,
 )
 from tests.fixtures import (
-    address, genesis, keypair, make_block, make_tx, seed_balance,
+    address, genesis, keypair, make_block, make_tx, apply_transfer, seed_balance,
 )
 
 
@@ -293,10 +293,10 @@ class TestValidateVDF:
 
         st = fresh_state()
         seed_balance(st, 2, 100.0)
-        t = make_tx(2, 3, TICKS_PER_LAPSE, st, 0)
+        confirm, resolve = make_tx(2, 3, TICKS_PER_LAPSE, st, 0)
 
         empty    = make_block(1, g["hash"], [],  builder_index=0)
-        refilled = make_block(1, g["hash"], [t], builder_index=0,
+        refilled = make_block(1, g["hash"], [confirm, resolve], builder_index=0,
                               vdf_output=empty["vdf_output"],
                               vdf_proof=empty["vdf_proof"])
         assert refilled["vdf_output"] == empty["vdf_output"]
@@ -329,9 +329,9 @@ class TestValidateTxOrdering:
         seed_balance(s, 0, 100.0)
         # fee_height must equal genesis height (0) because block.validate
         # checks txs against chain_tip_height = block.height - 1 = 0
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, chain_tip_height=0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, chain_tip_height=0)
         g = genesis()
-        b = make_block(1, g["hash"], [t])
+        b = make_block(1, g["hash"], [confirm, resolve])
         ok, err = block_mod.validate(b, s.snapshot(), [g], noop_fee_rate)
         assert ok is True, err
 
@@ -339,10 +339,11 @@ class TestValidateTxOrdering:
         s = fresh_state()
         seed_balance(s, 0, 100.0)
         seed_balance(s, 1, 100.0)
-        # Create two txs from different senders (independent nonces)
-        t1 = make_tx(0, 2, TICKS_PER_LAPSE, s, chain_tip_height=0)
-        t2 = make_tx(1, 2, TICKS_PER_LAPSE, s, chain_tip_height=0)
-        sorted_txs = tx_mod.sort_txs([t1, t2])
+        # Create two confirmations from different broadcasters (order is by
+        # (fee_height, tx_hash), independent of any per-sender nonce)
+        c1, _ = make_tx(0, 2, TICKS_PER_LAPSE, s, chain_tip_height=0)
+        c2, _ = make_tx(1, 2, TICKS_PER_LAPSE, s, chain_tip_height=0)
+        sorted_txs = tx_mod.sort_txs([c1, c2])
         # Reverse them to create wrong order
         wrong_order = list(reversed(sorted_txs))
         if wrong_order == sorted_txs:
@@ -514,22 +515,22 @@ class TestAssemble:
     def test_assemble_includes_valid_txs(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
         g = genesis()
-        b = block_mod.assemble(g, [t], address(0), INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS)
+        b = block_mod.assemble(g, [confirm], address(0), INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS)
         assert len(b["transactions"]) == 1
 
     def test_assemble_respects_size_limit(self):
         g = genesis()
-        # Create many dummy tx-shaped dicts to fill the block
+        # Create many dummy confirmations to fill the block
         dummy_txs = []
         s = fresh_state()
         seed_balance(s, 0, 10_000.0)
         for i in range(50):
-            t = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
-            dummy_txs.append(t)
+            confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
+            dummy_txs.append(confirm)
             try:
-                s.apply_tx(t)
+                apply_transfer(s, confirm, resolve)
             except Exception:
                 break
         b = block_mod.assemble(g, dummy_txs, address(0), INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS)
@@ -550,3 +551,93 @@ class TestAssemble:
         g = genesis()
         b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS)
         assert b["previous_hash"] == g["hash"]
+
+
+# ---------------------------------------------------------------------------
+# 11. Gapless front-of-queue ciphertext resolution
+# ---------------------------------------------------------------------------
+
+class _FakeQueue:
+    """Minimal stand-in for chainstate.TxQueue for pure block.py tests."""
+
+    def __init__(self, remaining_hashes, confirmations=None):
+        self._remaining = list(remaining_hashes)
+        self._confirmations = confirmations or {}
+
+    def remaining(self):
+        return list(self._remaining)
+
+    def lookup(self, h):
+        return self._confirmations.get(h)
+
+
+class TestQueueResolution:
+    def test_empty_queue_requires_no_resolution(self):
+        g = genesis()
+        b = make_block(1, g["hash"], [])
+        ok, err = block_mod._check_queue_resolution(b, _FakeQueue([]))
+        assert ok is True, err
+
+    def test_nonempty_queue_with_no_resolution_fails(self):
+        g = genesis()
+        b = make_block(1, g["hash"], [])
+        ok, err = block_mod._check_queue_resolution(b, _FakeQueue(["deadbeef"]))
+        assert ok is False
+        assert "front" in err
+
+    def test_resolving_the_front_passes(self):
+        g = genesis()
+        res = {"kind": "resolve", "confirmed_tx_hash": "deadbeef",
+               "resolver": address(0), "K_hex": "1", "payload": {}}
+        b = make_block(1, g["hash"], [res])
+        ok, err = block_mod._check_queue_resolution(b, _FakeQueue(["deadbeef", "cafef00d"]))
+        assert ok is True, err
+
+    def test_skipping_ahead_fails(self):
+        """Resolving the second item while skipping the front is rejected --
+        no selective stalling of one target while resolving everything else."""
+        g = genesis()
+        res = {"kind": "resolve", "confirmed_tx_hash": "cafef00d",
+               "resolver": address(0), "K_hex": "1", "payload": {}}
+        b = make_block(1, g["hash"], [res])
+        ok, err = block_mod._check_queue_resolution(b, _FakeQueue(["deadbeef", "cafef00d"]))
+        assert ok is False
+        assert "gapless" in err
+
+    def test_resolving_two_in_order_passes(self):
+        g = genesis()
+        r1 = {"kind": "resolve", "confirmed_tx_hash": "deadbeef",
+              "resolver": address(0), "K_hex": "1", "payload": {}}
+        r2 = {"kind": "resolve", "confirmed_tx_hash": "cafef00d",
+              "resolver": address(0), "K_hex": "1", "payload": {}}
+        b = make_block(1, g["hash"], [r1, r2])
+        ok, err = block_mod._check_queue_resolution(b, _FakeQueue(["deadbeef", "cafef00d", "f00d"]))
+        assert ok is True, err
+
+    def test_assemble_pulls_due_resolution_first(self):
+        """assemble() must put a due (front-of-queue) resolution ahead of
+        any confirmations, mirroring _check_tx_ordering's priority."""
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
+        confirmed_hash = tx_mod.tx_hash(confirm)
+        queue = _FakeQueue([confirmed_hash], {confirmed_hash: confirm})
+
+        other_confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 0, nonce_override=99)
+
+        g = genesis()
+        b = block_mod.assemble(g, [other_confirm, resolve], address(0),
+                               INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS, queue)
+        assert b["transactions"][0] is resolve
+
+    def test_assemble_stops_at_first_missing_resolution(self):
+        """A due resolution not yet in the mempool means no later,
+        out-of-order resolution can be substituted -- the gapless rule."""
+        confirmed_hash = "deadbeef"
+        queue = _FakeQueue([confirmed_hash, "cafef00d"])
+        later_res = {"kind": "resolve", "confirmed_tx_hash": "cafef00d",
+                     "resolver": address(0), "K_hex": "1", "payload": {}}
+        g = genesis()
+        b = block_mod.assemble(g, [later_res], address(0),
+                               INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS, queue)
+        assert later_res not in b["transactions"]
