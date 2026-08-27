@@ -12,7 +12,7 @@ Each block requires a VDF proof computed over the hash of the previous block and
 
 The transaction list is not part of the VDF challenge. A block rejected for a transaction problem can be fixed and rebroadcast without redoing the 120 seconds of work.
 
-When two chains compete, the one with more cumulative proven VDF iterations wins, not the one with more blocks. A block's iteration count only counts if its VDF proof actually verifies for that many iterations, so it can't be inflated by lying. Ties break on the lower tip hash.
+When two chains compete, the one with more cumulative proven VDF iterations wins, not the one with more blocks. A block's iteration count only counts if its VDF proof actually verifies for that many iterations, so it can't be inflated by lying. Ties are routine, not rare: any two builders finishing at the same height require the same protocol-set iteration count, so a simple same-height fork ties exactly. Ties break on the lower VDF output, not the block hash. The block hash includes the transaction list, and since the transaction list is not part of the VDF challenge (see below), a builder can swap it for free after finishing the real work. Breaking ties on block hash would let that same builder grind transaction-list variants after the fact, searching for a lower hash at nearly zero cost, which would undermine the property the VDF exists to enforce in the first place. The VDF output cannot be changed without redoing the actual 120 seconds under a different builder address, so it keeps the tie-break's cost real.
 
 Rewriting old history means redoing every VDF since that point, sequentially, in as much real time as the honest chain took to produce them. The honest chain keeps advancing the whole time, so the gap only grows.
 

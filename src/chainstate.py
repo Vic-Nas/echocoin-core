@@ -138,7 +138,7 @@ class ChainState:
         return ChainState(self.chain + [blk], post_tx_state, new_iterations)
 
     # ------------------------------------------------------------------
-    # Fork choice: most cumulative proven VDF work wins, tip hash breaks ties
+    # Fork choice: most cumulative proven VDF work wins, VDF output breaks ties
     # ------------------------------------------------------------------
 
     def is_better_than(self, other):
@@ -153,8 +153,30 @@ class ChainState:
         timestamps, so an attacker who pads their own timestamps could
         otherwise keep their fork's required iteration count artificially
         low and out-build the honest chain in less real time than it took.
-        Tip hash breaks any remaining tie deterministically.
+
+        Ties (routine, not rare: every block at a given height needs the
+        same protocol-required iteration count regardless of who builds
+        it, so any simple same-height fork ties exactly) break on the
+        VDF output, not the block hash. block_hash includes the
+        transaction list, and the transaction list is deliberately not
+        bound into the VDF challenge (block.vdf_challenge), so it can be
+        changed after the fact for free -- that's the whole point, it's
+        what lets a block be corrected and rebroadcast without redoing
+        the 120s. But that same freedom means tie-breaking on block_hash
+        would let a single builder, with no extra hardware at all, grind
+        many transaction-list variants after finishing its VDF and pick
+        whichever one hashes lower, biasing ties at nearly zero cost. That
+        defeats the property the VDF exists to enforce: that influence
+        over the chain costs real sequential time. vdf_output is a
+        deterministic function of (previous_hash, builder) alone and
+        cannot be varied without redoing the actual VDF under a different
+        builder address, so tie-breaking on it keeps that cost real.
+        Falls back to hash only for genesis (vdf_output is None there);
+        genesis is the unique starting point and never actually ties
+        against anything in practice.
         """
         if self.cumulative_iterations != other.cumulative_iterations:
             return self.cumulative_iterations > other.cumulative_iterations
-        return self.tip["hash"] < other.tip["hash"]
+        self_key  = self.tip.get("vdf_output") or self.tip["hash"]
+        other_key = other.tip.get("vdf_output") or other.tip["hash"]
+        return self_key < other_key

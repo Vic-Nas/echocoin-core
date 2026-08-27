@@ -9,7 +9,28 @@
   <div class="stat-label">Balance: <strong style="color:var(--green)">{{ fmt_balance(balance) }}</strong></div>
 </div>
 <div class="card">
-  <div class="card-title">Outputs — paste CSV (address,amount) or upload file</div>
+  <div class="card-title">Current fee market</div>
+  {% if fees.pending == 0 %}
+  <div class="stat-label">Mempool is empty. Any fee, including 0, should clear immediately.</div>
+  {% else %}
+  <div class="stat-label">{{ fees.pending }} pending transaction{{ "s" if fees.pending != 1 }} in the mempool.</div>
+  <div class="stat-label" style="margin-top:.35rem">
+    Fee per byte right now: min {{ "%.3f"|format(fees.min) }} &middot;
+    median {{ "%.3f"|format(fees.median) }} &middot;
+    max {{ "%.3f"|format(fees.max) }} ticks/byte
+  </div>
+  {% if fees.next_block > 0 %}
+  <div class="stat-label" style="margin-top:.35rem">
+    <strong style="color:var(--accent)">To clear the next block: about {{ "%.3f"|format(fees.next_block) }} ticks/byte</strong>
+    &nbsp;(the mempool is full enough that lower fees may wait)
+  </div>
+  {% else %}
+  <div class="stat-label" style="margin-top:.35rem">Mempool is below capacity: any non-negative fee should still clear the next block.</div>
+  {% endif %}
+  {% endif %}
+</div>
+<div class="card">
+  <div class="card-title">Outputs, paste CSV (address,amount) or upload file</div>
   <form method="POST" enctype="multipart/form-data">
     <div class="form-group">
       <label>CSV outputs (one per line: address,amount)</label>
@@ -20,7 +41,7 @@
       <input type="file" name="csv_file" accept=".csv,.txt">
     </div>
     <div class="form-group">
-      <label>Fee (ticks, in ticks -- higher fee gets picked up sooner)</label>
+      <label>Fee, in ticks (see the current fee market above; higher fee per byte gets picked up sooner)</label>
       <input type="number" name="fee" value="0" min="0">
     </div>
     <div class="form-group">

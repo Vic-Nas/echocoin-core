@@ -61,6 +61,7 @@ from flask import Flask, jsonify, render_template, request
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
+import block as block_mod
 import crypto as crypto_mod
 import tx as tx_mod
 from params import TICKS_PER_LAPSE, SUPPLY_CAP
@@ -142,6 +143,43 @@ def _parse_csv_outputs(outputs_raw):
             continue
         outputs.append({"to": addr, "amount": amt})
     return outputs, errors
+
+
+def _fee_rate(t):
+    return t.get("fee", 0) / max(tx_mod.tx_size(t), 1)
+
+
+def fee_estimate(node):
+    """Current mempool fee-per-byte picture for the send UI.
+
+    Reuses block.assemble() itself (rather than reimplementing its
+    fee-per-byte packing logic) to find the "next block" clearing rate, so
+    this can never quietly drift out of sync with what actually gets a
+    transaction included.
+
+    Returns {"pending": int, "min": float, "median": float, "max": float,
+    "next_block": float}. next_block is 0 when the mempool doesn't fill a
+    block at all -- any non-negative fee would be included right now.
+    """
+    pending = node.mempool.all_txs()
+    if not pending:
+        return {"pending": 0, "min": 0, "median": 0, "max": 0, "next_block": 0}
+
+    rates = sorted(_fee_rate(t) for t in pending)
+    n = len(rates)
+    median = rates[n // 2] if n % 2 else (rates[n // 2 - 1] + rates[n // 2]) / 2
+
+    v = node.view
+    iterations = block_mod.get_vdf_iterations(v.chain)
+    candidate = block_mod.assemble(v.tip, pending, v.tip.get("builder") or "", iterations)
+    included = candidate["transactions"]
+    # Full block: the going rate is the lowest fee-per-byte that still made
+    # it in. Otherwise everything pending fits, so nothing is required to
+    # clear the next block.
+    next_block = min((_fee_rate(t) for t in included), default=0) if len(included) < n else 0
+
+    return {"pending": n, "min": rates[0], "median": median, "max": rates[-1],
+            "next_block": next_block}
 
 
 def _submit_and_alert(node, outputs, fee, passphrase, ctx):
@@ -418,6 +456,7 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
         v = node.view
         ctx = dict(title="Send", from_addr=node.addr,
                    balance=v.state.get_balance(node.addr),
+                   fees=fee_estimate(node),
                    alert_ok="", alert_err="")
         if request.method == "POST":
             outputs_raw = request.form.get("outputs", "").strip()

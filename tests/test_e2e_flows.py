@@ -73,18 +73,21 @@ class TestE2E_EmissionSchedule:
 # ---------------------------------------------------------------------------
 
 class TestE2E_ForkChoice:
-    def test_equal_height_lower_hash_wins(self):
-        """Most cumulative proven work wins; ties broken by tip hash."""
+    def test_equal_height_lower_vdf_output_wins(self):
+        """Most cumulative proven work wins; ties broken by VDF output (not
+        block hash -- block_hash includes the transaction list, which
+        isn't bound into the VDF challenge and so can be changed for free
+        after the real work is done; see chainstate.is_better_than)."""
         cs = ChainState.from_genesis()
         g = cs.tip
-        b1a = make_block(1, g["hash"], [], builder_index=0)
-        b1b = make_block(1, g["hash"], [], builder_index=1)
+        b1a = make_block(1, g["hash"], [], builder_index=0, vdf_output="aa" * 100)
+        b1b = make_block(1, g["hash"], [], builder_index=1, vdf_output="bb" * 100)
 
         _, _, csa = cs.validate_and_apply(b1a)
         _, _, csb = cs.validate_and_apply(b1b)
 
-        # Both are at height 1; lower tip hash wins deterministically
-        winner = csa if csa.tip["hash"] < csb.tip["hash"] else csb
+        # Both are at height 1 with equal iterations; lower vdf_output wins
+        winner = csa if csa.tip["vdf_output"] < csb.tip["vdf_output"] else csb
         loser  = csb if winner is csa else csa
         assert winner.is_better_than(loser)
         assert not loser.is_better_than(winner)

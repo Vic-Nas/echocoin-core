@@ -5,7 +5,7 @@ Covers: from_genesis, from_chain, from_storage, validate_and_apply,
 apply_block, _apply_block_with_state, is_better_than (fork choice),
 accessors (tip, height, genesis_hash).
 
-Fork choice: most cumulative proven VDF work wins; tip hash breaks ties.
+Fork choice: most cumulative proven VDF work wins; VDF output breaks ties.
 """
 
 import os
@@ -192,8 +192,10 @@ class TestIsBetterThan:
         assert cs1.is_better_than(cs0)
         assert not cs0.is_better_than(cs1)
 
-    def test_equal_height_lower_hash_wins(self):
-        """Tie broken by block hash (deterministic)."""
+    def test_equal_height_lower_hash_wins_for_genesis_fallback(self):
+        """Genesis has no vdf_output, so the tie-break falls back to hash
+        there specifically. Real (non-genesis) ties use vdf_output instead
+        -- see the tests below."""
         cs = ChainState.from_genesis()
         g = cs.tip
         blk_a = dict(g)
@@ -204,6 +206,40 @@ class TestIsBetterThan:
         cs_b = ChainState([blk_b], cs.state.snapshot())
         assert cs_a.is_better_than(cs_b)  # "aa..." < "bb..."
         assert not cs_b.is_better_than(cs_a)
+
+    def test_tie_break_uses_vdf_output_not_block_hash(self):
+        """A single builder can freely change which transactions a block
+        includes after finishing its VDF (the transaction list isn't part
+        of the challenge -- see block.vdf_challenge), which changes
+        block_hash for free. If ties were broken on block_hash, that
+        builder could grind transaction-list variants to bias every tie in
+        its favor at nearly zero cost, defeating the whole point of the
+        VDF: that influence over the chain costs real sequential time.
+        Two blocks with the same vdf_output (same real VDF work) but
+        different hashes (different transaction lists) must be a genuine,
+        unbreakable tie: neither is_better_than the other."""
+        cs = ChainState.from_genesis()
+        g = cs.tip
+        blk_a = dict(g, height=1, vdf_output="same_output", hash="aa" * 32)
+        blk_b = dict(g, height=1, vdf_output="same_output", hash="bb" * 32)
+        cs_a = ChainState([g, blk_a], cs.state.snapshot())
+        cs_b = ChainState([g, blk_b], cs.state.snapshot())
+        assert not cs_a.is_better_than(cs_b)
+        assert not cs_b.is_better_than(cs_a)
+
+    def test_tie_break_cannot_be_overridden_by_a_lower_block_hash(self):
+        """The block with the lower vdf_output wins the tie even when it
+        has the numerically higher block_hash -- proving hash alone can't
+        decide it, which is what stops the free transaction-list-grinding
+        attack described above."""
+        cs = ChainState.from_genesis()
+        g = cs.tip
+        blk_lower_output = dict(g, height=1, vdf_output="aaa", hash="zz" * 32)
+        blk_higher_output = dict(g, height=1, vdf_output="zzz", hash="aa" * 32)
+        cs_lower = ChainState([g, blk_lower_output], cs.state.snapshot())
+        cs_higher = ChainState([g, blk_higher_output], cs.state.snapshot())
+        assert cs_lower.is_better_than(cs_higher)
+        assert not cs_higher.is_better_than(cs_lower)
 
     def test_chain_is_not_better_than_itself(self):
         cs = ChainState.from_genesis()
