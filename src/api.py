@@ -97,6 +97,28 @@ def fmt_fee_rate(ticks_per_byte):
 # Shared helpers
 # ---------------------------------------------------------------------------
 
+def _tx_amount(t):
+    """Visible transfer amount for display. A "resolve" reveals the real
+    outputs; a "confirm" is still encrypted at this point, so there's
+    nothing to show yet."""
+    if t.get("kind") == "resolve":
+        return sum(o["amount"] for o in t.get("payload", {}).get("outputs", []))
+    return 0
+
+
+def _recent_committed_txs(chain, limit):
+    """Most recently committed transactions across the chain, tip first.
+    Walks blocks backward from the tip so this stays cheap even on a long
+    chain with sparse blocks -- it stops as soon as `limit` is reached."""
+    rows = []
+    for blk in reversed(chain):
+        for t in reversed(blk.get("transactions", [])):
+            rows.append((blk["height"], tx_mod.tx_hash(t), t, _tx_amount(t)))
+            if len(rows) >= limit:
+                return rows
+    return rows
+
+
 def _get_address_history(addr, node):
     v = node.view
     history = []
@@ -173,7 +195,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
         info = node.get_info()
         chain = node.view.chain
         return render_template("dashboard.html", title="Dashboard",
-            info=info, tip=chain[-1], recent_blocks=chain[-10:][::-1])
+            info=info, tip=chain[-1],
+            recent_txs=_recent_committed_txs(chain, limit=10))
 
     @app.route("/explorer", endpoint=pfx+"explorer")
     def explorer():
@@ -193,12 +216,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
             return render_template("error.html", title="Not found",
                 message="Block not found."), 404
         b = chain[height]
-
-        def _tx_amount(t):
-            if t.get("kind") == "resolve":
-                return sum(o["amount"] for o in t.get("payload", {}).get("outputs", []))
-            return 0  # "confirm": amount is encrypted, not visible yet
-
         tx_rows = [(tx_mod.tx_hash(t), t, _tx_amount(t)) for t in b["transactions"]]
         return render_template("block_detail.html", title=f"Block {height}",
             b=b, tx_rows=tx_rows, has_next=height + 1 < len(chain))

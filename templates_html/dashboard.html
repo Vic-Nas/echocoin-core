@@ -15,19 +15,28 @@
   <div class="hash">{{ tip.hash }}</div>
 </div>
 <div class="card">
-  <div class="card-title">Recent blocks</div>
+  <div class="card-title">Recent transactions</div>
   <table>
-    <thead><tr><th>Height</th><th>Hash</th><th>Txs</th><th>Builder</th><th>Fee rate</th></tr></thead>
+    <thead><tr><th>Height</th><th>Hash</th><th>Kind</th><th>From</th><th>Amount</th></tr></thead>
     <tbody>
-    {% for b in recent_blocks %}
-    <tr>
-      <td><a href="/explorer/block/{{ b.height }}">{{ b.height }}</a></td>
-      <td class="hash-short">{{ b.hash[:20] }}…</td>
-      <td>{{ b.transactions | length }}</td>
-      <td class="hash-short">{{ (b.builder or '')[:20] }}{% if b.builder %}…{% endif %}</td>
-      <td>{{ fmt_fee_rate(b.fee_rate) }}</td>
-    </tr>
-    {% endfor %}
+    {% if recent_txs %}
+      {% for height, h, t, amount in recent_txs %}
+      <tr>
+        <td><a href="/explorer/block/{{ height }}">{{ height }}</a></td>
+        <td class="hash-short"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
+        <td>{{ t.kind }}</td>
+        {% if t.kind == "resolve" %}
+        <td class="hash-short">{{ t.payload.from[:24] }}…</td>
+        <td>{{ fmt_balance(amount) }}</td>
+        {% else %}
+        <td class="hash-short">{{ t.broadcaster[:24] }}… (encrypted)</td>
+        <td>&mdash;</td>
+        {% endif %}
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="5" style="color:var(--muted);text-align:center">No transactions yet</td></tr>
+    {% endif %}
     </tbody>
   </table>
 </div>
