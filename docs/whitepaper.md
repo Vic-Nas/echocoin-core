@@ -4,7 +4,7 @@
 
 ## Abstract
 
-LapseCoin keeps Bitcoin's consensus model: the chain with the most proven work wins, and the first valid block received is accepted. Proof-of-work is replaced with a Verifiable Delay Function (VDF), tying block production to real elapsed time rather than a race for a lucky hash. The new idea sits at the transaction layer. Every transaction is submitted as an encrypted, time-locked ciphertext, and blocks must resolve these ciphertexts in strict, gapless order, with the front of the queue mandatory every block. A builder cannot skip a transaction it dislikes without either resolving it or stopping block production entirely, and it can't even identify which transaction to target before resolution, since the content is encrypted. That is what gives the chain censorship resistance.
+LapseCoin keeps Bitcoin's consensus model: the chain with the most proven work wins, and the first valid block received is accepted. Proof-of-work is replaced with a Verifiable Delay Function (VDF), tying block production to real elapsed time rather than a race for a lucky hash. Transactions are ordinary and plaintext, with sender-bid fees, much like Bitcoin's own. The main practical difference from Bitcoin is the VDF itself: it is believed to have a much smaller hardware advantage gap than proof-of-work does, so it does not push the network toward the same resource-consumption spiral that proof-of-work mining did.
 
 ## 1. Consensus: Verifiable Delay Functions
 
@@ -16,32 +16,29 @@ When two chains compete, the one with more cumulative proven VDF iterations wins
 
 Rewriting old history means redoing every VDF since that point, sequentially, in as much real time as the honest chain took to produce them. The honest chain keeps advancing the whole time, so the gap only grows.
 
-## 2. What a VDF alone does not solve
+## 2. Why a VDF instead of proof-of-work
 
-A VDF secures the chain against history rewriting, but it does nothing to stop whoever is building the current block from simply leaving out one transaction it dislikes while building normally on everything else. Closing that gap needs a rule at the transaction layer, described next.
+Proof-of-work ties a miner's expected reward directly to hash rate, with no ceiling: doubling your hash rate doubles your expected share of every block, forever. That unbounded incentive is what drove Bitcoin mining from CPUs to GPUs to ASICs, a hardware gap that reached 10,000x or more over commodity hardware, and an enormous, ever-growing energy bill along with it.
 
-## 3. Encrypted transactions and the resolution queue
+A VDF does not have that shape. Each block's challenge is a single sequential computation with a fixed floor, about 120 seconds here, that more hardware cannot shrink below. Racing to build a block is not a matter of buying more machines and running more attempts in parallel; it is a matter of how fast one chain of sequential steps can be evaluated, and that has a hard floor set by the arithmetic itself.
+
+This does not mean all VDF hardware is equal. Chia Network's 2019 public hardware competition for the same class-group-based VDF construction used here found real, specialized implementations beating commodity software by something like 3 to 10 times, not nothing. But that gap is far narrower than the proof-of-work gap, and more importantly it does not grow the same way: there is no unbounded reward for adding more of that hardware in parallel, because a single VDF evaluation cannot be split across machines. The result is a design that avoids proof-of-work's resource-consumption spiral structurally, from the shape of the problem, rather than by adding a separate "green" rule on top.
+
+## 3. Transactions
 
 The base unit is the tick. One LAPSE equals 100,000,000 ticks.
 
-A transaction has two parts:
+A transaction is a plain, visible dict: a sender address, a public key, a list of outputs (recipient and amount), a sequential per-sender nonce, a fee, and a signature. Nothing about it is encrypted or hidden.
 
-- **The inner payload**: the real sender, recipient, amount, and a nonce. It is encrypted using a time-lock puzzle (Rivest, Shamir, Wagner, 1996): a disposable RSA modulus `N`, a random base `x`, and a fixed iteration count `T`. The sender computes the answer instantly using the factorization of `N`, encrypts the payload with a key derived from that answer, then discards the factorization. Only `N`, `x`, and the ciphertext are published.
-- **The wrapper**: a broadcaster address, signature, and fee. This part is visible immediately and checked like an ordinary transaction, but against the broadcaster, not necessarily the real sender.
+Nonces are sequential per sender, starting from zero: a transaction's nonce must be exactly one more than the sender's last confirmed nonce. This is the standard replay-protection scheme, the same one Bitcoin-style account models use.
 
-The broadcaster does not have to be the real sender. A wallet uses the sender's own key by default, but the protocol allows any address to broadcast on someone else's behalf. This protects against an attacker targeting a specific known address, since the visible wrapper does not have to reveal who is actually sending.
+Fees are chosen by the sender, not fixed by the protocol. A transaction is valid as long as the sender's balance covers every output plus the fee. Builders are free to prioritize whichever pending transactions pay the most per byte, the same market-based mechanism Bitcoin uses to clear its mempool under load.
 
-Fees are fixed by the protocol (transaction size times a rate that adjusts with network load), never bid by the sender. A sender-chosen fee would itself be a visible signal even before decryption, and letting a higher fee jump the queue would contradict the ordering rule below.
-
-Once confirmed on chain, a ciphertext gets a permanent position in a single global queue, ordered by block height and position within the block. Anyone can solve a pending puzzle by performing the `T` sequential squarings needed to recover the key, then publish the answer along with the decrypted payload. Verifying a published answer is cheap, a single decryption check rather than a repeat of the squaring. The first valid resolution to land in a block collects that transaction's fee. There is no way to prove who solved a puzzle first, so this affects fee fairness among solvers, not the chain's security.
-
-A block is valid only if it resolves at least the current front of the queue, and any further resolutions in that block continue gaplessly from the front. There is no deadline and no partial credit for clearing part of the backlog. Since content stays hidden until resolution, a builder cannot identify which transaction to suppress until that transaction is already the mandatory front of the queue. At that point it has exactly two options: resolve it and keep building, or stop building blocks. There is no way to selectively skip just one.
-
-Puzzle difficulty (`T`) is fixed and identical for every transaction, never chosen by the sender, since a variable difficulty would itself leak information before decryption. Difficulty adjusts in step with the VDF's own iteration count, with an added safety margin, since dedicated hardware for this kind of arithmetic is more mature than for the VDF's.
+Blocks apply their listed transactions in order, checking each one against the state as it stands after the transactions before it in the same block. There is no required canonical ordering across transactions; a block's builder can list them however it likes, as long as each one is individually valid at the point it is applied.
 
 ## 4. Fees and block rewards
 
-The builder receives the full block reward for every block, unconditionally. Confirmation fees are separate: they are held from the moment a transaction is confirmed and paid out to whoever resolves it first.
+The builder receives the full block reward for every block, unconditionally, plus every transaction fee in that block. There is no split, and no separate party to pay out to.
 
 ## 5. Supply
 
@@ -57,19 +54,24 @@ Transactions propagate through Dandelion routing, so no observer can reliably te
 
 Peers find each other through the BitTorrent DHT. A node only connects to peers sharing its genesis block hash. The full chain is kept forever, so balances can always be recomputed from scratch.
 
-## 7. Known limitations
+## 7. Security and censorship: what this design does and does not solve
 
-This design does not claim to solve every problem:
+Consensus here is longest-chain, exactly like Bitcoin's, just measured in proven VDF iterations instead of hashes. That inherits Bitcoin's security model in full, including its limits.
 
-- A dominant builder can still stall the whole chain by refusing to build once the queue reaches a transaction it wants to avoid. Every longest-chain system has this limit, Bitcoin included.
-- The very first confirmation of a new ciphertext, before it has a queue position, can still be refused by a builder. But refusing one means refusing all new submissions, since nothing about the wrapper reveals what to target.
-- The time-lock puzzle is plain RSA and would break on a sufficiently large quantum computer, unlike the FALCON-512 signatures used elsewhere in this design. No vetted quantum-resistant time-lock construction exists yet, so this is a real, open weakness.
-- Whether real-world solving hardware keeps pace with transaction volume is a market question the protocol cannot guarantee. A shortfall would show up as a growing queue, not a security failure.
-- As with Bitcoin, a node syncing from scratch cannot cryptographically distinguish the honest chain from an attacker's alternative on its own.
+Ordinary transaction censorship, a single non-majority actor refusing to include some transaction, is defeated the same way it always has been: any other willing participant can include it instead, and ordinary confirmation-depth economics protect against a brief refusal turning into a permanent one.
+
+A genuine, sustained majority attacker is a different matter, and here this design does not claim to do better than Bitcoin. Fork choice cares only about cumulative proven work; it has no way to look at what a chain contains. A majority attacker can always choose to fork from a point before some transaction was ever confirmed, and build an alternative history that simply never confirms it, at exactly the cost of an ordinary reorg attack. No rule enforced at the level of individual blocks or individual transactions can stop this, because the attacker is not breaking any such rule; it is simply choosing not to extend the branch that contains the disliked content. This is a universal property of longest-chain consensus, not a gap specific to this design.
+
+An earlier draft of this protocol addressed transaction-level censorship with an encrypted-transaction and mandatory-queue-resolution scheme: every transaction was submitted as a time-locked ciphertext, and every block had to resolve the oldest unresolved ciphertext before it could include anything else. The idea was to make selective exclusion an all-or-nothing choice for a builder. After closer analysis, that mechanism was removed. It never actually strengthened the guarantee against the threat model above: the mandatory-resolution rule only applies to a transaction that has already been confirmed on the winning chain, and a majority attacker can simply avoid ever confirming a transaction it dislikes, sidestepping the whole mechanism at no extra cost. What the encrypted-transaction scheme did achieve was smaller and real: it raised the cost of casual, free, content-based mempool filtering (a builder scanning plaintext for a target address) into something requiring real computation, though that computation was still parallelizable and eventually defeatable by anyone willing to spend on hardware, and it forced a would-be censor into a more visible full reorg rather than a quiet exclusion. Weighed against the cost, a second cryptographic primitive, a global ordering queue, and escrow accounting for puzzle-solver fees, that benefit was not enough to keep. Removing it was a deliberate simplification made after the fact, not an oversight.
+
+Other inherited limitations:
+
+- As with Bitcoin, a node syncing from scratch cannot cryptographically distinguish the honest chain from an attacker's alternative on its own; it has to trust the network it connects to at least once.
+- Whether VDF-solving hardware availability keeps pace with the network's needs is a market question the protocol cannot guarantee, the same as mining hardware availability is for Bitcoin.
 
 ## 8. Conclusion
 
-LapseCoin keeps Bitcoin's core guarantee: no trust required, everything verifiable, no authority can reverse a transaction. It replaces proof-of-work with a Verifiable Delay Function, and replaces plaintext transactions with encrypted ones resolved in strict, gapless order, turning selective censorship into an all-or-nothing choice for any builder. Supply is capped at 21 million LAPSE with smooth decay and no halvings.
+LapseCoin keeps Bitcoin's core guarantee: no trust required, everything verifiable, no authority can reverse a transaction. It replaces proof-of-work with a Verifiable Delay Function, which is believed to narrow the hardware-advantage gap that drove proof-of-work's runaway energy use, without needing a separate rule bolted on to achieve that. Transactions stay ordinary and plaintext, with sender-bid fees. Supply is capped at 21 million LAPSE with smooth decay and no halvings. Censorship resistance beyond ordinary confirmation-depth security is not claimed, because no rule at the block or transaction level can give it against a genuine majority attacker in a longest-chain system.
 
 ## References
 
@@ -78,4 +80,4 @@ LapseCoin keeps Bitcoin's core guarantee: no trust required, everything verifiab
 3. G. Fanti et al., "Dandelion: Redesigning the Bitcoin Network for Anonymity," 2018.
 4. A. Loewenstern et al., "BEP 44: Storing arbitrary data in the DHT," 2014.
 5. D. Boneh et al., "Verifiable Delay Functions," 2018.
-6. R. Rivest, A. Shamir, D. Wagner, "Time-lock puzzles and timed-release crypto," 1996.
+6. Chia Network, "Chia Network's Proof of Space and Time VDF Competition Results," 2019.
