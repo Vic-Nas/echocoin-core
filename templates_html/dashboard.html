@@ -4,7 +4,6 @@
   <div class="stat"><div class="stat-label">Height</div><div class="stat-value">{{ info.height }}</div></div>
   <div class="stat"><div class="stat-label">Mempool</div><div class="stat-value">{{ info.mempool_size }}</div></div>
   <div class="stat"><div class="stat-label">Peers</div><div class="stat-value">{{ info.peer_count }}</div></div>
-  <div class="stat"><div class="stat-label">Fee Rate</div><div class="stat-value">{{ fmt_fee_rate(info.fee_rate) }}</div></div>
 </div>
 <div class="card">
   <div class="card-title">Your address</div>
@@ -17,25 +16,19 @@
 <div class="card">
   <div class="card-title">Recent transactions</div>
   <table>
-    <thead><tr><th>Height</th><th>Hash</th><th>Kind</th><th>From</th><th>Amount</th></tr></thead>
+    <thead><tr><th>Height</th><th>Hash</th><th>From</th><th>Amount</th></tr></thead>
     <tbody>
     {% if recent_txs %}
       {% for height, h, t, amount in recent_txs %}
       <tr>
         <td><a href="/explorer/block/{{ height }}">{{ height }}</a></td>
         <td class="hash-short"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
-        <td>{{ t.kind }}</td>
-        {% if t.kind == "resolve" %}
-        <td class="hash-short">{{ t.payload.from[:24] }}…</td>
+        <td class="hash-short">{{ t.from[:24] }}…</td>
         <td>{{ fmt_balance(amount) }}</td>
-        {% else %}
-        <td class="hash-short">{{ t.broadcaster[:24] }}… (encrypted)</td>
-        <td>&mdash;</td>
-        {% endif %}
       </tr>
       {% endfor %}
     {% else %}
-      <tr><td colspan="5" style="color:var(--muted);text-align:center">No transactions yet</td></tr>
+      <tr><td colspan="4" style="color:var(--muted);text-align:center">No transactions yet</td></tr>
     {% endif %}
     </tbody>
   </table>

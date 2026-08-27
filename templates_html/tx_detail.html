@@ -5,37 +5,20 @@
   <table>
     <tr><td style="color:var(--muted);width:120px">Hash</td><td class="hash">{{ tx_hash }}</td></tr>
     <tr><td style="color:var(--muted)">Status</td><td>{{ location }}</td></tr>
-    <tr><td style="color:var(--muted)">Kind</td><td>{{ tx.kind }}</td></tr>
-    {% if tx.kind == "resolve" %}
-    <tr><td style="color:var(--muted)">Resolves</td><td class="hash">{{ tx.confirmed_tx_hash }}</td></tr>
-    <tr><td style="color:var(--muted)">Resolver</td><td class="hash-short">{{ tx.resolver }}</td></tr>
-    <tr><td style="color:var(--muted)">From</td><td class="hash-short">{{ tx.payload.from }}</td></tr>
-    <tr><td style="color:var(--muted)">Nonce</td><td>{{ tx.payload.nonce }}</td></tr>
-    {% else %}
-    <tr><td style="color:var(--muted)">Broadcaster</td><td class="hash-short">{{ tx.broadcaster }}</td></tr>
+    <tr><td style="color:var(--muted)">From</td><td class="hash-short">{{ tx.from }}</td></tr>
+    <tr><td style="color:var(--muted)">Nonce</td><td>{{ tx.nonce }}</td></tr>
     <tr><td style="color:var(--muted)">Fee</td><td>{{ tx.fee }}</td></tr>
-    <tr><td style="color:var(--muted)">Fee height</td><td>{{ tx.fee_height }}</td></tr>
-    <tr><td style="color:var(--muted)">Puzzle N (bits)</td><td>{{ tx.puzzle.N | string | length }}</td></tr>
-    {% endif %}
   </table>
 </div>
-{% if tx.kind == "resolve" %}
 <div class="card">
   <div class="card-title">Outputs</div>
   <table>
     <thead><tr><th>To</th><th>Amount</th></tr></thead>
     <tbody>
-    {% for o in tx.payload.outputs %}
+    {% for o in tx.outputs %}
     <tr><td class="hash-short">{{ o.to }}</td><td>{{ o.amount }}</td></tr>
     {% endfor %}
     </tbody>
   </table>
 </div>
-{% else %}
-<div class="card">
-  <div class="card-title">Ciphertext</div>
-  <p style="color:var(--muted)">The real sender, recipients, and amount are time-lock-encrypted and
-  invisible until this confirmation is resolved.</p>
-</div>
-{% endif %}
 {% endblock %}

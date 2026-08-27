@@ -6,7 +6,7 @@
 <div class="card">
   <div class="card-title">Your address</div>
   <div class="hash" style="margin-bottom:.5rem">{{ from_addr }}</div>
-  <div class="stat-label">Balance: <strong style="color:var(--green)">{{ fmt_balance(balance) }}</strong> &nbsp;|&nbsp; Fee rate: {{ fmt_fee_rate(fee_rate) }}</div>
+  <div class="stat-label">Balance: <strong style="color:var(--green)">{{ fmt_balance(balance) }}</strong></div>
 </div>
 <div class="card">
   <div class="card-title">Outputs — paste CSV (address,amount) or upload file</div>
@@ -18,6 +18,10 @@
     <div class="form-group">
       <label>Or upload CSV file</label>
       <input type="file" name="csv_file" accept=".csv,.txt">
+    </div>
+    <div class="form-group">
+      <label>Fee (ticks, in ticks -- higher fee gets picked up sooner)</label>
+      <input type="number" name="fee" value="0" min="0">
     </div>
     <div class="form-group">
       <label>Your signing passphrase</label>

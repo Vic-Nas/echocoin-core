@@ -18,12 +18,9 @@ Public app  (default port 8333, externally reachable):
 
   JSON API (Content-Type: application/json):
     GET  /api/info
-         {"height", "tip_hash", "genesis_hash", "fee_rate", "mempool_size",
+         {"height", "tip_hash", "genesis_hash", "mempool_size",
           "address", "peer_count", "total_minted", "can_mint",
           "block_reward"}
-
-    GET  /api/fee_rate
-         {"fee_rate": <ticks/byte>, "height": <n>}
 
     GET  /api/block/<height>          full block object or {"error": "not found"}
     GET  /api/tx/<hash>               transaction object (confirmed or mempool)
@@ -42,9 +39,9 @@ Public app  (default port 8333, externally reachable):
           "can_mint", "supply_cap", "net_emission_last", "ticks_per_lapse"}}
 
     POST /api/tx/send                 rate-limited: 20 requests/second
-         Request body (JSON): a signed "confirm" tx dict, see tx.py
-         (tx_mod.create_confirmation): {"kind": "confirm", "broadcaster",
-         "pubkey", "fee_height", "fee", "iterations", "puzzle", "signature"}
+         Request body (JSON): a signed plaintext tx dict, see tx.py
+         (tx_mod.create): {"from", "pubkey", "outputs", "nonce", "fee",
+         "signature"}
          Response:
            {"ok": true,  "tx_hash": <hex>}
            {"ok": false, "error": <string>}
@@ -86,24 +83,13 @@ def fmt_balance(ticks):
     return f"{lapse} LAPSE {rem:,} ticks"
 
 
-def fmt_fee_rate(ticks_per_byte):
-    lapse = ticks_per_byte / TICKS_PER_LAPSE
-    if lapse >= 0.001:
-        return f"{lapse:.6f} LAPSE/byte"
-    return f"{lapse:.2e} LAPSE/byte"
-
-
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
 def _tx_amount(t):
-    """Visible transfer amount for display. A "resolve" reveals the real
-    outputs; a "confirm" is still encrypted at this point, so there's
-    nothing to show yet."""
-    if t.get("kind") == "resolve":
-        return sum(o["amount"] for o in t.get("payload", {}).get("outputs", []))
-    return 0
+    """Total transfer amount for display."""
+    return sum(o["amount"] for o in t.get("outputs", []))
 
 
 def _recent_committed_txs(chain, limit):
@@ -127,9 +113,7 @@ def _get_address_history(addr, node):
         if 0 <= h_height < len(chain):
             for t in chain[h_height]["transactions"]:
                 if tx_mod.tx_hash(t) == h:
-                    real_from = t.get("payload", {}).get("from") if t.get("kind") == "resolve" else None
-                    sent_addr = real_from or t.get("broadcaster")
-                    direction = "sent" if sent_addr == addr else "received"
+                    direction = "sent" if t.get("from") == addr else "received"
                     history.append((h_height, h, direction, t))
                     break
     return history
@@ -160,12 +144,12 @@ def _parse_csv_outputs(outputs_raw):
     return outputs, errors
 
 
-def _submit_and_alert(node, outputs, passphrase, ctx):
+def _submit_and_alert(node, outputs, fee, passphrase, ctx):
     if not passphrase:
         ctx["alert_err"] = "Passphrase required."
         return
     try:
-        t, _fee = node.build_and_sign_tx(outputs, passphrase or None)
+        t, _fee = node.build_and_sign_tx(outputs, fee=fee, passphrase=passphrase or None)
         ok, result = node.submit_tx_from_api(t)
         if ok:
             ctx["alert_ok"] = f'Submitted. tx: <span class="hash">{result}</span>'
@@ -253,7 +237,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         elif addr:
             v = node.view
             ctx["balance"]  = v.state.get_balance(addr)
-            ctx["tx_count"] = v.state.nonce_count(addr)
+            ctx["tx_count"] = v.state.get_nonce(addr)
             newest_first = _get_address_history(addr, node)[::-1]
             start = (page - 1) * HISTORY_PER_PAGE
             end   = start + HISTORY_PER_PAGE
@@ -294,11 +278,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/api/info", endpoint=pfx+"api_info")
     def api_info():
         return jsonify(node.get_info())
-
-    @app.route("/api/fee_rate", endpoint=pfx+"api_fee_rate")
-    def api_fee_rate():
-        v = node.view
-        return jsonify({"fee_rate": v.tip["fee_rate"], "height": v.height})
 
     @app.route("/api/block/<int:height>", endpoint=pfx+"api_block")
     def api_block(height):
@@ -343,12 +322,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
         txs = node.mempool.all_txs()
 
         def _summarize(t):
-            if t.get("kind") == "confirm":
-                return {"hash": tx_mod.tx_hash(t), "kind": "confirm",
-                        "broadcaster": t["broadcaster"], "fee": t["fee"]}
-            return {"hash": tx_mod.tx_hash(t), "kind": "resolve",
-                    "confirmed_tx_hash": t["confirmed_tx_hash"],
-                    "resolver": t["resolver"]}
+            return {"hash": tx_mod.tx_hash(t), "from": t["from"],
+                    "outputs": t["outputs"], "fee": t["fee"]}
 
         return jsonify({"size": len(txs), "transactions": [_summarize(t) for t in txs]})
 
@@ -398,8 +373,7 @@ def _base_dir():
 def create_app(node, pool, private_port=8334, public_port=8333):
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
-    app.jinja_env.globals.update(
-        fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate)
+    app.jinja_env.globals.update(fmt_balance=fmt_balance)
     app.logger.setLevel(logging.WARNING)
     logging.getLogger("werkzeug").setLevel(logging.INFO)
 
@@ -430,8 +404,7 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
     """Full-featured app for local use. Never expose via Funnel or public port."""
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
-    app.jinja_env.globals.update(
-        fmt_balance=fmt_balance, fmt_fee_rate=fmt_fee_rate)
+    app.jinja_env.globals.update(fmt_balance=fmt_balance)
     app.logger.setLevel(logging.WARNING)
 
     limiter = Limiter(get_remote_address, app=app, default_limits=[],
@@ -445,21 +418,28 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
         v = node.view
         ctx = dict(title="Send", from_addr=node.addr,
                    balance=v.state.get_balance(node.addr),
-                   fee_rate=v.tip["fee_rate"],
                    alert_ok="", alert_err="")
         if request.method == "POST":
             outputs_raw = request.form.get("outputs", "").strip()
+            fee_raw     = request.form.get("fee", "0").strip()
             passphrase  = request.form.get("passphrase", "").strip()
             csv_file    = request.files.get("csv_file")
             if csv_file and csv_file.filename:
                 outputs_raw = csv_file.read().decode()
             outputs, errors = _parse_csv_outputs(outputs_raw)
+            try:
+                fee = int(fee_raw or "0")
+                if fee < 0:
+                    raise ValueError
+            except ValueError:
+                errors.append("Fee must be a non-negative integer.")
+                fee = 0
             if errors:
                 ctx["alert_err"] = "<br>".join(errors)
             elif not outputs:
                 ctx["alert_err"] = "No valid outputs."
             else:
-                _submit_and_alert(node, outputs, passphrase, ctx)
+                _submit_and_alert(node, outputs, fee, passphrase, ctx)
                 if ctx["alert_ok"]:
                     ctx["alert_ok"] = ctx["alert_ok"].replace("Submitted.", "Sent.")
         return render_template("send.html", **ctx)
