@@ -281,7 +281,7 @@ class Node:
                 lambda chain: self.apply_better_chain(chain)[0],
             )
         cs = self.cs   # local alias; can change under sync
-        pruned = self.mempool.prune_stale(cs.height, cs.state)
+        pruned = self.mempool.prune_stale(cs.state)
         log.info("[vdf] starting height=%d  tip=%s  peers=%d  mempool=%d  pruned=%d",
                  cs.height + 1, cs.tip["hash"][:12],
                  self.pool.count(), self.mempool.size(), len(pruned))

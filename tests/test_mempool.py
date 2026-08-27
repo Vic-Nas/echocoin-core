@@ -179,7 +179,7 @@ class TestPruneStale:
         t = make_tx(0, 1, TICKS_PER_LAPSE, s)
         mp.add(t)
         s.apply_tx(t)  # nonce is now consumed
-        pruned = mp.prune_stale(chain_tip_height=10, state=s)
+        pruned = mp.prune_stale(state=s)
         assert len(pruned) == 1
         assert mp.size() == 0
 
@@ -191,7 +191,7 @@ class TestPruneStale:
         t = make_tx(0, 1, TICKS_PER_LAPSE, s)
         mp.add(t)
         # Force very short TTL
-        pruned = mp.prune_stale(chain_tip_height=10, state=s, ttl_seconds=0)
+        pruned = mp.prune_stale(state=s, ttl_seconds=0)
         assert len(pruned) == 1
 
     def test_prune_valid_tx_stays(self):
@@ -200,6 +200,6 @@ class TestPruneStale:
         seed_balance(s, 0, 100.0)
         t = make_tx(0, 1, TICKS_PER_LAPSE, s)
         mp.add(t)
-        pruned = mp.prune_stale(chain_tip_height=10, state=s)
+        pruned = mp.prune_stale(state=s)
         assert len(pruned) == 0
         assert mp.size() == 1

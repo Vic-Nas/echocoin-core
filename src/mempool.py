@@ -56,7 +56,7 @@ class Mempool:
     def pending_hashes(self):
         return frozenset(self._pool.keys())
 
-    def prune_stale(self, chain_tip_height, state, ttl_seconds=MEMPOOL_TTL_SECONDS):
+    def prune_stale(self, state, ttl_seconds=MEMPOOL_TTL_SECONDS):
         """Evict txs that can never become valid: a nonce already superseded
         on chain, or simply too old. Returns list of pruned hashes."""
         now = time.monotonic()

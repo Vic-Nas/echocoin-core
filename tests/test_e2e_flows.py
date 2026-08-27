@@ -178,7 +178,7 @@ class TestE2E_TxLifecycle:
         assert mp.size() == 1
         # It stays in the mempool until pruned by nonce staleness or TTL --
         # the insufficient-balance failure is only caught at block inclusion.
-        pruned = mp.prune_stale(chain_tip_height=0, state=cs.state)
+        pruned = mp.prune_stale(state=cs.state)
         assert mp.size() + len(pruned) == 1
 
 
