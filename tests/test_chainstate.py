@@ -123,6 +123,27 @@ class TestValidateAndApply:
         assert ok is True, err
         assert cs2.state.get_balance(address(1)) == TICKS_PER_LAPSE
 
+    def test_confirmation_with_wrong_iterations_rejected(self, monkeypatch):
+        """A confirmation's recorded iterations must match what the chain
+        actually requires (timelock.get_timelock_iterations) -- it is not
+        the sender's to choose, the same way a block's vdf_iterations must
+        match block.get_vdf_iterations. Signed while the chain expected one
+        difficulty, then the chain's expectation moves before validation --
+        e.g. a late-arriving confirmation from just before a bump."""
+        cs = ChainState.from_genesis()
+        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 100 * TICKS_PER_LAPSE
+        g = cs.tip
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
+        b = make_block(1, g["hash"], [confirm, resolve])
+
+        import timelock as timelock_mod
+        monkeypatch.setattr(timelock_mod, "TIMELOCK_ITERATIONS",
+                            confirm["iterations"] + 1)
+        ok, err, cs2 = cs.validate_and_apply(b)
+        assert ok is False
+        assert "iterations" in err
+
     def test_resolver_credited_the_fee_after_valid_block(self):
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)

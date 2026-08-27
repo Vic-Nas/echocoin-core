@@ -42,10 +42,9 @@ Public app  (default port 8333, externally reachable):
           "can_mint", "supply_cap", "net_emission_last", "ticks_per_lapse"}}
 
     POST /api/tx/send                 rate-limited: 20 requests/second
-         Request body (JSON):
-           {"from": <address>, "pubkey": <hex>, "outputs": [...],
-            "nonce": <int>, "fee_height": <int>, "fee": <int>,
-            "signature": <hex>}
+         Request body (JSON): a signed "confirm" tx dict, see tx.py
+         (tx_mod.create_confirmation): {"kind": "confirm", "broadcaster",
+         "pubkey", "fee_height", "fee", "iterations", "puzzle", "signature"}
          Response:
            {"ok": true,  "tx_hash": <hex>}
            {"ok": false, "error": <string>}
@@ -218,15 +217,15 @@ def _shared_read_only_routes(app, node, pool, limiter,
     def address_lookup():
         addr = request.args.get("addr", "").strip()
         ctx = dict(title="Address", addr=addr, alert_err="",
-                   history=None, balance=0, nonce=0)
+                   history=None, balance=0, tx_count=0)
         if addr and not crypto_mod.is_valid_address(addr):
             ctx["alert_err"] = "Invalid address format."
             ctx["addr"] = ""
         elif addr:
             v = node.view
-            ctx["balance"] = v.state.get_balance(addr)
-            ctx["nonce"]   = v.state.get_nonce(addr)
-            ctx["history"] = _get_address_history(addr, node)
+            ctx["balance"]  = v.state.get_balance(addr)
+            ctx["tx_count"] = v.state.nonce_count(addr)
+            ctx["history"]  = _get_address_history(addr, node)
         return render_template("address.html", **ctx)
 
     @app.route("/whitepaper", endpoint=pfx+"whitepaper")
@@ -412,7 +411,6 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
         v = node.view
         ctx = dict(title="Send", from_addr=node.addr,
                    balance=v.state.get_balance(node.addr),
-                   nonce=v.state.get_nonce(node.addr) + 1,
                    fee_rate=v.tip["fee_rate"],
                    alert_ok="", alert_err="")
         if request.method == "POST":

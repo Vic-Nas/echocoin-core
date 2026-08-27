@@ -1,7 +1,7 @@
 """
 Unit tests for state.py
 
-Covers: credit, debit, set_nonce, apply_tx, compute_block_reward,
+Covers: credit, debit, mark_nonce_used, apply_tx, compute_block_reward,
 apply_reward_distribution, snapshot, from_snapshot, and the emission formula.
 
   - can_mint = SUPPLY_CAP - total_minted
@@ -89,15 +89,16 @@ class TestCreditDebit:
         s = fresh_state()
         assert s.get_balance("unknown.addr") == 0
 
-    def test_get_nonce_unknown_address_returns_zero(self):
+    def test_has_used_nonce_unknown_address_is_false(self):
         s = fresh_state()
-        assert s.get_nonce("unknown.addr") == 0
+        assert s.has_used_nonce("unknown.addr", "ab" * 16) is False
 
-    def test_set_nonce_stores_value(self):
+    def test_mark_nonce_used_records_it(self):
         s = fresh_state()
         addr = address(0)
-        s.set_nonce(addr, 7)
-        assert s.get_nonce(addr) == 7
+        s.mark_nonce_used(addr, "ab" * 16)
+        assert s.has_used_nonce(addr, "ab" * 16) is True
+        assert s.nonce_count(addr) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -127,7 +128,7 @@ class TestApplyTx:
         seed_balance(s, 0, 100.0)
         confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
         apply_transfer(s, confirm, resolve)
-        assert s.get_nonce(address(0)) == resolve["payload"]["nonce"]
+        assert s.has_used_nonce(address(0), resolve["payload"]["nonce"]) is True
 
     def test_multiple_outputs_all_credited(self):
         s = fresh_state()
@@ -275,9 +276,9 @@ class TestSnapshot:
     def test_from_snapshot_restores_state(self):
         s = fresh_state()
         seed_balance(s, 0, 10.0)
-        balances = s.all_balances()
-        nonces   = s.all_nonces()
-        s2 = state_mod.State.from_snapshot(balances, nonces, s.total_minted)
+        balances    = s.all_balances()
+        used_nonces = s.all_used_nonces()
+        s2 = state_mod.State.from_snapshot(balances, used_nonces, s.total_minted)
         assert s2.get_balance(address(0)) == s.get_balance(address(0))
         assert s2.total_minted == s.total_minted
 

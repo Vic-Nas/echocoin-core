@@ -105,15 +105,15 @@ class TestStatePersistence:
         s = fresh_state()
         s.credit(address(0), 5000)
         store.save_state(s)
-        balances, nonces, minted = store.load_state()
+        balances, used_nonces, minted = store.load_state()
         assert balances[address(0)] == 5000
 
-    def test_load_state_restores_nonces(self, store):
+    def test_load_state_restores_used_nonces(self, store):
         s = fresh_state()
-        s.set_nonce(address(0), 7)
+        s.mark_nonce_used(address(0), "ab" * 16)
         store.save_state(s)
-        _, nonces, _ = store.load_state()
-        assert nonces[address(0)] == 7
+        _, used_nonces, _ = store.load_state()
+        assert used_nonces[address(0)] == ["ab" * 16]
 
     def test_load_state_restores_emission(self, store):
         s = fresh_state()

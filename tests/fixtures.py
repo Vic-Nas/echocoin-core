@@ -79,7 +79,8 @@ def make_confirmation(
     pk_hex = pubkey_hex(broadcaster_index)
     confirm = tx_mod.create_confirmation(bcast_addr, pk_hex, inner_payload,
                                           fee_height, 0, sk, iterations=iterations)
-    fee = tx_mod.compute_fee(bcast_addr, pk_hex, confirm["puzzle"], fee_height, fee_rate)
+    fee = tx_mod.compute_fee(bcast_addr, pk_hex, confirm["puzzle"], fee_height, fee_rate,
+                              iterations=iterations)
     confirm["fee"] = fee
     msg = crypto.serialize_for_signing(confirm)
     confirm["signature"] = crypto.sign(msg, sk).hex()
@@ -107,7 +108,7 @@ def make_tx(
     chain_tip_height: int,
     fee_rate: int = INITIAL_FEE_RATE,
     outputs_override: list | None = None,
-    nonce_override: int | None = None,
+    nonce_override: str | None = None,
     fee_height_override: int | None = None,
     broadcaster_index: int | None = None,
     resolver_index: int = 50,
@@ -127,7 +128,7 @@ def make_tx(
     pk_hex    = pubkey_hex(sender_index)
 
     nonce      = (nonce_override if nonce_override is not None
-                  else state.get_nonce(from_addr) + 1)
+                  else tx_mod.generate_nonce())
     fee_height = (fee_height_override if fee_height_override is not None
                   else chain_tip_height)
 

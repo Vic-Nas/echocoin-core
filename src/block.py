@@ -7,6 +7,7 @@ import crypto
 from crypto import canonical_json
 import tx as tx_mod
 import vdf as vdf_mod
+import timelock as timelock_mod
 from params import (
     BLOCK_SIZE_LIMIT,
     BLOCK_SIZE_TARGET_BYTES,
@@ -264,15 +265,23 @@ def _check_queue_resolution(blk, queue):
     return True, None
 
 
-def _apply_transactions(blk, state, get_fee_rate_at_height, queue):
+def _apply_transactions(blk, state, get_fee_rate_at_height, queue, chain):
     height = blk["height"]
     local_confirmations = {}
+    # One expected difficulty for the whole block: TIMELOCK_ADJUST tracks
+    # VDF_ADJUST_INTERVAL (~2 weeks), far longer than FEE_HEIGHT_MAX_AGE
+    # (a confirmation's fee_height can only be a few blocks old), so a
+    # confirmation's fee_height can never actually straddle a difficulty
+    # boundary in practice -- computing this once per block rather than
+    # per fee_height is a safe simplification, not an approximation.
+    expected_iterations = timelock_mod.get_timelock_iterations(chain)
     for t in blk["transactions"]:
         if not isinstance(t, dict):
             return False, "transaction entry is not a dict"
         kind = t.get("kind")
         if kind == "confirm":
-            ok, err = tx_mod.validate_confirmation(t, state, height - 1, get_fee_rate_at_height)
+            ok, err = tx_mod.validate_confirmation(t, state, height - 1, get_fee_rate_at_height,
+                                                    expected_iterations=expected_iterations)
             if not ok:
                 return False, f"invalid confirmation: {err}"
             h = tx_mod.tx_hash(t)
@@ -317,7 +326,7 @@ def validate(blk, state, chain, get_fee_rate_at_height, queue=None):
         (_check_tx_ordering,     (blk,)),
         (_check_fee_rate,        (blk, chain)),
         (_check_queue_resolution, (blk, queue)),
-        (_apply_transactions,    (blk, state, get_fee_rate_at_height, queue)),
+        (_apply_transactions,    (blk, state, get_fee_rate_at_height, queue, chain)),
     ):
         ok, err = check(*args)
         if not ok:

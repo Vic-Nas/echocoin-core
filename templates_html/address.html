@@ -14,7 +14,7 @@
 {% if history is not none %}
 <div class="stats" style="margin-bottom:1rem">
   <div class="stat"><div class="stat-label">Balance</div><div class="stat-value" style="color:var(--green)">{{ fmt_balance(balance) }}</div></div>
-  <div class="stat"><div class="stat-label">Nonce</div><div class="stat-value">{{ nonce }}</div></div>
+  <div class="stat"><div class="stat-label">Txs sent</div><div class="stat-value">{{ tx_count }}</div></div>
   <div class="stat"><div class="stat-label">Transactions</div><div class="stat-value">{{ history | length }}</div></div>
 </div>
 <div class="card">

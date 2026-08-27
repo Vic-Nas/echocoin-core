@@ -40,9 +40,9 @@ class Block(_Base):
 
 
 class State(_Base):
-    addr    = TextField(primary_key=True)
-    balance = IntegerField(default=0)
-    nonce   = IntegerField(default=0)
+    addr         = TextField(primary_key=True)
+    balance      = IntegerField(default=0)
+    used_nonces  = TextField(default="[]")  # JSON list of spent nonce strings
 
 
 class Emission(_Base):
@@ -164,11 +164,12 @@ class Storage:
 
     def _save_state_inner(self, state):
         """Write state rows; must be called inside an existing db.atomic()."""
-        balances = state.all_balances()
-        nonces   = state.all_nonces()
+        balances    = state.all_balances()
+        used_nonces = state.all_used_nonces()
         rows = [
-            {"addr": addr, "balance": balances.get(addr, 0), "nonce": nonces.get(addr, 0)}
-            for addr in balances.keys() | nonces.keys()
+            {"addr": addr, "balance": balances.get(addr, 0),
+             "used_nonces": json.dumps(sorted(used_nonces.get(addr, ())))}
+            for addr in balances.keys() | used_nonces.keys()
         ]
         State.delete().execute()
         if rows:
@@ -180,11 +181,11 @@ class Storage:
             self._save_state_inner(state)
 
     def load_state(self):
-        rows     = State.select()
-        balances = {r.addr: r.balance for r in rows}
-        nonces   = {r.addr: r.nonce   for r in rows}
-        em       = {r.key: r.value for r in Emission.select()}
-        return balances, nonces, em.get("total_minted", 0)
+        rows        = State.select()
+        balances    = {r.addr: r.balance for r in rows}
+        used_nonces = {r.addr: json.loads(r.used_nonces) for r in rows}
+        em          = {r.key: r.value for r in Emission.select()}
+        return balances, used_nonces, em.get("total_minted", 0)
 
     def state_exists(self):
         return State.select().exists()

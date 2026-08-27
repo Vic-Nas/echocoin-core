@@ -31,10 +31,36 @@ jump the queue would directly contradict the gapless front-of-queue
 ordering rule that delivers censorship resistance.
 """
 
+import secrets
+
 import crypto
 from crypto import canonical_json
 import timelock as timelock_mod
 from params import FEE_HEIGHT_MAX_AGE, TIMELOCK_ITERATIONS
+
+# Nonces only need to be unique per sender, not sequential: the gapless
+# front-of-queue block validity rule already forces resolution order to
+# equal confirmation order, so a sender's own transactions are already
+# applied in a deterministic order without any help from the nonce. A
+# fixed-width random value gives replay protection (state.has_used_nonce)
+# without requiring the sender to track a running counter across restarts
+# or across still-unresolved, in-flight sends.
+NONCE_BYTES = 16
+
+
+def generate_nonce() -> str:
+    """A fresh, effectively-unique nonce for a new inner payload."""
+    return secrets.token_hex(NONCE_BYTES)
+
+
+def _valid_nonce_format(nonce) -> bool:
+    if not isinstance(nonce, str) or len(nonce) != NONCE_BYTES * 2:
+        return False
+    try:
+        bytes.fromhex(nonce)
+    except ValueError:
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -43,7 +69,10 @@ from params import FEE_HEIGHT_MAX_AGE, TIMELOCK_ITERATIONS
 
 def create_inner_payload(from_addr, pubkey_hex, outputs, nonce, secret_key_bytes):
     """Build and sign the real transfer. This dict is what gets encrypted
-    into a confirmation's ciphertext; it never appears on chain directly."""
+    into a confirmation's ciphertext; it never appears on chain directly.
+
+    nonce: a unique value for this sender, e.g. from generate_nonce().
+    """
     payload = {
         "from":    from_addr,
         "pubkey":  pubkey_hex,
@@ -75,30 +104,38 @@ def _check_inner_fields_and_outputs(payload):
             return False, "inner output amounts must be positive integers"
         if not crypto.is_valid_address(out["to"]):
             return False, f"invalid inner address format: {out['to']!r}"
+    if not _valid_nonce_format(payload["nonce"]):
+        return False, "inner nonce must be a fixed-width hex string"
+    return True, None
+
+
+def _check_signature_generic(d, addr_field):
+    """Shared by confirmation and inner-payload signature checks: both
+    verify pubkey/signature against the same fields, just under a
+    different name for the signer's address ('broadcaster' vs 'from')."""
+    pubkey_hex = d["pubkey"]
+    sig_hex    = d["signature"]
+    if not isinstance(pubkey_hex, str) or not isinstance(sig_hex, str):
+        return False, "pubkey and signature must be hex strings"
+    try:
+        pubkey_bytes = bytes.fromhex(pubkey_hex)
+        sig_bytes    = bytes.fromhex(sig_hex)
+        if crypto.public_key_to_address(pubkey_bytes) != d[addr_field]:
+            return False, f"pubkey does not match {addr_field} address"
+        if not crypto.verify(crypto.serialize_for_signing(d), sig_bytes, pubkey_bytes):
+            return False, "invalid signature"
+    except (ValueError, Exception):
+        return False, "malformed pubkey or signature"
     return True, None
 
 
 def _check_inner_signature(payload):
-    pubkey_hex = payload["pubkey"]
-    sig_hex    = payload["signature"]
-    if not isinstance(pubkey_hex, str) or not isinstance(sig_hex, str):
-        return False, "inner pubkey and signature must be hex strings"
-    try:
-        pubkey_bytes = bytes.fromhex(pubkey_hex)
-        sig_bytes    = bytes.fromhex(sig_hex)
-        if crypto.public_key_to_address(pubkey_bytes) != payload["from"]:
-            return False, "inner pubkey does not match from address"
-        if not crypto.verify(crypto.serialize_for_signing(payload), sig_bytes, pubkey_bytes):
-            return False, "invalid inner signature"
-    except (ValueError, Exception):
-        return False, "malformed inner pubkey or signature"
-    return True, None
+    return _check_signature_generic(payload, "from")
 
 
 def _check_inner_nonce(payload, state):
-    current = state.get_nonce(payload["from"])
-    if payload["nonce"] != current + 1:
-        return False, f"bad inner nonce: expected {current + 1}, got {payload['nonce']}"
+    if state.has_used_nonce(payload["from"], payload["nonce"]):
+        return False, f"nonce already used: {payload['nonce']}"
     return True, None
 
 
@@ -131,7 +168,7 @@ def validate_inner_payload(payload, state):
 # ---------------------------------------------------------------------------
 
 _CONFIRM_REQUIRED_FIELDS = ["kind", "broadcaster", "pubkey", "fee_height",
-                            "fee", "puzzle", "signature"]
+                            "fee", "puzzle", "iterations", "signature"]
 
 
 def create_confirmation(broadcaster_addr, broadcaster_pubkey_hex, inner_payload,
@@ -140,7 +177,16 @@ def create_confirmation(broadcaster_addr, broadcaster_pubkey_hex, inner_payload,
     """Build and sign a confirmation. The broadcaster need not be the real
     sender inside inner_payload -- the wallet/app layer defaults to using
     the sender's own key for simplicity, but the protocol does not require
-    broadcaster == sender."""
+    broadcaster == sender.
+
+    iterations is recorded on the tx itself (not secretly per-sender-chosen:
+    every validator independently derives the same expected value from
+    chain state, mirroring how block.py records and validates
+    vdf_iterations). This is what lets a solver know how many squarings a
+    given puzzle actually needs even after a later difficulty adjustment
+    changes TIMELOCK_ITERATIONS going forward -- without it, an old,
+    unresolved puzzle would become ambiguous to solve (see
+    timelock.get_timelock_iterations)."""
     payload_bytes = canonical_json(inner_payload)
     puzzle = timelock_mod.generate_puzzle(payload_bytes, iterations=iterations)
     tx = {
@@ -149,6 +195,7 @@ def create_confirmation(broadcaster_addr, broadcaster_pubkey_hex, inner_payload,
         "pubkey":      broadcaster_pubkey_hex,
         "fee_height":  fee_height,
         "fee":         fee,
+        "iterations":  iterations,
         # N and x are RSA-scale integers (2048-bit modulus): stored as hex
         # strings on the wire since JSON (and orjson in particular) does
         # not support integers of that size.
@@ -182,12 +229,13 @@ def tx_size_in_block(tx_dict, position=0):
     return size + (1 if position > 0 else 0)
 
 
-def compute_fee(broadcaster_addr, pubkey_hex, puzzle, fee_height, fee_rate):
+def compute_fee(broadcaster_addr, pubkey_hex, puzzle, fee_height, fee_rate,
+                 iterations=TIMELOCK_ITERATIONS):
     """Compute fee = body_size * fee_rate for a confirmation. Deterministic:
     the sender does not choose the fee (see module docstring)."""
     skeleton = {
         "kind": "confirm", "broadcaster": broadcaster_addr, "pubkey": pubkey_hex,
-        "fee_height": fee_height, "fee": 0, "puzzle": puzzle,
+        "fee_height": fee_height, "fee": 0, "iterations": iterations, "puzzle": puzzle,
     }
     fee = 0
     for _ in range(4):
@@ -227,23 +275,27 @@ def _check_confirm_fields(tx_dict):
     fee = tx_dict["fee"]
     if not isinstance(fee, int) or fee < 0:
         return False, "fee must be a non-negative integer"
+    if not isinstance(tx_dict["iterations"], int) or tx_dict["iterations"] <= 0:
+        return False, "iterations must be a positive integer"
     return True, None
 
 
 def _check_confirm_signature(tx_dict):
-    pubkey_hex = tx_dict["pubkey"]
-    sig_hex    = tx_dict["signature"]
-    if not isinstance(pubkey_hex, str) or not isinstance(sig_hex, str):
-        return False, "pubkey and signature must be hex strings"
-    try:
-        pubkey_bytes = bytes.fromhex(pubkey_hex)
-        sig_bytes    = bytes.fromhex(sig_hex)
-        if crypto.public_key_to_address(pubkey_bytes) != tx_dict["broadcaster"]:
-            return False, "pubkey does not match broadcaster address"
-        if not crypto.verify(crypto.serialize_for_signing(tx_dict), sig_bytes, pubkey_bytes):
-            return False, "invalid signature"
-    except (ValueError, Exception):
-        return False, "malformed pubkey or signature"
+    return _check_signature_generic(tx_dict, "broadcaster")
+
+
+def _check_confirm_iterations(tx_dict, expected_iterations):
+    """iterations is not sender-chosen: it must match what every validator
+    independently derives from chain state for the current difficulty
+    epoch (timelock.get_timelock_iterations), the same way block.py
+    validates vdf_iterations. expected_iterations is None when the caller
+    doesn't have chain context (e.g. some unit tests); skip in that case
+    rather than force every test to wire up a real chain."""
+    if expected_iterations is None:
+        return True, None
+    if tx_dict["iterations"] != expected_iterations:
+        return False, (f"iterations mismatch: tx has {tx_dict['iterations']}, "
+                       f"chain expects {expected_iterations}")
     return True, None
 
 
@@ -260,7 +312,8 @@ def _check_confirm_fee(tx_dict, chain_tip_height, get_fee_rate_at_height):
         return False, f"no fee rate at height {fh}"
     try:
         expected = compute_fee(tx_dict["broadcaster"], tx_dict["pubkey"],
-                                tx_dict["puzzle"], fh, fee_rate)
+                                tx_dict["puzzle"], fh, fee_rate,
+                                iterations=tx_dict["iterations"])
     except ValueError as e:
         return False, f"fee computation error: {e}"
     if tx_dict["fee"] != expected:
@@ -278,13 +331,19 @@ def _check_confirm_balance(tx_dict, state):
     return True, None
 
 
-def validate_confirmation(tx_dict, state, chain_tip_height, get_fee_rate_at_height):
-    """Validate a confirmation. Returns (True, None) or (False, error_string)."""
+def validate_confirmation(tx_dict, state, chain_tip_height, get_fee_rate_at_height,
+                          expected_iterations=None):
+    """Validate a confirmation. Returns (True, None) or (False, error_string).
+
+    expected_iterations: the difficulty this height requires, from
+    timelock.get_timelock_iterations(chain). None skips the check (tests
+    that don't wire up a real chain)."""
     for check, args in (
-        (_check_confirm_fields,    (tx_dict,)),
-        (_check_confirm_signature, (tx_dict,)),
-        (_check_confirm_fee,       (tx_dict, chain_tip_height, get_fee_rate_at_height)),
-        (_check_confirm_balance,   (tx_dict, state)),
+        (_check_confirm_fields,     (tx_dict,)),
+        (_check_confirm_signature,  (tx_dict,)),
+        (_check_confirm_iterations, (tx_dict, expected_iterations)),
+        (_check_confirm_fee,        (tx_dict, chain_tip_height, get_fee_rate_at_height)),
+        (_check_confirm_balance,    (tx_dict, state)),
     ):
         ok, err = check(*args)
         if not ok:

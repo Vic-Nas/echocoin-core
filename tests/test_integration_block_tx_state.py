@@ -27,7 +27,7 @@ import mempool as mempool_mod
 from chainstate import ChainState
 from params import INITIAL_FEE_RATE, TICKS_PER_LAPSE, SUPPLY_CAP
 from tests.fixtures import (
-    address, genesis, make_block, make_tx, apply_transfer, seed_balance,
+    address, genesis, make_block, make_tx, seed_balance,
 )
 
 
@@ -64,13 +64,12 @@ class TestBlockCommitFlow:
         cs.state.credit(address(1), 1000 * TICKS_PER_LAPSE)
         cs.state.total_minted += 2000 * TICKS_PER_LAPSE
 
+        # Confirmation ordering no longer depends on the sender's inner
+        # nonce (see tx.sort_key): resolution order is already forced to
+        # match confirmation order by the gapless queue rule, so building
+        # both confirms straight off the current state is enough.
         c1, r1 = make_tx(0, 2, TICKS_PER_LAPSE, cs.state, 0)
-        apply_transfer(cs.state, c1, r1)  # advance nonce for sorting
         c2, r2 = make_tx(1, 2, TICKS_PER_LAPSE, cs.state, 0)
-        # Reset state for validation (chainstate will re-apply)
-        cs.state.debit(address(2), TICKS_PER_LAPSE)
-        cs.state.credit(address(0), c1["fee"])
-        cs.state.set_nonce(address(0), 0)
 
         txs = tx_mod.sort_txs([c1, c2]) + [r1, r2]
         b = make_block(1, cs.tip["hash"], txs)

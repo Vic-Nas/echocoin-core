@@ -23,6 +23,7 @@ import time
 import block as block_mod
 import crypto
 import mempool as mempool_mod
+import timelock as timelock_mod
 import tx as tx_mod
 import vdf as vdf_mod
 from chainstate import ChainState
@@ -159,7 +160,6 @@ class Node:
         self._kek         = None
         self._loop_thread = None
         self._cycle_count = 0
-        self._next_nonce_hint = None
 
         self.stats = StatsAccumulator()
         self.cs    = self._load_cs()
@@ -284,33 +284,28 @@ class Node:
         privacy would build the inner payload and confirmation separately
         with two different keys.
 
-        Real-sender nonce tracking cannot come from the mempool (the inner
-        payload is encrypted and invisible until resolution), so this
-        node tracks its own next nonce locally across calls in the same
-        session; it resyncs automatically once a resolution updates
-        cs.state.
+        The nonce only needs to be unique per sender, not sequential (see
+        state.py and tx.generate_nonce): resolution order is already forced
+        to equal confirmation order by the gapless queue rule, so there is
+        no "next nonce" to track across calls, in-flight sends, or restarts.
         """
         if not passphrase:
             raise ValueError("passphrase is required to sign a transaction")
         kek        = crypto.derive_kek(self.keyfile, passphrase)
         v          = self.view
-        committed  = v.state.get_nonce(self.addr)
-        if self._next_nonce_hint is not None and self._next_nonce_hint > committed:
-            nonce = self._next_nonce_hint + 1
-        else:
-            nonce = committed + 1
-        self._next_nonce_hint = nonce
+        nonce      = tx_mod.generate_nonce()
 
         fee_height = v.height
         sk = crypto.decrypt_secret_key(self.keyfile, kek=kek)
         inner = tx_mod.create_inner_payload(self.addr, self.pk_hex, to_outputs, nonce, sk)
+        iterations = timelock_mod.get_timelock_iterations(v.chain)
         t = tx_mod.create_confirmation(self.addr, self.pk_hex, inner,
-                                        fee_height, 0, sk)
+                                        fee_height, 0, sk, iterations=iterations)
         # The puzzle (and its real-size ciphertext) is only known after
         # create_confirmation builds it, so compute the real fee now and
         # re-sign with it.
         fee = tx_mod.compute_fee(self.addr, self.pk_hex, t["puzzle"],
-                                  fee_height, v.tip["fee_rate"])
+                                  fee_height, v.tip["fee_rate"], iterations=iterations)
         t["fee"] = fee
         msg = crypto.serialize_for_signing(t)
         t["signature"] = crypto.sign(msg, sk).hex()

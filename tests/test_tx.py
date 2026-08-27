@@ -66,11 +66,28 @@ class TestInnerPayload:
         ok, err = tx_mod.validate_inner_payload(payload, s)
         assert ok is False
 
-    def test_inner_nonce_must_be_sequential(self):
+    def test_inner_nonce_must_not_be_reused(self):
+        """Nonces only need to be unique per sender, not sequential (see
+        tx.generate_nonce): resolution order is already forced to match
+        confirmation order by the gapless queue rule, so replay protection
+        is the nonce's only remaining job."""
+        s = fresh_state()
+        seed_balance(s, 0)
+        nonce = tx_mod.generate_nonce()
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, nonce_override=nonce)
+        ok, err = tx_mod.validate_inner_payload(resolve["payload"], s)
+        assert ok is True, err
+
+        s.mark_nonce_used(address(0), nonce)
+        ok, err = tx_mod.validate_inner_payload(resolve["payload"], s)
+        assert ok is False
+        assert "nonce" in err
+
+    def test_inner_nonce_must_be_fixed_width_hex(self):
         s = fresh_state()
         seed_balance(s, 0)
         confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10,
-                                    nonce_override=5)
+                                    nonce_override="not-a-valid-nonce")
         ok, err = tx_mod.validate_inner_payload(resolve["payload"], s)
         assert ok is False
         assert "nonce" in err
@@ -123,6 +140,29 @@ class TestConfirmationFields:
         confirm["puzzle"]["N"] = "not hex!!"
         ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
         assert ok is False
+
+    def test_non_positive_iterations_fails(self):
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        confirm["iterations"] = 0
+        ok, err = tx_mod.validate_confirmation(confirm, s, 10, get_fee_rate)
+        assert ok is False
+        assert "iterations" in err
+
+    def test_iterations_mismatch_against_chain_expectation_fails(self):
+        """iterations is not sender-chosen: it must equal what every
+        validator independently derives from chain state (see
+        timelock.get_timelock_iterations), the same way block.py checks
+        vdf_iterations. A confirmation is not allowed to claim a difficulty
+        the chain didn't actually require."""
+        s = fresh_state()
+        seed_balance(s, 0)
+        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        ok, err = tx_mod.validate_confirmation(
+            confirm, s, 10, get_fee_rate, expected_iterations=confirm["iterations"] + 1)
+        assert ok is False
+        assert "iterations mismatch" in err
 
     def test_negative_fee_fails(self):
         s = fresh_state()

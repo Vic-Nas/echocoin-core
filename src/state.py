@@ -19,19 +19,32 @@ def compute_reward(total_minted: int) -> int:
 class State:
     def __init__(self):
         self._balances    = {}  # addr -> int (ticks)
-        self._nonces      = {}  # addr -> int (last used nonce, 0 = never transacted)
+        self._used_nonces = {}  # addr -> set of nonce strings already applied
         self.total_minted = 0   # ticks minted via block rewards since genesis
         self._escrow      = {}  # confirmed_tx_hash -> fee ticks awaiting a resolver
 
     # ------------------------------------------------------------------
     # Balance and nonce access
     # ------------------------------------------------------------------
+    #
+    # A nonce here only needs to be unique per sender, not sequential. The
+    # gapless front-of-queue block validity rule already forces resolution
+    # order to equal confirmation order, so a sender's own transactions are
+    # already applied in a fully deterministic order without any help from
+    # the nonce. The nonce's only remaining job is replay protection (the
+    # same signed inner payload cannot be applied twice), which a used-once
+    # check gives for free without requiring the sender to track a running
+    # counter (see tx.generate_nonce).
 
     def get_balance(self, addr):
         return self._balances.get(addr, 0)
 
-    def get_nonce(self, addr):
-        return self._nonces.get(addr, 0)
+    def has_used_nonce(self, addr, nonce):
+        return nonce in self._used_nonces.get(addr, ())
+
+    def nonce_count(self, addr):
+        """Number of nonces this address has spent so far (display only)."""
+        return len(self._used_nonces.get(addr, ()))
 
     def credit(self, addr, amount):
         if amount <= 0:
@@ -46,8 +59,8 @@ class State:
             raise ValueError(f"debit would make balance negative: {bal} - {amount}")
         self._balances[addr] = bal - amount
 
-    def set_nonce(self, addr, nonce):
-        self._nonces[addr] = nonce
+    def mark_nonce_used(self, addr, nonce):
+        self._used_nonces.setdefault(addr, set()).add(nonce)
 
     # ------------------------------------------------------------------
     # Transaction application
@@ -74,7 +87,7 @@ class State:
         self.debit(sender, total_out)
         for out in payload["outputs"]:
             self.credit(out["to"], out["amount"])
-        self.set_nonce(sender, payload["nonce"])
+        self.mark_nonce_used(sender, payload["nonce"])
 
     def apply_resolution(self, res_dict):
         """Apply a validated resolution: releases escrow (if any) to the
@@ -118,12 +131,15 @@ class State:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_snapshot(cls, balances: dict, nonces: dict,
+    def from_snapshot(cls, balances: dict, used_nonces: dict,
                       total_minted: int) -> "State":
-        """Restore a State from persisted data. Replaces direct field assignment."""
+        """Restore a State from persisted data. Replaces direct field assignment.
+
+        used_nonces: addr -> set/list of nonce strings already spent.
+        """
         s = cls()
         s._balances    = balances
-        s._nonces      = nonces
+        s._used_nonces = {addr: set(nonces) for addr, nonces in used_nonces.items()}
         s.total_minted = total_minted
         return s
 
@@ -139,7 +155,7 @@ class State:
         interned strings and values are ints, both immutable."""
         s = State()
         s._balances    = self._balances.copy()
-        s._nonces      = self._nonces.copy()
+        s._used_nonces = {addr: set(nonces) for addr, nonces in self._used_nonces.items()}
         s.total_minted = self.total_minted
         s._escrow      = self._escrow.copy()
         return s
@@ -151,5 +167,5 @@ class State:
     def all_balances(self):
         return dict(self._balances)
 
-    def all_nonces(self):
-        return dict(self._nonces)
+    def all_used_nonces(self):
+        return {addr: set(nonces) for addr, nonces in self._used_nonces.items()}

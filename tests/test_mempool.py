@@ -29,12 +29,9 @@ def fresh_state():
 
 
 def sample_tx(sender_index=0, recipient_index=1, amount=TICKS_PER_LAPSE,
-              nonce_offset=0, tip_height=10):
+              tip_height=10):
     s = fresh_state()
     seed_balance(s, sender_index, 100.0)
-    # Advance nonce to desired offset
-    for i in range(nonce_offset):
-        s.set_nonce(address(sender_index), i + 1)
     confirm, _ = make_tx(sender_index, recipient_index, amount, s, tip_height)
     return confirm
 
