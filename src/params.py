@@ -58,7 +58,7 @@ DB_PATH = "lapsecoin_chain.db"
 
 # Genesis timestamp: unix time when the chain was launched. Set once manually
 # before the first release and never changed.
-GENESIS_TIMESTAMP = 1787580863
+GENESIS_TIMESTAMP = 1787869281
 
 # Number of BEP44 DHT slots used for peer discovery.
 BEP44_SLOT_COUNT = 256
