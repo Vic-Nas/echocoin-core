@@ -1,6 +1,6 @@
 # LapseCoin
 
-A peer-to-peer electronic cash system. Most cumulative proven work wins, first valid block received: Bitcoin-style consensus. Block timing is enforced by a Verifiable Delay Function anchored to real elapsed time. Fees are deterministic and go to the block builder. Signatures are quantum-resistant (FALCON-512). Voluntary Proof-of-Burn lets any participant earn a proportional share of every block's reward by burning coins.
+A peer-to-peer electronic cash system. Most cumulative proven work wins, first valid block received: Bitcoin-style consensus. Block timing is enforced by a Verifiable Delay Function anchored to real elapsed time. Every transaction is submitted as a time-lock-encrypted ciphertext rather than plaintext, and blocks must resolve these ciphertexts in strict, gapless, global order -- a builder can't selectively censor one transaction without either resolving it or stopping block production entirely. Fees are deterministic and go to whichever resolver's solution lands first. Signatures are quantum-resistant (FALCON-512).
 
 See [docs/whitepaper.md](docs/whitepaper.md) for the full protocol specification.
 
@@ -34,8 +34,8 @@ LapseCoin runs two HTTP servers:
 
 | Port | Interface | Purpose |
 |---|---|---|
-| `8333` (or `--port`) | `0.0.0.0` | Public node UI and peer API. Safe to expose. Send and Burn are disabled. |
-| `port+2` (or `--private-port`) | `127.0.0.1` | Private wallet UI. Never expose this. Full access including Send and Burn. |
+| `8333` (or `--port`) | `0.0.0.0` | Public node UI and peer API. Safe to expose. Send is disabled. |
+| `port+2` (or `--private-port`) | `127.0.0.1` | Private wallet UI. Never expose this. Full access including Send. |
 
 Open `http://localhost:8335` for your personal wallet interface. Open `http://localhost:8333` (or your public address) for the block explorer. The private port is always two above the public port unless overridden with `--private-port`.
 
