@@ -333,6 +333,52 @@ class TestTxQueue:
         assert ok is True, err
         assert cs2.queue.front() is None
 
+    def test_chain_does_not_halt_on_a_double_spent_confirmation(self):
+        """Reproduces the scenario tx.validate_resolution's docstring
+        exists to prevent: a sender confirms two ciphertexts both spending
+        their entire balance (to different recipients, e.g. two wallet
+        sends racing each other). Whichever resolves first succeeds; the
+        second's real payload is now permanently unpayable. That must not
+        stop the chain from ever accepting a resolution for it -- the
+        gapless queue rule requires the front be resolved every block, and
+        there is exactly one payload the second ciphertext can ever decrypt
+        to, so if that payload's invalidity blocked inclusion, no block
+        could ever be valid again."""
+        cs = ChainState.from_genesis()
+        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 100 * TICKS_PER_LAPSE
+
+        confirm1, resolve1 = make_tx(0, 1, 100 * TICKS_PER_LAPSE, cs.state, 0)
+        confirm2, resolve2 = make_tx(0, 2, 100 * TICKS_PER_LAPSE, cs.state, 0)
+
+        b1 = make_block(1, cs.tip["hash"], tx_mod.sort_txs([confirm1, confirm2]))
+        ok, err, cs1 = cs.validate_and_apply(b1)
+        assert ok is True, err
+
+        front = cs1.queue.front()
+        resolve_by_hash = {tx_mod.tx_hash(confirm1): resolve1,
+                           tx_mod.tx_hash(confirm2): resolve2}
+
+        # Resolve the front: succeeds and drains the sender's balance.
+        b2 = make_block(2, cs1.tip["hash"], [resolve_by_hash[front]])
+        ok, err, cs2 = cs1.validate_and_apply(b2)
+        assert ok is True, err
+        assert cs2.queue.remaining() != []  # one confirmation still pending
+
+        # Resolve the second (now-unpayable) front: must still be a valid
+        # block -- this is the assertion that would fail without the fix.
+        second_front = cs2.queue.front()
+        b3 = make_block(3, cs2.tip["hash"], [resolve_by_hash[second_front]])
+        ok, err, cs3 = cs2.validate_and_apply(b3)
+        assert ok is True, err
+        assert cs3.queue.remaining() == []  # queue fully drained, chain not stuck
+
+        # And the chain keeps producing blocks afterward -- not halted.
+        b4 = make_block(4, cs3.tip["hash"], [])
+        ok, err, cs4 = cs3.validate_and_apply(b4)
+        assert ok is True, err
+        assert cs4.height == 4
+
     def test_queue_rebuilt_by_from_storage(self):
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)

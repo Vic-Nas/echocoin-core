@@ -293,7 +293,14 @@ def _apply_transactions(blk, state, get_fee_rate_at_height, queue, chain):
             ok, err = tx_mod.validate_resolution(t, confirmed, state)
             if not ok:
                 return False, f"invalid resolution: {err}"
-            state.apply_resolution(t)
+            # The crypto proof above is what gates inclusion. Whether the
+            # decrypted payload is still an applicable transfer (it may not
+            # be, e.g. the sender already spent the same balance via a
+            # different confirmation that resolved first) is checked
+            # separately and does not fail the block either way -- see
+            # tx.validate_resolution's docstring.
+            payload_ok, _ = tx_mod.payload_is_valid(t["payload"], state)
+            state.apply_resolution(t, payload_valid=payload_ok)
         else:
             return False, f"unknown transaction kind: {kind!r}"
     return True, None

@@ -161,6 +161,24 @@ class TestApplyTx:
         assert s.get_balance(address(3)) == resolver_before + confirm["fee"]
         assert s.escrowed_fee(h) == 0
 
+    def test_resolution_with_invalid_payload_still_pays_resolver_no_transfer(self):
+        """The resolver did real, checkable work regardless of whether the
+        decrypted payload can still be applied, so they're still paid --
+        but no transfer happens and no other state changes (see
+        tx.validate_resolution's docstring for why a resolution's
+        inclusion can't depend on payload validity)."""
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, resolver_index=3)
+        h = tx_mod.tx_hash(confirm)
+        s.apply_confirmation(confirm, h)
+        recipient_before = s.get_balance(address(1))
+        resolver_before  = s.get_balance(address(3))
+        s.apply_resolution(resolve, payload_valid=False)
+        assert s.get_balance(address(3)) == resolver_before + confirm["fee"]
+        assert s.get_balance(address(1)) == recipient_before  # transfer not applied
+        assert s.escrowed_fee(h) == 0
+
 
 # ---------------------------------------------------------------------------
 # 3. Emission formula

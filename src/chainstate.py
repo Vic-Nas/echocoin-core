@@ -78,13 +78,23 @@ class TxQueue:
 def _apply_txs_trusted(state, blk, queue):
     """Apply blk's txs to state assuming blk is already trusted (replay
     path: from_chain / apply_block -- no re-validation). Also advances
-    queue to reflect this block's confirm/resolve entries."""
+    queue to reflect this block's confirm/resolve entries.
+
+    A resolution's inner payload may have been semantically inapplicable
+    when the block was first validated (see tx.validate_resolution's
+    docstring -- a resolution is still validly includable even then, it
+    just doesn't move funds). Replay must recompute payload_is_valid the
+    same way rather than always applying the transfer, or it would
+    silently diverge from the state the block was actually validated
+    against.
+    """
     for t in blk.get("transactions", []):
         kind = t.get("kind")
         if kind == "confirm":
             state.apply_confirmation(t, tx_mod.tx_hash(t))
         elif kind == "resolve":
-            state.apply_resolution(t)
+            payload_ok, _ = tx_mod.payload_is_valid(t["payload"], state)
+            state.apply_resolution(t, payload_valid=payload_ok)
     queue.add_block(blk)
 
 

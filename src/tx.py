@@ -390,8 +390,29 @@ def _check_resolve_fields(res_dict):
 
 
 def validate_resolution(res_dict, confirmed_tx, state):
-    """Validate a resolution against the confirmation it claims to resolve
-    and current chain state.
+    """Validate a resolution's cryptographic proof only: that K actually
+    decrypts the referenced confirmation's ciphertext to res_dict["payload"].
+
+    This is deliberately the ONLY thing that gates a resolution's inclusion
+    in a block or the mempool. Whether the *decrypted* payload turns out to
+    be a semantically applicable transfer (nonce not already used, sender
+    can afford it, well-formed, correctly signed) is a separate question --
+    see payload_is_valid() -- and does NOT gate here.
+
+    Why: the front-of-queue resolution is mandatory every block (block.py's
+    gapless rule). If a resolution's block-inclusion depended on the
+    decrypted payload also being semantically valid, a single confirmation
+    whose real payload is permanently unspendable -- e.g. two confirmations
+    both spending a sender's full balance, where the loser can never become
+    valid again once the winner has already resolved, or two confirmations
+    reusing the same inner nonce -- would mean NO resolution could ever be
+    included for it (there is exactly one payload the ciphertext decrypts
+    to, and it would always fail). Since the queue can never skip a front
+    it cannot resolve, that would halt block production forever. Proving K
+    is real, checkable work regardless of what the payload turns out to
+    contain, so that alone is what earns inclusion and the escrowed fee;
+    state.apply_resolution() uses payload_is_valid() separately to decide
+    whether to actually apply the transfer.
 
     confirmed_tx: the "confirm" tx dict this resolution claims to solve,
     looked up by the caller via res_dict["confirmed_tx_hash"].
@@ -409,11 +430,18 @@ def validate_resolution(res_dict, confirmed_tx, state):
     expected_bytes = canonical_json(res_dict["payload"])
     if not timelock_mod.verify_resolution(N, K, puzzle["ciphertext"], expected_bytes):
         return False, "resolution does not decrypt the puzzle's ciphertext"
-
-    ok, err = validate_inner_payload(res_dict["payload"], state)
-    if not ok:
-        return False, f"invalid inner payload: {err}"
     return True, None
+
+
+def payload_is_valid(payload, state):
+    """Whether a resolved inner payload is a semantically applicable
+    transfer right now (nonce not already used, sender can afford it,
+    well-formed, correctly signed). A resolution can be a valid, includable
+    proof (see validate_resolution) even when this is False -- that's the
+    whole point: the payload's content was fixed by whoever built the
+    original confirmation, not by the resolver, so its validity can't be
+    allowed to gate whether the resolver's real work is accepted."""
+    return validate_inner_payload(payload, state)
 
 
 # ---------------------------------------------------------------------------

@@ -89,14 +89,23 @@ class State:
             self.credit(out["to"], out["amount"])
         self.mark_nonce_used(sender, payload["nonce"])
 
-    def apply_resolution(self, res_dict):
+    def apply_resolution(self, res_dict, payload_valid=True):
         """Apply a validated resolution: releases escrow (if any) to the
-        resolver, then applies the revealed inner transfer."""
+        resolver, then applies the revealed inner transfer -- but only if
+        payload_valid (see tx.payload_is_valid). The resolver is paid the
+        escrowed fee unconditionally: they did real, checkable work proving
+        the ciphertext's answer regardless of what it turned out to
+        contain. When the decrypted payload is not actually applicable
+        (nonce already used, sender can't afford it), no transfer happens
+        and no state beyond the escrow payout changes -- this still lets
+        the queue slot advance instead of being permanently stuck (see
+        tx.validate_resolution's docstring for why that matters)."""
         confirmed_hash = res_dict["confirmed_tx_hash"]
         fee = self._escrow.pop(confirmed_hash, 0)
         if fee > 0:
             self.credit(res_dict["resolver"], fee)
-        self.apply_inner_payload(res_dict["payload"])
+        if payload_valid:
+            self.apply_inner_payload(res_dict["payload"])
 
     def escrowed_fee(self, confirmed_tx_hash):
         return self._escrow.get(confirmed_tx_hash, 0)

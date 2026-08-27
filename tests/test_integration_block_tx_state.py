@@ -79,16 +79,22 @@ class TestBlockCommitFlow:
         # Both txs credited
         assert cs2.state.get_balance(address(2)) >= 2 * TICKS_PER_LAPSE
 
-    def test_duplicate_nonce_in_block_fails(self):
+    def test_duplicate_resolution_in_block_is_a_harmless_noop(self):
+        """Resolving the same confirmation twice in one block no longer
+        invalidates the whole block (see tx.validate_resolution's
+        docstring): the crypto proof is identical and still valid, but the
+        transfer already applied and the escrow already paid out on the
+        first occurrence, so the second is a no-op rather than a double
+        payment or a double-applied transfer."""
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 1000 * TICKS_PER_LAPSE)
         cs.state.total_minted += 1000 * TICKS_PER_LAPSE
 
         c1, r1 = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        # Same inner nonce -- replay attack: resolve the same confirmation twice
         b = make_block(1, cs.tip["hash"], [c1, r1, r1])
-        ok, err, _ = cs.validate_and_apply(b)
-        assert ok is False
+        ok, err, cs2 = cs.validate_and_apply(b)
+        assert ok is True, err
+        assert cs2.state.get_balance(address(1)) == TICKS_PER_LAPSE
 
 
 # ---------------------------------------------------------------------------

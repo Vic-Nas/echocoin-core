@@ -294,6 +294,38 @@ class TestResolution:
         ok, err = tx_mod.validate_resolution(resolve, confirm, s)
         assert ok is False
 
+    def test_resolution_with_unpayable_payload_still_validates(self):
+        """A resolution's crypto proof is independent of whether the
+        decrypted payload can still be applied: the payload's content was
+        fixed by whoever built the original confirmation, not by the
+        resolver, so its later unspendability (e.g. the sender already
+        spent the same balance via a different confirmation that resolved
+        first) must not make an otherwise-correct resolution invalid --
+        see validate_resolution's docstring for why (queue liveness)."""
+        s = fresh_state()
+        seed_balance(s, 0, 1.0)  # just enough for one transfer, not two
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        # Sender's balance is now fully spent elsewhere by the time this
+        # resolution is checked (simulating the other confirmation winning
+        # the race to resolve first).
+        s.debit(address(0), s.get_balance(address(0)))
+        ok, err = tx_mod.validate_resolution(resolve, confirm, s)
+        assert ok is True, err
+        payload_ok, payload_err = tx_mod.payload_is_valid(resolve["payload"], s)
+        assert payload_ok is False
+        assert "insufficient" in payload_err
+
+    def test_resolution_with_reused_nonce_payload_still_validates(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
+        s.mark_nonce_used(address(0), resolve["payload"]["nonce"])
+        ok, err = tx_mod.validate_resolution(resolve, confirm, s)
+        assert ok is True, err
+        payload_ok, payload_err = tx_mod.payload_is_valid(resolve["payload"], s)
+        assert payload_ok is False
+        assert "nonce" in payload_err
+
     def test_first_solver_identity_cannot_be_proven(self):
         """Whitepaper: no cryptographic way exists to prove who solved
         first. Anyone who has seen a published resolution can resubmit it
