@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import block as block_mod
 import state as state_mod
 from chainstate import ChainState
-from params import INITIAL_FEE_RATE, EMBERS_PER_SCH
+from params import INITIAL_FEE_RATE, TICKS_PER_LAPSE
 from tests.fixtures import (
     address, genesis, make_block, make_tx, seed_balance,
 )
@@ -113,22 +113,22 @@ class TestValidateAndApply:
     def test_block_with_tx_updates_state(self):
         cs = ChainState.from_genesis()
         # Seed balance directly into state for simplicity
-        cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
-        cs.state.total_minted += 100 * EMBERS_PER_SCH
+        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 100 * TICKS_PER_LAPSE
         g = cs.tip
-        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
         b = make_block(1, g["hash"], [t])
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
-        assert cs2.state.get_balance(address(1)) == EMBERS_PER_SCH
+        assert cs2.state.get_balance(address(1)) == TICKS_PER_LAPSE
 
     def test_fees_credited_to_builder_after_valid_block(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
-        cs.state.total_minted += 100 * EMBERS_PER_SCH
+        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 100 * TICKS_PER_LAPSE
         g = cs.tip
         reward = cs.state.compute_block_reward()
-        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
         b = make_block(1, g["hash"], [t], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
@@ -272,10 +272,10 @@ class TestApplyBlock:
 
     def test_apply_block_applies_transactions(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
-        cs.state.total_minted += 100 * EMBERS_PER_SCH
+        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 100 * TICKS_PER_LAPSE
         g = cs.tip
-        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
         b1 = make_block(1, g["hash"], [t])
         cs2 = cs.apply_block(b1)
-        assert cs2.state.get_balance(address(1)) == EMBERS_PER_SCH
+        assert cs2.state.get_balance(address(1)) == TICKS_PER_LAPSE

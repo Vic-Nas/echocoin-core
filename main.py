@@ -48,7 +48,7 @@ log = logging.getLogger("ec.main")
 
 
 def _resolve_passphrase(prompt):
-    env_pass = os.environ.get("SCORCHCOIN_PASSPHRASE")
+    env_pass = os.environ.get("LAPSECOIN_PASSPHRASE")
     if env_pass:
         return env_pass
     return getpass.getpass(prompt)
@@ -58,7 +58,7 @@ def _load_or_create_key(keyfile):
     if not os.path.exists(keyfile):
         print("No key file found. Creating new FALCON-512 keypair.")
         passphrase = _resolve_passphrase("New passphrase: ")
-        if not os.environ.get("SCORCHCOIN_PASSPHRASE"):
+        if not os.environ.get("LAPSECOIN_PASSPHRASE"):
             passphrase = _prompt_new_passphrase(passphrase)
         sk, pk = crypto.generate_keypair()
         crypto.save_key(keyfile, sk, pk, passphrase)
@@ -82,10 +82,10 @@ def _load_or_create_key(keyfile):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Scorchcoin node")
+    parser = argparse.ArgumentParser(description="LapseCoin node")
     parser.add_argument("--host",    default="0.0.0.0")
     parser.add_argument("--port",    type=int, default=8333)
-    parser.add_argument("--keyfile", default="scorchcoin_key.json"
+    parser.add_argument("--keyfile", default="lapsecoin_key.json"
                         ).completer = FilesCompleter()
     parser.add_argument("--db",      default=DB_PATH
                         ).completer = FilesCompleter()

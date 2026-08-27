@@ -1,7 +1,7 @@
 # -*- mode: python ; coding: utf-8 -*-
 #
-# Linux:   make linux   -> dist/scorchcoin            (AppImage, no extension)
-# Windows: make windows -> dist/scorchcoin.exe       (onefile)
+# Linux:   make linux   -> dist/lapsecoin            (AppImage, no extension)
+# Windows: make windows -> dist/lapsecoin.exe       (onefile)
 
 import glob, os, sys
 from PyInstaller.utils.hooks import collect_all
@@ -65,8 +65,8 @@ _all_binaries = [
 _all_datas = [
     ("src/bip39_english.txt", "."),
     ("docs/whitepaper.md", "docs"),
-    ("scorchcoin.svg",       "."),
-    ("scorchcoin.png",       "."),
+    ("lapsecoin.svg",       "."),
+    ("lapsecoin.png",       "."),
     ("favicon.ico",        "."),
     ("templates_html",     "templates_html"),
     *nacl_datas, *cffi_datas, *oqs_datas, *chiavdf_datas,
@@ -102,7 +102,7 @@ if sys.platform == "win32":
         a.binaries,
         a.datas,
         [],
-        name="scorchcoin",
+        name="lapsecoin",
         debug=False,
         strip=False,
         upx=True,
@@ -117,14 +117,14 @@ if sys.platform == "win32":
     )
 else:
     # onedir: exclude_binaries=True tells EXE not to bundle libs itself;
-    # COLLECT then assembles everything into dist/scorchcoin-onedir/.
-    # Named differently from the final AppImage (dist/scorchcoin, no
+    # COLLECT then assembles everything into dist/lapsecoin-onedir/.
+    # Named differently from the final AppImage (dist/lapsecoin, no
     # extension) so the two don't collide on disk.
     exe = EXE(
         pyz,
         a.scripts,
         exclude_binaries=True,
-        name="scorchcoin",
+        name="lapsecoin",
         debug=False,
         strip=False,
         upx=False,
@@ -141,5 +141,5 @@ else:
         a.datas,
         strip=False,
         upx=False,
-        name="scorchcoin-onedir",
+        name="lapsecoin-onedir",
     )

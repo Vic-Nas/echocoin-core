@@ -31,7 +31,7 @@ from chainstate import ChainState
 from node import StatsAccumulator
 from params import (
     BLOCK_SIZE_TARGET_BYTES, INITIAL_FEE_RATE,
-    EMBERS_PER_SCH, SUPPLY_CAP,
+    TICKS_PER_LAPSE, SUPPLY_CAP,
 )
 from tests.fixtures import (
     address, genesis, keypair, make_block,
@@ -156,7 +156,7 @@ class TestE2E_FeeDynamics:
         Sustained full blocks apply adjustment=1.05 each block.
         At 1.05^14 ~= 1.98, the rate nearly doubles.  int() truncation means this
         is only observable once the base rate is high enough.  Start from rate=100
-        embers/byte so the doubling is clearly visible.
+        ticks/byte so the doubling is clearly visible.
         """
         g = genesis()
         chain = [g]
@@ -191,11 +191,11 @@ class TestE2E_TxLifecycle:
     def test_tx_create_to_confirmed(self):
         """create tx -> add to mempool -> include in block -> confirmed."""
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
-        cs.state.total_minted += 100 * EMBERS_PER_SCH
+        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 100 * TICKS_PER_LAPSE
 
         mp = mempool_mod.Mempool()
-        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
         ok, h = mp.add(t)
         assert ok is True
 
@@ -208,13 +208,13 @@ class TestE2E_TxLifecycle:
         mp.remove_many(confirmed)
 
         assert mp.size() == 0
-        assert cs2.state.get_balance(address(1)) == EMBERS_PER_SCH
+        assert cs2.state.get_balance(address(1)) == TICKS_PER_LAPSE
 
     def test_rejected_tx_stays_in_mempool(self):
         """Tx failing state validation stays pending."""
         cs = ChainState.from_genesis()
         # No balance for sender -- tx will be invalid
-        t = make_tx(3, 4, EMBERS_PER_SCH, cs.state, 0)
+        t = make_tx(3, 4, TICKS_PER_LAPSE, cs.state, 0)
         mp = mempool_mod.Mempool()
         # We add it directly to the mempool (bypassing node.submit_tx validation)
         mp.add(t)
@@ -235,12 +235,12 @@ class TestE2E_BlockAssembly:
     def test_assembly_produces_valid_block_with_txs(self):
         g = genesis()
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 500 * EMBERS_PER_SCH)
-        cs.state.total_minted += 500 * EMBERS_PER_SCH
+        cs.state.credit(address(0), 500 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 500 * TICKS_PER_LAPSE
 
         txs = []
         for i in range(5):
-            t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
+            t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
             txs.append(t)
             try:
                 cs.state.apply_tx(t)
@@ -260,10 +260,10 @@ class TestE2E_BlockAssembly:
         # Provide far more txs than can fit
         dummy_txs = []
         s = state_mod.State()
-        s.credit(address(0), 100_000 * EMBERS_PER_SCH)
-        s.total_minted = 100_000 * EMBERS_PER_SCH
+        s.credit(address(0), 100_000 * TICKS_PER_LAPSE)
+        s.total_minted = 100_000 * TICKS_PER_LAPSE
         for _ in range(100):
-            t = make_tx(0, 1, EMBERS_PER_SCH, s, 0)
+            t = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
             dummy_txs.append(t)
             try:
                 s.apply_tx(t)
@@ -312,9 +312,9 @@ class TestE2E_StatsAccumulator:
 
     def test_stats_circulating_equals_minted(self):
         cs0 = ChainState.from_genesis()
-        cs0.state.credit(address(0), 100 * EMBERS_PER_SCH)
-        cs0.state.total_minted += 100 * EMBERS_PER_SCH
-        t = make_tx(0, 1, EMBERS_PER_SCH, cs0.state, 0)
+        cs0.state.credit(address(0), 100 * TICKS_PER_LAPSE)
+        cs0.state.total_minted += 100 * TICKS_PER_LAPSE
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs0.state, 0)
         b1 = make_block(1, cs0.tip["hash"], [t])
         ok, _, cs1 = cs0.validate_and_apply(b1)
         assert ok

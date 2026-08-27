@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import state as state_mod
 from state import compute_reward
 from params import (
-    EMISSION_RATE, SUPPLY_CAP, EMBERS_PER_SCH
+    EMISSION_RATE, SUPPLY_CAP, TICKS_PER_LAPSE
 )
 from tests.fixtures import address, make_tx, seed_balance
 
@@ -109,22 +109,22 @@ class TestApplyTx:
         seed_balance(s, 0, 100.0)
         addr0 = address(0)
         bal_before = s.get_balance(addr0)
-        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
         s.apply_tx(t)
-        expected = bal_before - EMBERS_PER_SCH - t["fee"]
+        expected = bal_before - TICKS_PER_LAPSE - t["fee"]
         assert s.get_balance(addr0) == expected
 
     def test_apply_tx_credits_recipient(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
         s.apply_tx(t)
-        assert s.get_balance(address(1)) == EMBERS_PER_SCH
+        assert s.get_balance(address(1)) == TICKS_PER_LAPSE
 
     def test_apply_tx_advances_nonce(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        t = make_tx(0, 1, EMBERS_PER_SCH, s, 10)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
         s.apply_tx(t)
         assert s.get_nonce(address(0)) == t["nonce"]
 
@@ -136,16 +136,16 @@ class TestApplyTx:
         import tx as tx_mod
         from params import INITIAL_FEE_RATE
         outputs = [
-            {"to": address(1), "amount": EMBERS_PER_SCH},
-            {"to": address(2), "amount": 2 * EMBERS_PER_SCH},
+            {"to": address(1), "amount": TICKS_PER_LAPSE},
+            {"to": address(2), "amount": 2 * TICKS_PER_LAPSE},
         ]
         pk_hex = pubkey_hex(0)
         fee = tx_mod.compute_fee(from_addr, pk_hex, outputs, 1, 10, INITIAL_FEE_RATE)
         sk, _ = kp(0)
         t = tx_mod.create(from_addr, pk_hex, outputs, 1, 10, fee, sk)
         s.apply_tx(t)
-        assert s.get_balance(address(1)) == EMBERS_PER_SCH
-        assert s.get_balance(address(2)) == 2 * EMBERS_PER_SCH
+        assert s.get_balance(address(1)) == TICKS_PER_LAPSE
+        assert s.get_balance(address(2)) == 2 * TICKS_PER_LAPSE
 
 
 # ---------------------------------------------------------------------------
@@ -167,7 +167,7 @@ class TestEmission:
 
     def test_reward_formula(self):
         """can_mint = SUPPLY_CAP - total_minted;  reward = int(can_mint * (1 - RATE))"""
-        minted = 5_000_000 * EMBERS_PER_SCH
+        minted = 5_000_000 * TICKS_PER_LAPSE
         can_mint = SUPPLY_CAP - minted
         expected = int(can_mint * (1 - EMISSION_RATE))
         assert compute_reward(minted) == expected
@@ -181,17 +181,17 @@ class TestEmission:
 
     def test_negative_can_mint_returns_zero(self):
         """Guard against can_mint going negative (shouldn't happen normally)."""
-        assert compute_reward(SUPPLY_CAP + EMBERS_PER_SCH) == 0
+        assert compute_reward(SUPPLY_CAP + TICKS_PER_LAPSE) == 0
 
     def test_compute_can_mint_is_the_shared_pool_formula(self):
         """compute_reward is derived from compute_can_mint, not a second copy."""
-        minted = 5_000_000 * EMBERS_PER_SCH
+        minted = 5_000_000 * TICKS_PER_LAPSE
         pool   = state_mod.compute_can_mint(minted)
         assert pool == SUPPLY_CAP - minted
         assert compute_reward(minted) == int(pool * (1 - EMISSION_RATE))
 
     def test_compute_can_mint_floors_at_zero(self):
-        assert state_mod.compute_can_mint(SUPPLY_CAP + EMBERS_PER_SCH) == 0
+        assert state_mod.compute_can_mint(SUPPLY_CAP + TICKS_PER_LAPSE) == 0
 
     def test_state_compute_can_mint_uses_state_totals(self):
         s = fresh_state()

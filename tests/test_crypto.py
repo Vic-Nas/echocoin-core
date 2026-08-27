@@ -72,23 +72,23 @@ class TestKeyGeneration:
 
 class TestSignVerify:
     def test_valid_signature_verifies(self, sk, pk):
-        msg = b"hello scorchcoin"
+        msg = b"hello lapsecoin"
         sig = crypto.sign(msg, sk)
         assert crypto.verify(msg, sig, pk) is True
 
     def test_wrong_message_fails(self, sk, pk):
-        msg = b"hello scorchcoin"
+        msg = b"hello lapsecoin"
         sig = crypto.sign(msg, sk)
         assert crypto.verify(b"wrong message", sig, pk) is False
 
     def test_wrong_key_fails(self, sk, pk):
         sk2, pk2 = crypto.generate_keypair()
-        msg = b"hello scorchcoin"
+        msg = b"hello lapsecoin"
         sig = crypto.sign(msg, sk)
         assert crypto.verify(msg, sig, pk2) is False
 
     def test_tampered_signature_fails(self, sk, pk):
-        msg = b"hello scorchcoin"
+        msg = b"hello lapsecoin"
         sig = bytearray(crypto.sign(msg, sk))
         sig[10] ^= 0xFF
         assert crypto.verify(msg, bytes(sig), pk) is False
@@ -117,12 +117,12 @@ class TestSignVerify:
 
 class TestSha256:
     def test_sha256_bytes_matches_hashlib(self):
-        data = b"scorchcoin genesis"
+        data = b"lapsecoin genesis"
         expected = hashlib.sha256(data).digest()
         assert crypto.sha256(data) == expected
 
     def test_sha256_string_input(self):
-        data = "scorchcoin genesis"
+        data = "lapsecoin genesis"
         expected = hashlib.sha256(data.encode()).digest()
         assert crypto.sha256(data) == expected
 

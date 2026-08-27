@@ -1,4 +1,4 @@
-# Scorchcoin
+# LapseCoin
 
 A peer-to-peer electronic cash system. Most cumulative proven work wins, first valid block received: Bitcoin-style consensus. Block timing is enforced by a Verifiable Delay Function anchored to real elapsed time. Fees are deterministic and go to the block builder. Signatures are quantum-resistant (FALCON-512). Voluntary Proof-of-Burn lets any participant earn a proportional share of every block's reward by burning coins.
 
@@ -12,11 +12,11 @@ Download the binary for your platform and run it directly:
 
 ```
 # Linux
-chmod +x scorchcoin
-./scorchcoin
+chmod +x lapsecoin
+./lapsecoin
 
 # Windows
-scorchcoin.exe
+lapsecoin.exe
 ```
 
 ### Running from source
@@ -30,7 +30,7 @@ python main.py
 
 ## Ports
 
-Scorchcoin runs two HTTP servers:
+LapseCoin runs two HTTP servers:
 
 | Port | Interface | Purpose |
 |---|---|---|
@@ -47,10 +47,10 @@ The signing passphrase is required to start the node. Two ways to supply it:
 
 **Interactive** (default): you are prompted via `getpass` on startup. Nothing is stored in shell history or visible to `ps`.
 
-**Non-interactive** (Docker, systemd, CI): set the `SCORCHCOIN_PASSPHRASE` environment variable before starting the process.
+**Non-interactive** (Docker, systemd, CI): set the `LAPSECOIN_PASSPHRASE` environment variable before starting the process.
 
 ```bash
-export SCORCHCOIN_PASSPHRASE="your passphrase"
+export LAPSECOIN_PASSPHRASE="your passphrase"
 python main.py
 ```
 
@@ -58,8 +58,8 @@ Or inline with systemd:
 
 ```ini
 [Service]
-Environment=SCORCHCOIN_PASSPHRASE=your passphrase
-ExecStart=/usr/local/bin/scorchcoin
+Environment=LAPSECOIN_PASSPHRASE=your passphrase
+ExecStart=/usr/local/bin/lapsecoin
 ```
 
 The `--passphrase` CLI flag has been removed. It was visible in process listings (`ps aux`) and shell history, making it unsafe for any deployment.
@@ -71,8 +71,8 @@ The `--passphrase` CLI flag has been removed. It was visible in process listings
 | `--host` | `0.0.0.0` | Interface to bind for the public port |
 | `--port` | `8333` | Public port for HTTP API and peer connections |
 | `--private-port` | `port+2` | Private port for wallet UI. Always bound to 127.0.0.1. |
-| `--keyfile` | `scorchcoin_key.json` | Path to encrypted keypair |
-| `--db` | `scorchcoin_chain.db` | Path to SQLite chain database |
+| `--keyfile` | `lapsecoin_key.json` | Path to encrypted keypair |
+| `--db` | `lapsecoin_chain.db` | Path to SQLite chain database |
 | `--peer host:port` | - | Bootstrap peer (repeatable) |
 | `--max-peers` | `125` | Hard cap on peer table size |
 | `--log-level` | `INFO` | Verbosity: DEBUG, INFO, WARNING, ERROR |

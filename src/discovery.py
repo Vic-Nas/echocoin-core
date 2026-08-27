@@ -38,7 +38,7 @@ from discovery_dht import DHTDiscovery, PUT_REFRESH_INTERVAL
 
 log = logging.getLogger("ec.discovery")
 
-PEER_CACHE_FILE      = "scorchcoin_peers.json"
+PEER_CACHE_FILE      = "lapsecoin_peers.json"
 SAVE_INTERVAL        = 300
 GET_INTERVAL         = 60
 STAGE_FLUSH_INTERVAL = 15

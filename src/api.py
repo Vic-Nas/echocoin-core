@@ -1,4 +1,4 @@
-"""HTTP API and browser UI for Scorchcoin nodes.
+"""HTTP API and browser UI for LapseCoin nodes.
 
 Peer communication is handled separately over UDP. This module only serves
 human-facing browser UI and a JSON API for wallets and block explorers.
@@ -23,13 +23,13 @@ Public app  (default port 8333, externally reachable):
           "block_reward"}
 
     GET  /api/fee_rate
-         {"fee_rate": <embers/byte>, "height": <n>}
+         {"fee_rate": <ticks/byte>, "height": <n>}
 
     GET  /api/block/<height>          full block object or {"error": "not found"}
     GET  /api/tx/<hash>               transaction object (confirmed or mempool)
 
     GET  /api/address/<addr>/balance
-         {"address", "balance_embers", "balance_sch"}
+         {"address", "balance_ticks", "balance_lapse"}
 
     GET  /api/address/<addr>/history
          [{"height", "tx_hash", "direction": "sent"|"received", "tx"}, ...]
@@ -39,7 +39,7 @@ Public app  (default port 8333, externally reachable):
 
     GET  /api/stats
          {"points": [...], "totals": {"minted", "circulating",
-          "can_mint", "supply_cap", "net_emission_last", "embers_per_sch"}}
+          "can_mint", "supply_cap", "net_emission_last", "ticks_per_lapse"}}
 
     POST /api/tx/send                 rate-limited: 20 requests/second
          Request body (JSON):
@@ -67,7 +67,7 @@ from flask_limiter.util import get_remote_address
 
 import crypto as crypto_mod
 import tx as tx_mod
-from params import EMBERS_PER_SCH, SUPPLY_CAP
+from params import TICKS_PER_LAPSE, SUPPLY_CAP
 
 log = logging.getLogger("ec.api")
 
@@ -76,17 +76,17 @@ log = logging.getLogger("ec.api")
 # Formatting helpers
 # ---------------------------------------------------------------------------
 
-def fmt_balance(embers):
-    sch = embers // EMBERS_PER_SCH
-    rem = embers % EMBERS_PER_SCH
-    return f"{sch} SCH {rem:,} embers"
+def fmt_balance(ticks):
+    lapse = ticks // TICKS_PER_LAPSE
+    rem = ticks % TICKS_PER_LAPSE
+    return f"{lapse} LAPSE {rem:,} ticks"
 
 
-def fmt_fee_rate(embers_per_byte):
-    sch = embers_per_byte / EMBERS_PER_SCH
-    if sch >= 0.001:
-        return f"{sch:.6f} SCH/byte"
-    return f"{sch:.2e} SCH/byte"
+def fmt_fee_rate(ticks_per_byte):
+    lapse = ticks_per_byte / TICKS_PER_LAPSE
+    if lapse >= 0.001:
+        return f"{lapse:.6f} LAPSE/byte"
+    return f"{lapse:.2e} LAPSE/byte"
 
 
 # ---------------------------------------------------------------------------
@@ -286,8 +286,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
         if not crypto_mod.is_valid_address(addr):
             return jsonify({"error": "invalid address"}), 400
         balance = node.view.state.get_balance(addr)
-        return jsonify({"address": addr, "balance_embers": balance,
-                        "balance_sch": balance / EMBERS_PER_SCH})
+        return jsonify({"address": addr, "balance_ticks": balance,
+                        "balance_lapse": balance / TICKS_PER_LAPSE})
 
     @app.route("/api/address/<addr>/history", endpoint=pfx+"api_history")
     def api_history(addr):
@@ -317,7 +317,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "can_mint":         sv.compute_can_mint(),
             "supply_cap":       SUPPLY_CAP,
             "net_emission_last": net_last,
-            "embers_per_sch":    EMBERS_PER_SCH,
+            "ticks_per_lapse":    TICKS_PER_LAPSE,
         }})
 
     @app.route("/api/tx/send", methods=["POST"], endpoint=pfx+"api_send_tx")

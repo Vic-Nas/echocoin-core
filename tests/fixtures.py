@@ -1,5 +1,5 @@
 """
-Shared test fixtures and helpers used across the Scorchcoin test suite.
+Shared test fixtures and helpers used across the LapseCoin test suite.
 
 Mirrors the pattern used by bitcoin-core and ethereum/go-ethereum test
 helpers: one place for deterministic keypairs, address generation,
@@ -20,7 +20,7 @@ import tx as tx_mod
 from params import (
     GENESIS_TIMESTAMP,
     INITIAL_FEE_RATE,
-    EMBERS_PER_SCH,
+    TICKS_PER_LAPSE,
     SUPPLY_CAP,
 )
 
@@ -95,10 +95,10 @@ def make_tx(
 # ---------------------------------------------------------------------------
 
 def seed_balance(state: "state_mod.State", index: int, amount_ech: float = 100.0):
-    """Credit an address with embers. Bypasses tx validation -- for test setup only."""
-    embers = int(amount_ech * EMBERS_PER_SCH)
-    state.credit(address(index), embers)
-    state.total_minted += embers
+    """Credit an address with ticks. Bypasses tx validation -- for test setup only."""
+    ticks = int(amount_ech * TICKS_PER_LAPSE)
+    state.credit(address(index), ticks)
+    state.total_minted += ticks
 
 
 # ---------------------------------------------------------------------------

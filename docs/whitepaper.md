@@ -1,10 +1,10 @@
-# Scorchcoin: A Peer-to-Peer Electronic Cash System
+# LapseCoin: A Peer-to-Peer Electronic Cash System
 
 *Victorio Nascimento*
 
 ## Abstract
 
-Bitcoin proved that trust between strangers can be replaced by cryptographic proof on a public ledger. Its proof-of-work mechanism wastes energy on a puzzle whose only purpose is to make history rewriting expensive. Scorchcoin replaces proof-of-work with two complementary mechanisms: a Verifiable Delay Function (VDF) that anchors the chain to real elapsed time, and Proof-of-Burn (PoB) that ties block rewards to real economic commitment. The result is a battle-tested Bitcoin-like consensus model (most cumulative proven work wins, first valid block received) with an incentive layer that rewards long-term participants who burn coins and earn back a proportional share of every block's reward.
+Bitcoin proved that trust between strangers can be replaced by cryptographic proof on a public ledger. Its proof-of-work mechanism wastes energy on a puzzle whose only purpose is to make history rewriting expensive. LapseCoin replaces proof-of-work with two complementary mechanisms: a Verifiable Delay Function (VDF) that anchors the chain to real elapsed time, and Proof-of-Burn (PoB) that ties block rewards to real economic commitment. The result is a battle-tested Bitcoin-like consensus model (most cumulative proven work wins, first valid block received) with an incentive layer that rewards long-term participants who burn coins and earn back a proportional share of every block's reward.
 
 ## 1. The Problem with Proof-of-Work
 
@@ -16,11 +16,11 @@ A VDF alone without economic weight opens a different attack: an adversary who s
 
 ## 2. Transactions
 
-The base unit is the **ember**. One SCH equals 100,000,000 embers, matching Bitcoin's precision. All amounts are integers in embers.
+The base unit is the **tick**. One LAPSE equals 100,000,000 ticks, matching Bitcoin's precision. All amounts are integers in ticks.
 
 Fees are set by the protocol, not the sender: `fee = size_bytes × rate`. The rate adjusts every block against a 200 KB soft target, based on the median transaction volume over the last 100 blocks. It rises quickly under load, up to 5% per block, and falls very slowly below target, so a sustained spam attack doubles fees in about 28 minutes while recovery takes hours. Fees are collected by the block builder (the node that produced the block), not burned.
 
-**Intentional burns.** Any output addressed to `burn` is a Proof-of-Burn output. The embers are permanently destroyed and added back into the mintable emission pool (Section 5). Intentional burns are recorded per sender over a rolling window of the last 500 blocks, and count toward the sender's proportional share of every future block reward within that window. A single transaction may mix normal outputs and burn outputs.
+**Intentional burns.** Any output addressed to `burn` is a Proof-of-Burn output. The ticks are permanently destroyed and added back into the mintable emission pool (Section 5). Intentional burns are recorded per sender over a rolling window of the last 500 blocks, and count toward the sender's proportional share of every future block reward within that window. A single transaction may mix normal outputs and burn outputs.
 
 ## 3. Block Production
 
@@ -42,20 +42,20 @@ The transaction list is deliberately excluded from the challenge. A proof theref
 
 The node that produces a block collects all transaction fees from that block as its building reward. Fees are credited to the builder's address in the same block application step as transactions, before the PoB reward distribution, so the builder's balance reflects both.
 
-Fees do not reduce the mintable supply. The embers transferred as fees simply move from sender to builder. This keeps the fee mechanism simple and predictable.
+Fees do not reduce the mintable supply. The ticks transferred as fees simply move from sender to builder. This keeps the fee mechanism simple and predictable.
 
 ## 5. Incentive
 
 The block reward is drawn from the mintable supply:
 
 ```
-can_mint      = 21,000,000 SCH − total_minted + total_burnt
+can_mint      = 21,000,000 LAPSE − total_minted + total_burnt
 reward(block) = floor(can_mint × (1 − 0.5^(1/5,000,000)))
 ```
 
 The halflife of 5,000,000 blocks corresponds to roughly 20 years at 2 minutes per block. Only intentional PoB burns are added back into `can_mint`; fees are not burned and do not replenish it. Burns sustain rewards indefinitely: at low usage, emission decays smoothly toward zero; at high usage, burns offset emission and stabilize net supply.
 
-**Reward distribution.** A fixed 2% of every block reward goes unconditionally to the block's builder, regardless of burn activity. The remaining 98% is distributed proportionally among all senders who burned coins within the last 500 blocks (the PoB window). If sender A burned 3 SCH and sender B burned 1 SCH in the window, A receives 75% and B receives 25% of that 98%. If no one has burned in the window, only the builder's fixed 2% mints; the remaining 98% is not distributed and stays in `can_mint` for a future block when there are participants to distribute it to. Rounding is truncated toward zero; any remainder stays in the mintable pool.
+**Reward distribution.** A fixed 2% of every block reward goes unconditionally to the block's builder, regardless of burn activity. The remaining 98% is distributed proportionally among all senders who burned coins within the last 500 blocks (the PoB window). If sender A burned 3 LAPSE and sender B burned 1 LAPSE in the window, A receives 75% and B receives 25% of that 98%. If no one has burned in the window, only the builder's fixed 2% mints; the remaining 98% is not distributed and stays in `can_mint` for a future block when there are participants to distribute it to. Rounding is truncated toward zero; any remainder stays in the mintable pool.
 
 The builder's share is constant whether or not burns exist in the window, so a builder gains nothing by suppressing burn activity as a class: dropping every burn it sees leaves its own cut unchanged. This removes the blanket incentive, and it guarantees block production stays profitable even with an empty mempool and no burns anywhere in the window, which matters most during network bootstrap before burning activity has started. It does not make any single burner's share safe from a builder that targets that one address, which is a separate and unsolved problem (Section 8).
 
@@ -87,11 +87,11 @@ On first contact, a node verifies that a candidate peer shares the same genesis 
 
 **Whale dominance.** Burns older than 500 blocks fall out of the reward window. Sustained reward share requires sustained burning, aligning incentives with ongoing participation rather than one-time capital expenditure.
 
-**Comparison with Bitcoin.** Both systems share the same unsolved problem: a new node syncing from scratch cannot cryptographically distinguish the legitimate chain from an attacker's alternative, and both rely on the attacker having no incentive to destroy the network's value. Scorchcoin inherits Bitcoin's battle-tested cumulative-work fork choice and first-valid-block acceptance, eliminating the hardware arms race. The tradeoff is that reward share beyond the builder's fixed floor requires continuous burning; those burned coins return to the mintable pool to sustain future rewards for all participants.
+**Comparison with Bitcoin.** Both systems share the same unsolved problem: a new node syncing from scratch cannot cryptographically distinguish the legitimate chain from an attacker's alternative, and both rely on the attacker having no incentive to destroy the network's value. LapseCoin inherits Bitcoin's battle-tested cumulative-work fork choice and first-valid-block acceptance, eliminating the hardware arms race. The tradeoff is that reward share beyond the builder's fixed floor requires continuous burning; those burned coins return to the mintable pool to sustain future rewards for all participants.
 
 ## 9. Conclusion
 
-Scorchcoin inherits Bitcoin's core guarantee: no trust required, everything verifiable, no authority can reverse a transaction. It replaces proof-of-work with a Verifiable Delay Function that binds the chain to real elapsed time. Block selection and fork choice are Bitcoin-like: cumulative proven work wins, no per-slot scoring. Proof-of-Burn is purely an incentive layer: burn coins, earn a proportional share of block rewards, on top of a fixed floor every builder earns regardless of burn activity. Supply is capped at 21 million SCH with smooth exponential decay, sustained indefinitely by burns recycled into future emission. No halvings, no energy waste, no complex scoring.
+LapseCoin inherits Bitcoin's core guarantee: no trust required, everything verifiable, no authority can reverse a transaction. It replaces proof-of-work with a Verifiable Delay Function that binds the chain to real elapsed time. Block selection and fork choice are Bitcoin-like: cumulative proven work wins, no per-slot scoring. Proof-of-Burn is purely an incentive layer: burn coins, earn a proportional share of block rewards, on top of a fixed floor every builder earns regardless of burn activity. Supply is capped at 21 million LAPSE with smooth exponential decay, sustained indefinitely by burns recycled into future emission. No halvings, no energy waste, no complex scoring.
 
 ## References
 

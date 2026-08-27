@@ -1,9 +1,9 @@
-# Scorchcoin build targets
+# LapseCoin build targets
 #
 # make linux   -- regenerate icons, build onedir via PyInstaller,
-#                 then wrap into dist/scorchcoin (AppImage, no extension)
-# make windows -- build dist/scorchcoin.exe (onefile) using pre-committed icons
-# make icons   -- regenerate favicon.ico and scorchcoin.png from scorchcoin.svg
+#                 then wrap into dist/lapsecoin (AppImage, no extension)
+# make windows -- build dist/lapsecoin.exe (onefile) using pre-committed icons
+# make icons   -- regenerate favicon.ico and lapsecoin.png from lapsecoin.svg
 #                 (Linux only; requires libcairo2-dev + pip install cairosvg Pillow)
 #                 Run before make linux or make windows. Output is git-ignored.
 # make clean   -- remove build artifacts
@@ -17,7 +17,7 @@
 #
 # Requirements: pip install pyinstaller cairosvg Pillow
 
-SPEC    = scorchcoin.spec
+SPEC    = lapsecoin.spec
 DIST    = dist
 BUILD   = build
 APPDIR  = AppDir
@@ -29,30 +29,30 @@ linux: icons
 	@which appimagetool > /dev/null 2>&1 || (echo "appimagetool not found. See Makefile header." && exit 1)
 	rm -rf $(APPDIR)
 	mkdir -p $(APPDIR)/usr/bin
-	cp -r $(DIST)/scorchcoin-onedir/* $(APPDIR)/usr/bin/
-	cp scorchcoin.png $(APPDIR)/scorchcoin.png
-	printf '[Desktop Entry]\nName=Scorchcoin\nExec=scorchcoin\nIcon=scorchcoin\nType=Application\nCategories=Network;Finance;\n' > $(APPDIR)/scorchcoin.desktop
-	printf '#!/bin/sh\nexec "$$APPDIR/usr/bin/scorchcoin" "$$@"\n' > $(APPDIR)/AppRun
+	cp -r $(DIST)/lapsecoin-onedir/* $(APPDIR)/usr/bin/
+	cp lapsecoin.png $(APPDIR)/lapsecoin.png
+	printf '[Desktop Entry]\nName=LapseCoin\nExec=lapsecoin\nIcon=lapsecoin\nType=Application\nCategories=Network;Finance;\n' > $(APPDIR)/lapsecoin.desktop
+	printf '#!/bin/sh\nexec "$$APPDIR/usr/bin/lapsecoin" "$$@"\n' > $(APPDIR)/AppRun
 	chmod +x $(APPDIR)/AppRun
-	ARCH=x86_64 appimagetool --appimage-extract-and-run $(APPDIR) $(DIST)/scorchcoin
-	@echo "Built: $(DIST)/scorchcoin"
+	ARCH=x86_64 appimagetool --appimage-extract-and-run $(APPDIR) $(DIST)/lapsecoin
+	@echo "Built: $(DIST)/lapsecoin"
 
 windows:
 	pyinstaller --clean --noconfirm $(SPEC)
-	@echo "Built: $(DIST)/scorchcoin.exe"
+	@echo "Built: $(DIST)/lapsecoin.exe"
 
 icons:
 	python3 -c "\
 import cairosvg, base64, io; \
 from PIL import Image; \
-imgs=[Image.open(io.BytesIO(cairosvg.svg2png(url='scorchcoin.svg',output_width=s,output_height=s))).convert('RGBA') for s in [16,32,48]]; \
+imgs=[Image.open(io.BytesIO(cairosvg.svg2png(url='lapsecoin.svg',output_width=s,output_height=s))).convert('RGBA') for s in [16,32,48]]; \
 imgs[0].save('favicon.ico',format='ICO',sizes=[(16,16),(32,32),(48,48)],append_images=imgs[1:]); \
-open('scorchcoin.png','wb').write(cairosvg.svg2png(url='scorchcoin.svg',output_width=512,output_height=512)); \
+open('lapsecoin.png','wb').write(cairosvg.svg2png(url='lapsecoin.svg',output_width=512,output_height=512)); \
 print('icons regenerated')"
 
 test:
 	python3 -m pytest tests/ -q
 
 clean:
-	rm -rf $(DIST) $(BUILD) $(APPDIR) __pycache__ scorchcoin_chain.db scorchcoin_chain.db-shm scorchcoin_chain.db-wal
+	rm -rf $(DIST) $(BUILD) $(APPDIR) __pycache__ lapsecoin_chain.db lapsecoin_chain.db-shm lapsecoin_chain.db-wal
 	find . -name "*.pyc" -delete

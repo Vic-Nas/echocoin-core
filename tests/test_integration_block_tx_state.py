@@ -25,7 +25,7 @@ import state as state_mod
 import tx as tx_mod
 import mempool as mempool_mod
 from chainstate import ChainState
-from params import INITIAL_FEE_RATE, EMBERS_PER_SCH, SUPPLY_CAP
+from params import INITIAL_FEE_RATE, TICKS_PER_LAPSE, SUPPLY_CAP
 from tests.fixtures import (
     address, genesis, make_block, make_tx, seed_balance,
 )
@@ -47,28 +47,28 @@ def get_fee_rate(height):
 class TestBlockCommitFlow:
     def test_single_tx_block_commits(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * EMBERS_PER_SCH)
-        cs.state.total_minted += 100 * EMBERS_PER_SCH
+        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 100 * TICKS_PER_LAPSE
 
-        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
         b = make_block(1, cs.tip["hash"], [t])
         ok, err, cs2 = cs.validate_and_apply(b)
 
         assert ok is True, err
-        assert cs2.state.get_balance(address(1)) == EMBERS_PER_SCH
+        assert cs2.state.get_balance(address(1)) == TICKS_PER_LAPSE
         assert cs2.height == 1
 
     def test_multi_tx_block_commits(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
-        cs.state.credit(address(1), 1000 * EMBERS_PER_SCH)
-        cs.state.total_minted += 2000 * EMBERS_PER_SCH
+        cs.state.credit(address(0), 1000 * TICKS_PER_LAPSE)
+        cs.state.credit(address(1), 1000 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 2000 * TICKS_PER_LAPSE
 
-        t1 = make_tx(0, 2, EMBERS_PER_SCH, cs.state, 0)
+        t1 = make_tx(0, 2, TICKS_PER_LAPSE, cs.state, 0)
         cs.state.apply_tx(t1)  # advance nonce for sorting
-        t2 = make_tx(1, 2, EMBERS_PER_SCH, cs.state, 0)
+        t2 = make_tx(1, 2, TICKS_PER_LAPSE, cs.state, 0)
         # Reset state for validation (chainstate will re-apply)
-        cs.state.debit(address(2), EMBERS_PER_SCH)
+        cs.state.debit(address(2), TICKS_PER_LAPSE)
         cs.state.set_nonce(address(0), 0)
 
         txs = tx_mod.sort_txs([t1, t2])
@@ -77,14 +77,14 @@ class TestBlockCommitFlow:
 
         assert ok is True, err
         # Both txs credited
-        assert cs2.state.get_balance(address(2)) >= 2 * EMBERS_PER_SCH
+        assert cs2.state.get_balance(address(2)) >= 2 * TICKS_PER_LAPSE
 
     def test_duplicate_nonce_in_block_fails(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
-        cs.state.total_minted += 1000 * EMBERS_PER_SCH
+        cs.state.credit(address(0), 1000 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 1000 * TICKS_PER_LAPSE
 
-        t1 = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
+        t1 = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
         # Same nonce -- replay attack
         t2 = dict(t1)
         txs = tx_mod.sort_txs([t1, t2])
@@ -101,10 +101,10 @@ class TestFeeAccounting:
     def test_fees_go_to_builder(self):
         """Fees credit the block builder."""
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
-        cs.state.total_minted += 1000 * EMBERS_PER_SCH
+        cs.state.credit(address(0), 1000 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 1000 * TICKS_PER_LAPSE
 
-        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
         fee = t["fee"]
         b = make_block(1, cs.tip["hash"], [t], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
@@ -114,11 +114,11 @@ class TestFeeAccounting:
 
     def test_builder_receives_full_block_reward(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
-        cs.state.total_minted += 1000 * EMBERS_PER_SCH
+        cs.state.credit(address(0), 1000 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 1000 * TICKS_PER_LAPSE
 
         reward = cs.state.compute_block_reward()
-        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
         b = make_block(1, cs.tip["hash"], [t], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
@@ -132,10 +132,10 @@ class TestFeeAccounting:
 class TestMempoolPruning:
     def test_confirmed_txs_removed_from_mempool(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
-        cs.state.total_minted += 1000 * EMBERS_PER_SCH
+        cs.state.credit(address(0), 1000 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 1000 * TICKS_PER_LAPSE
 
-        t = make_tx(0, 1, EMBERS_PER_SCH, cs.state, 0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
         h = tx_mod.tx_hash(t)
 
         mp = mempool_mod.Mempool()
@@ -154,12 +154,12 @@ class TestMempoolPruning:
 
     def test_unconfirmed_txs_remain_in_mempool(self):
         cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 1000 * EMBERS_PER_SCH)
-        cs.state.credit(address(1), 1000 * EMBERS_PER_SCH)
-        cs.state.total_minted += 2000 * EMBERS_PER_SCH
+        cs.state.credit(address(0), 1000 * TICKS_PER_LAPSE)
+        cs.state.credit(address(1), 1000 * TICKS_PER_LAPSE)
+        cs.state.total_minted += 2000 * TICKS_PER_LAPSE
 
-        t1 = make_tx(0, 2, EMBERS_PER_SCH, cs.state, 0)
-        t2 = make_tx(1, 2, EMBERS_PER_SCH, cs.state, 0)
+        t1 = make_tx(0, 2, TICKS_PER_LAPSE, cs.state, 0)
+        t2 = make_tx(1, 2, TICKS_PER_LAPSE, cs.state, 0)
 
         mp = mempool_mod.Mempool()
         mp.add(t1)

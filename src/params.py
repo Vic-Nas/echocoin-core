@@ -1,12 +1,12 @@
 """Protocol constants. No logic, no I/O."""
 
-# Denomination: 1 SCH = 100_000_000 embers (same precision as BTC/satoshis).
-# All balances, amounts, fees, and rewards are integers in embers.
-EMBERS_PER_SCH = 100_000_000
+# Denomination: 1 LAPSE = 100_000_000 ticks (same precision as BTC/satoshis).
+# All balances, amounts, fees, and rewards are integers in ticks.
+TICKS_PER_LAPSE = 100_000_000
 
-# Emission. Supply is bounded at 21M SCH with smooth exponential decay
+# Emission. Supply is bounded at 21M LAPSE with smooth exponential decay
 # over a 20-year half-life. No halvings, no supply shock.
-SUPPLY_CAP        = 21_000_000 * EMBERS_PER_SCH
+SUPPLY_CAP        = 21_000_000 * TICKS_PER_LAPSE
 EMISSION_HALFLIFE = 5_000_000  # blocks (~20 years at 2 min/block)
 EMISSION_RATE     = 0.5 ** (1 / EMISSION_HALFLIFE)  # per-block decay factor
 
@@ -25,7 +25,7 @@ ADDRESS_BITS       = 132
 ADDRESS_WORD_COUNT = 12
 WORD_BITS          = 11
 
-INITIAL_FEE_RATE = 10     # embers/byte; low start, fee formula rises under load
+INITIAL_FEE_RATE = 10     # ticks/byte; low start, fee formula rises under load
 
 # VDF iteration count targeting ~120 seconds of sequential computation on
 # target testnet hardware. Calibrated from real benchmark runs: median of
@@ -84,11 +84,11 @@ TIMELOCK_MARGIN_MULTIPLIER = 1.5
 # Genesis message. Embedded in block 0 and hashed into the genesis block hash.
 # Cannot change after launch without breaking network identity.
 GENESIS_MESSAGE = (
-    "Scorchcoin genesis. No premine. No authority. Every node earns. "
+    "LapseCoin genesis. No premine. No authority. Every node earns. "
     "The chain is its own clock: one VDF per block, real elapsed time."
 )
 
-DB_PATH = "scorchcoin_chain.db"
+DB_PATH = "lapsecoin_chain.db"
 
 # Genesis timestamp: unix time when the chain was launched. Set once manually
 # before the first release and never changed.
@@ -101,4 +101,4 @@ BEP44_SLOT_COUNT = 256
 # letting the chain restart fresh. Set to False for mainnet; at that point
 # GENESIS_TIMESTAMP is fixed manually once and the workflow never touches it.
 TESTNET      = True
-NETWORK_NAME = "Scorchcoin Testnet" if TESTNET else "Scorchcoin"
+NETWORK_NAME = "LapseCoin Testnet" if TESTNET else "LapseCoin"

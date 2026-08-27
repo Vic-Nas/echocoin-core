@@ -134,8 +134,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: scorchcoin-linux
-          path: dist/scorchcoin
+          name: lapsecoin-linux
+          path: dist/lapsecoin
 
   build-windows:
     needs: test
@@ -187,16 +187,16 @@ jobs:
         shell: pwsh
         run: |
           $env:PATH = "C:\msys64\mingw64\bin;$env:PATH"
-          & "$env:pythonLocation\python.exe" -c 'import cairosvg,io; from PIL import Image; imgs=[Image.open(io.BytesIO(cairosvg.svg2png(url="scorchcoin.svg",output_width=s,output_height=s))).convert("RGBA") for s in [16,32,48]]; imgs[0].save("favicon.ico",format="ICO",sizes=[(16,16),(32,32),(48,48)],append_images=imgs[1:]); open("scorchcoin.png","wb").write(cairosvg.svg2png(url="scorchcoin.svg",output_width=512,output_height=512)); print("icons generated")'
+          & "$env:pythonLocation\python.exe" -c 'import cairosvg,io; from PIL import Image; imgs=[Image.open(io.BytesIO(cairosvg.svg2png(url="lapsecoin.svg",output_width=s,output_height=s))).convert("RGBA") for s in [16,32,48]]; imgs[0].save("favicon.ico",format="ICO",sizes=[(16,16),(32,32),(48,48)],append_images=imgs[1:]); open("lapsecoin.png","wb").write(cairosvg.svg2png(url="lapsecoin.svg",output_width=512,output_height=512)); print("icons generated")'
 
       - name: Build
-        run: pyinstaller --clean --noconfirm scorchcoin.spec
+        run: pyinstaller --clean --noconfirm lapsecoin.spec
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: scorchcoin-windows
-          path: dist/scorchcoin.exe
+          name: lapsecoin-windows
+          path: dist/lapsecoin.exe
 
   release:
     needs: [version, build-linux, build-windows]
@@ -212,17 +212,17 @@ jobs:
       - name: Download Linux artifact
         uses: actions/download-artifact@v4
         with:
-          name: scorchcoin-linux
+          name: lapsecoin-linux
           path: artifacts/linux
 
       - name: Download Windows artifact
         uses: actions/download-artifact@v4
         with:
-          name: scorchcoin-windows
+          name: lapsecoin-windows
           path: artifacts/windows
 
       - name: Make AppImage executable
-        run: chmod +x artifacts/linux/scorchcoin
+        run: chmod +x artifacts/linux/lapsecoin
 
       - name: Generate changelog
         id: changelog
@@ -254,11 +254,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          name: Scorchcoin ${{ needs.version.outputs.tag }}
+          name: LapseCoin ${{ needs.version.outputs.tag }}
           body: ${{ steps.changelog.outputs.CHANGELOG }}
           files: |
-            artifacts/linux/scorchcoin
-            artifacts/windows/scorchcoin.exe
+            artifacts/linux/lapsecoin
+            artifacts/windows/lapsecoin.exe
           fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -30,7 +30,7 @@ except ImportError:
 
 log = logging.getLogger("ec.discovery.dht")
 
-DHT_STATE_FILE       = "scorchcoin_lt_dht.dat"
+DHT_STATE_FILE       = "lapsecoin_lt_dht.dat"
 PUT_DELAY            = 30
 PUT_REFRESH_INTERVAL = 3600
 
@@ -108,7 +108,7 @@ class DHTDiscovery:
         sk_64, pk = self._slot_keypair(slot_index)
         value = json.dumps({"addr": my_addr, "ts": int(time.time())}).encode()
         try:
-            ses.dht_put_mutable_item(sk_64, pk, value, b"scorchcoin-v1")
+            ses.dht_put_mutable_item(sk_64, pk, value, b"lapsecoin-v1")
             log.info("[dht] BEP44 put  slot=%d  addr=%s", slot_index, my_addr)
         except Exception:
             log.exception("[dht] BEP44 put error")
@@ -119,7 +119,7 @@ class DHTDiscovery:
                 continue
             _, pk = self._slot_keypair(i)
             try:
-                ses.dht_get_mutable_item(pk, b"scorchcoin-v1")
+                ses.dht_get_mutable_item(pk, b"lapsecoin-v1")
             except Exception:
                 pass
         log.debug("[dht] BEP44 get  slots=%d",
@@ -153,7 +153,7 @@ class DHTDiscovery:
 
     def _slot_keypair(self, slot_index):
         seed = hashlib.sha256(
-            b"scorchcoin-peers-v1:"
+            b"lapsecoin-peers-v1:"
             + self.genesis_hash.encode()
             + b":"
             + str(slot_index).encode()
