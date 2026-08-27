@@ -53,67 +53,12 @@ def _validate_tail(tail, prefix):
 
 
 # ---------------------------------------------------------------------------
-# StatsAccumulator: owned by Node, updated each commit, read by NodeView
-# ---------------------------------------------------------------------------
-
-class StatsAccumulator:
-    """Maintains the /api/stats chart data incrementally.
-
-    Owned by Node and updated in _commit() so it always stays current
-    without NodeView needing to carry forward state from a previous view.
-    Flask reads node.stats (GIL-safe reference) directly.
-    """
-
-    def __init__(self):
-        self.points:    list  = []   # [{height, minted, circulating, net_emission}]
-        self._chain_len: int  = 0    # chain length at last update
-
-    def update(self, chain, state):
-        """Extend or rebuild points to match chain. Call after every commit."""
-        if len(chain) <= 1:
-            self.points, self._chain_len = [], len(chain)
-            return
-
-        if len(chain) == self._chain_len + 1:
-            # Incremental: one new block appended.
-            blk         = chain[-1]
-            prev_minted = self.points[-1]["minted"] if self.points else 0
-            reward      = state.total_minted - prev_minted
-            self.points = self.points + [{
-                "height":       blk["height"],
-                "minted":       state.total_minted,
-                "circulating":  state.total_minted,
-                "net_emission": reward,
-            }]
-        else:
-            # Full rebuild (startup, reorg, or first call).
-            points = []
-            running_minted = 0
-            for blk in chain[1:]:
-                reward          = state_mod.compute_reward(running_minted)
-                running_minted += reward
-                points.append({
-                    "height":       blk["height"],
-                    "minted":       running_minted,
-                    "circulating":  running_minted,
-                    "net_emission": reward,
-                })
-            if len(points) > 500:
-                step   = len(points) / 500
-                points = [points[int(i * step)] for i in range(500)]
-            self.points = points
-
-        self._chain_len = len(chain)
-
-
-# ---------------------------------------------------------------------------
 # NodeView: read-only snapshot for Flask threads
 # ---------------------------------------------------------------------------
 
 class NodeView:
     """Immutable snapshot of node state. Published after every block commit.
     Flask reads node.view; one reference swap, GIL-atomic, no lock needed.
-    stats_points comes from node.stats, not carried here.
     """
     __slots__ = ("chain", "height", "tip", "genesis_hash", "state")
 
@@ -148,10 +93,8 @@ class Node:
         self._loop_thread = None
         self._cycle_count = 0
 
-        self.stats = StatsAccumulator()
-        self.cs    = self._load_cs()
-        self.stats.update(self.cs.chain, self.cs.state)
-        self.view  = NodeView(self.cs)
+        self.cs   = self._load_cs()
+        self.view = NodeView(self.cs)
 
     # ------------------------------------------------------------------
     # Startup
@@ -365,7 +308,6 @@ class Node:
         self.cs = self.cs.apply_block(blk)
         self.storage.save_block_and_state(blk, self.cs.state)
         self.mempool.remove_many(confirmed)
-        self.stats.update(self.cs.chain, self.cs.state)
         self.view = NodeView(self.cs)
 
         if relay:
@@ -512,7 +454,6 @@ class Node:
         self.storage.replace_chain_and_state(fork_point, tail, remote_cs.state)
         self._reorg_mempool(fork_point, remote_chain)
         self.cs = remote_cs
-        self.stats.update(self.cs.chain, self.cs.state)
         self.view = NodeView(self.cs)
 
         if fork_point < self.cs.height:

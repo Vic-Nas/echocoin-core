@@ -26,7 +26,6 @@ import state as state_mod
 import tx as tx_mod
 import mempool as mempool_mod
 from chainstate import ChainState
-from node import StatsAccumulator
 from params import TICKS_PER_LAPSE, SUPPLY_CAP
 from tests.fixtures import (
     address, genesis, make_block,
@@ -231,52 +230,3 @@ class TestE2E_BlockAssembly:
         # Assembled block (with hash placeholder) must fit
         test_block = {**assembled, "hash": "x" * 64}
         assert block_mod.block_size(test_block) <= BLOCK_SIZE_LIMIT
-
-
-# ---------------------------------------------------------------------------
-# E2E-10: StatsAccumulator (node stats tracking)
-# ---------------------------------------------------------------------------
-
-class TestE2E_StatsAccumulator:
-    def test_stats_empty_at_genesis(self):
-        cs = ChainState.from_genesis()
-        acc = StatsAccumulator()
-        acc.update(cs.chain, cs.state)
-        assert acc.points == []
-
-    def test_stats_incremental_update(self):
-        cs0 = ChainState.from_genesis()
-        b1 = make_block(1, cs0.tip["hash"], [])
-        ok, err, cs1 = cs0.validate_and_apply(b1)
-        assert ok
-
-        acc = StatsAccumulator()
-        acc.update(cs1.chain, cs1.state)
-        assert len(acc.points) == 1
-        assert acc.points[0]["height"] == 1
-
-    def test_stats_incremental_two_blocks(self):
-        cs0 = ChainState.from_genesis()
-        b1 = make_block(1, cs0.tip["hash"], [])
-        b2 = make_block(2, b1["hash"], [])
-        _, _, cs1 = cs0.validate_and_apply(b1)
-        _, _, cs2 = cs1.validate_and_apply(b2)
-
-        acc = StatsAccumulator()
-        acc.update(cs1.chain, cs1.state)
-        acc.update(cs2.chain, cs2.state)
-        assert len(acc.points) == 2
-
-    def test_stats_circulating_equals_minted(self):
-        cs0 = ChainState.from_genesis()
-        cs0.state.credit(address(0), 100 * TICKS_PER_LAPSE)
-        cs0.state.total_minted += 100 * TICKS_PER_LAPSE
-        t = make_tx(0, 1, TICKS_PER_LAPSE, cs0.state)
-        b1 = make_block(1, cs0.tip["hash"], [t])
-        ok, _, cs1 = cs0.validate_and_apply(b1)
-        assert ok
-
-        acc = StatsAccumulator()
-        acc.update(cs1.chain, cs1.state)
-        pt = acc.points[0]
-        assert pt["circulating"] == pt["minted"]

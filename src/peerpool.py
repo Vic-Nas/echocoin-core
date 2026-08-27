@@ -104,3 +104,14 @@ class PeerPool:
         """Raw list of all addresses (including those on cooldown). For cache/API."""
         with self._lock:
             return list(self._peers.keys())
+
+    def snapshot(self):
+        """Return [(addr, last_seen, active)] for display. active is False
+        while a peer is in cooldown after repeated failures."""
+        now_mono = time.monotonic()
+        with self._lock:
+            return [
+                (addr, last_seen,
+                 now_mono >= self._fails.get(addr, {}).get("cooldown_until", 0.0))
+                for addr, last_seen in self._peers.items()
+            ]

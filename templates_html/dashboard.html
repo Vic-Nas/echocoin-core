@@ -1,17 +1,23 @@
 {% extends "base.html" %}
 {% block content %}
 <div class="stats" style="margin-bottom:1rem">
-  <div class="stat"><div class="stat-label">Height</div><div class="stat-value">{{ info.height }}</div></div>
+  <div class="stat"><a href="/explorer/block/{{ info.height }}"><div class="stat-label">Height</div><div class="stat-value">{{ info.height }}</div></a></div>
   <div class="stat"><div class="stat-label">Mempool</div><div class="stat-value">{{ info.mempool_size }}</div></div>
-  <div class="stat"><div class="stat-label">Peers</div><div class="stat-value">{{ info.peer_count }}</div></div>
+  <div class="stat"><a href="/peers"><div class="stat-label">Peers</div><div class="stat-value">{{ info.peer_count }}</div></a></div>
+  <div class="stat">
+    <div class="stat-label">Circulating</div>
+    <div class="stat-value" style="font-size:1rem">{{ fmt_balance(info.total_minted) }}</div>
+    <div style="color:var(--muted);font-size:.75rem">{{ "%.4f"|format(info.total_minted / supply_cap * 100) }}% of 21M cap</div>
+  </div>
+  <div class="stat">
+    <div class="stat-label">Net emission</div>
+    <div class="stat-value" style="font-size:1rem;color:var(--green)">+{{ fmt_balance(info.block_reward) }}</div>
+    <div style="color:var(--muted);font-size:.75rem">per block</div>
+  </div>
 </div>
 <div class="card">
   <div class="card-title">Your address</div>
   <div class="hash">{{ info.address }}</div>
-</div>
-<div class="card">
-  <div class="card-title">Tip hash</div>
-  <div class="hash">{{ tip.hash }}</div>
 </div>
 <div class="card">
   <div class="card-title">Recent transactions</div>

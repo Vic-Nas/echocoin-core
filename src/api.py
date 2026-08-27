@@ -13,7 +13,7 @@ Public app  (default port 8333, externally reachable):
     GET  /explorer/tx/<hash>          transaction detail
     GET  /address?addr=<addr>         address balance and history
     GET  /whitepaper                  protocol whitepaper
-    GET  /stats                       emission chart
+    GET  /peers                       connected peer list
     GET  /send                        403 (local interface only)
 
   JSON API (Content-Type: application/json):
@@ -33,10 +33,6 @@ Public app  (default port 8333, externally reachable):
 
     GET  /api/mempool
          {"size": <n>, "transactions": [{"hash", "from", "outputs", "fee"}, ...]}
-
-    GET  /api/stats
-         {"points": [...], "totals": {"minted", "circulating",
-          "can_mint", "supply_cap", "net_emission_last", "ticks_per_lapse"}}
 
     POST /api/tx/send                 rate-limited: 20 requests/second
          Request body (JSON): a signed plaintext tx dict, see tx.py
@@ -217,7 +213,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         info = node.get_info()
         chain = node.view.chain
         return render_template("dashboard.html", title="Dashboard",
-            info=info, tip=chain[-1],
+            info=info, supply_cap=SUPPLY_CAP,
             recent_txs=_recent_committed_txs(chain, limit=10))
 
     @app.route("/explorer", endpoint=pfx+"explorer")
@@ -307,9 +303,10 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return render_template("whitepaper.html", title="Whitepaper",
                                rendered=rendered)
 
-    @app.route("/stats", endpoint=pfx+"stats")
-    def stats():
-        return render_template("stats.html", title="Stats")
+    @app.route("/peers", endpoint=pfx+"peers")
+    def peers():
+        rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
+        return render_template("peers.html", title="Peers", rows=rows)
 
     # ---- JSON API (read-only) --------------------------------------------
 
@@ -364,21 +361,6 @@ def _shared_read_only_routes(app, node, pool, limiter,
                     "outputs": t["outputs"], "fee": t["fee"]}
 
         return jsonify({"size": len(txs), "transactions": [_summarize(t) for t in txs]})
-
-    @app.route("/api/stats", endpoint=pfx+"api_stats")
-    def api_stats():
-        v  = node.view
-        sv = v.state
-        pts = node.stats.points
-        net_last = pts[-1]["net_emission"] if pts else 0
-        return jsonify({"points": pts, "totals": {
-            "minted":           sv.total_minted,
-            "circulating":      sv.total_minted,
-            "can_mint":         sv.compute_can_mint(),
-            "supply_cap":       SUPPLY_CAP,
-            "net_emission_last": net_last,
-            "ticks_per_lapse":    TICKS_PER_LAPSE,
-        }})
 
     @app.route("/api/tx/send", methods=["POST"], endpoint=pfx+"api_send_tx")
     @limiter.limit("20 per second")

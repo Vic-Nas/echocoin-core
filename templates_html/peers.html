@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Peers</h2>
+<div class="card">
+  <div class="card-title">{{ rows | length }} known peer{{ "s" if rows | length != 1 }}</div>
+  <table>
+    <thead><tr><th>Address</th><th>Last seen</th><th>Status</th></tr></thead>
+    <tbody>
+    {% if rows %}
+      {% for addr, last_seen, active in rows %}
+      <tr>
+        <td class="hash-short">{{ addr }}</td>
+        <td data-ts="{{ last_seen | int }}" class="peer-last-seen">{{ last_seen | int }}</td>
+        <td style="color:{{ 'var(--green)' if active else 'var(--muted)' }}">{{ "active" if active else "cooldown" }}</td>
+      </tr>
+      {% endfor %}
+    {% else %}
+      <tr><td colspan="3" style="color:var(--muted);text-align:center">No peers yet</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+</div>
+<script>
+  document.querySelectorAll(".peer-last-seen").forEach(td => {
+    const ts = parseInt(td.dataset.ts, 10);
+    if (ts) td.textContent = new Date(ts * 1000).toLocaleString();
+  });
+</script>
+{% endblock %}

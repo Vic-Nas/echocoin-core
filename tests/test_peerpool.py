@@ -278,3 +278,29 @@ class TestAllAddrs:
     def test_all_addrs_empty_when_no_peers(self):
         p = make_pool()
         assert p.all_addrs() == []
+
+
+class TestSnapshot:
+    def test_snapshot_empty_when_no_peers(self):
+        p = make_pool()
+        assert p.snapshot() == []
+
+    def test_snapshot_reports_active_peer(self):
+        p = make_pool()
+        p.add("1.2.3.4:9000")
+        rows = p.snapshot()
+        assert len(rows) == 1
+        addr, last_seen, active = rows[0]
+        assert addr == "1.2.3.4:9000"
+        assert last_seen > 0
+        assert active is True
+
+    def test_snapshot_reports_cooldown_peer_as_inactive(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.strike(peer)
+        rows = p.snapshot()
+        assert len(rows) == 1
+        assert rows[0][0] == peer
+        assert rows[0][2] is False
