@@ -25,7 +25,7 @@ import state as state_mod
 import tx as tx_mod
 import mempool as mempool_mod
 from chainstate import ChainState
-from params import INITIAL_FEE_RATE, TICKS_PER_LAPSE, SUPPLY_CAP
+from params import TICKS_PER_LAPSE, SUPPLY_CAP
 from tests.fixtures import (
     address, genesis, make_block, make_tx, seed_balance,
 )
@@ -34,10 +34,6 @@ from tests.fixtures import (
 @pytest.fixture(autouse=True)
 def mock_vdf(monkeypatch):
     monkeypatch.setattr("block.vdf_mod.verify", lambda *a, **kw: True)
-
-
-def get_fee_rate(height):
-    return INITIAL_FEE_RATE
 
 
 # ---------------------------------------------------------------------------
@@ -50,8 +46,8 @@ class TestBlockCommitFlow:
         cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         cs.state.total_minted += 100 * TICKS_PER_LAPSE
 
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        b = make_block(1, cs.tip["hash"], [confirm, resolve])
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state)
+        b = make_block(1, cs.tip["hash"], [t])
         ok, err, cs2 = cs.validate_and_apply(b)
 
         assert ok is True, err
@@ -64,37 +60,27 @@ class TestBlockCommitFlow:
         cs.state.credit(address(1), 1000 * TICKS_PER_LAPSE)
         cs.state.total_minted += 2000 * TICKS_PER_LAPSE
 
-        # Confirmation ordering no longer depends on the sender's inner
-        # nonce (see tx.sort_key): resolution order is already forced to
-        # match confirmation order by the gapless queue rule, so building
-        # both confirms straight off the current state is enough.
-        c1, r1 = make_tx(0, 2, TICKS_PER_LAPSE, cs.state, 0)
-        c2, r2 = make_tx(1, 2, TICKS_PER_LAPSE, cs.state, 0)
+        t1 = make_tx(0, 2, TICKS_PER_LAPSE, cs.state)
+        t2 = make_tx(1, 2, TICKS_PER_LAPSE, cs.state)
 
-        txs = tx_mod.sort_txs([c1, c2]) + [r1, r2]
-        b = make_block(1, cs.tip["hash"], txs)
+        b = make_block(1, cs.tip["hash"], [t1, t2])
         ok, err, cs2 = cs.validate_and_apply(b)
 
         assert ok is True, err
         # Both txs credited
         assert cs2.state.get_balance(address(2)) >= 2 * TICKS_PER_LAPSE
 
-    def test_duplicate_resolution_in_block_is_a_harmless_noop(self):
-        """Resolving the same confirmation twice in one block no longer
-        invalidates the whole block (see tx.validate_resolution's
-        docstring): the crypto proof is identical and still valid, but the
-        transfer already applied and the escrow already paid out on the
-        first occurrence, so the second is a no-op rather than a double
-        payment or a double-applied transfer."""
+    def test_duplicate_nonce_in_block_fails(self):
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 1000 * TICKS_PER_LAPSE)
         cs.state.total_minted += 1000 * TICKS_PER_LAPSE
 
-        c1, r1 = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        b = make_block(1, cs.tip["hash"], [c1, r1, r1])
-        ok, err, cs2 = cs.validate_and_apply(b)
-        assert ok is True, err
-        assert cs2.state.get_balance(address(1)) == TICKS_PER_LAPSE
+        t1 = make_tx(0, 1, TICKS_PER_LAPSE, cs.state)
+        # Same nonce -- replay attack
+        t2 = dict(t1)
+        b = make_block(1, cs.tip["hash"], [t1, t2])
+        ok, err, _ = cs.validate_and_apply(b)
+        assert ok is False
 
 
 # ---------------------------------------------------------------------------
@@ -102,23 +88,19 @@ class TestBlockCommitFlow:
 # ---------------------------------------------------------------------------
 
 class TestFeeAccounting:
-    def test_fees_go_to_resolver_not_builder(self):
-        """Fees are escrowed at confirmation and paid to whichever
-        resolver's solution lands first -- not to the block builder."""
+    def test_fees_go_to_builder(self):
+        """Fees credit the block builder."""
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 1000 * TICKS_PER_LAPSE)
         cs.state.total_minted += 1000 * TICKS_PER_LAPSE
 
-        reward = cs.state.compute_block_reward()
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0, resolver_index=7)
-        fee = confirm["fee"]
-        b = make_block(1, cs.tip["hash"], [confirm, resolve], builder_index=2)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state)
+        fee = t["fee"]
+        b = make_block(1, cs.tip["hash"], [t], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
 
         assert ok is True, err
-        assert cs2.state.get_balance(address(7)) >= fee
-        # Builder gets only the block reward, not the confirmation fee.
-        assert cs2.state.get_balance(address(2)) == reward
+        assert cs2.state.get_balance(address(2)) >= fee
 
     def test_builder_receives_full_block_reward(self):
         cs = ChainState.from_genesis()
@@ -126,11 +108,11 @@ class TestFeeAccounting:
         cs.state.total_minted += 1000 * TICKS_PER_LAPSE
 
         reward = cs.state.compute_block_reward()
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        b = make_block(1, cs.tip["hash"], [confirm, resolve], builder_index=2)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state)
+        b = make_block(1, cs.tip["hash"], [t], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
-        assert cs2.state.get_balance(address(2)) == reward
+        assert cs2.state.get_balance(address(2)) == t["fee"] + reward
 
 
 # ---------------------------------------------------------------------------
@@ -143,15 +125,14 @@ class TestMempoolPruning:
         cs.state.credit(address(0), 1000 * TICKS_PER_LAPSE)
         cs.state.total_minted += 1000 * TICKS_PER_LAPSE
 
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state)
 
         mp = mempool_mod.Mempool()
-        mp.add(confirm)
-        mp.add(resolve)
-        assert mp.size() == 2
+        mp.add(t)
+        assert mp.size() == 1
 
         # Commit block
-        b = make_block(1, cs.tip["hash"], [confirm, resolve])
+        b = make_block(1, cs.tip["hash"], [t])
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
 
@@ -166,15 +147,15 @@ class TestMempoolPruning:
         cs.state.credit(address(1), 1000 * TICKS_PER_LAPSE)
         cs.state.total_minted += 2000 * TICKS_PER_LAPSE
 
-        c1, r1 = make_tx(0, 2, TICKS_PER_LAPSE, cs.state, 0)
-        c2, r2 = make_tx(1, 2, TICKS_PER_LAPSE, cs.state, 0)
+        t1 = make_tx(0, 2, TICKS_PER_LAPSE, cs.state)
+        t2 = make_tx(1, 2, TICKS_PER_LAPSE, cs.state)
 
         mp = mempool_mod.Mempool()
-        mp.add(c1)
-        mp.add(c2)
+        mp.add(t1)
+        mp.add(t2)
 
-        # Only c1 gets included in the block
-        b = make_block(1, cs.tip["hash"], [c1])
+        # Only t1 gets included in the block
+        b = make_block(1, cs.tip["hash"], [t1])
         confirmed = {tx_mod.tx_hash(tx) for tx in b["transactions"]}
         mp.remove_many(confirmed)
         assert mp.size() == 1  # t2 remains

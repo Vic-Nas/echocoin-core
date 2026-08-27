@@ -9,7 +9,6 @@ Flows covered:
   E2E-1:  Genesis -> mine blocks -> emit rewards -> verify circulating supply
   E2E-3:  Fork choice: most cumulative proven work wins; ties broken by tip hash
   E2E-4:  Reorg: a shorter chain that becomes longer is accepted
-  E2E-5:  Fee rate dynamics: spam attack inflates fee, inactivity decays it
   E2E-8:  Full tx lifecycle: create -> mempool -> block -> confirmed
   E2E-9:  Block assembly: assemble() fills to limit, skips oversized single txs
   E2E-10: Multi-sender block with correct nonce sequencing
@@ -17,7 +16,6 @@ Flows covered:
 
 import os
 import sys
-from unittest.mock import patch
 
 import pytest
 
@@ -29,13 +27,10 @@ import tx as tx_mod
 import mempool as mempool_mod
 from chainstate import ChainState
 from node import StatsAccumulator
-from params import (
-    BLOCK_SIZE_TARGET_BYTES, INITIAL_FEE_RATE,
-    TICKS_PER_LAPSE, SUPPLY_CAP,
-)
+from params import TICKS_PER_LAPSE, SUPPLY_CAP
 from tests.fixtures import (
-    address, genesis, keypair, make_block, make_confirmation,
-    make_tx, apply_transfer, pubkey_hex, seed_balance,
+    address, genesis, make_block,
+    make_tx,
 )
 
 
@@ -147,43 +142,6 @@ class TestE2E_Reorg:
 
 
 # ---------------------------------------------------------------------------
-# E2E-5: Fee rate dynamics
-# ---------------------------------------------------------------------------
-
-class TestE2E_FeeDynamics:
-    def test_spam_doubles_fee_in_roughly_14_blocks(self):
-        """
-        Sustained full blocks apply adjustment=1.05 each block.
-        At 1.05^14 ~= 1.98, the rate nearly doubles.  int() truncation means this
-        is only observable once the base rate is high enough.  Start from rate=100
-        ticks/byte so the doubling is clearly visible.
-        """
-        g = genesis()
-        chain = [g]
-        rate = 100  # start high enough that 5% rises survive int truncation
-        for h in range(1, 15):
-            blk = make_block(h, chain[-1]["hash"], [])
-            blk["tx_bytes"] = BLOCK_SIZE_TARGET_BYTES * 2
-            blk["fee_rate"] = rate
-            chain.append(blk)
-            rate = block_mod.compute_expected_fee_rate(chain)
-        # After 14 blocks of 2x volume from base 100, rate should be close to 200
-        assert rate > 150
-
-    def test_zero_activity_decays_rate_slowly(self):
-        g = genesis()
-        chain = [g]
-        for h in range(1, 51):
-            blk = make_block(h, chain[-1]["hash"], [])
-            blk["tx_bytes"] = 0
-            blk["fee_rate"] = chain[-1].get("fee_rate", INITIAL_FEE_RATE)
-            chain.append(blk)
-        final_rate = block_mod.compute_expected_fee_rate(chain)
-        # Should decay but not crash to zero
-        assert 1 <= final_rate < INITIAL_FEE_RATE
-
-
-# ---------------------------------------------------------------------------
 # E2E-8: Full tx lifecycle
 # ---------------------------------------------------------------------------
 
@@ -195,12 +153,11 @@ class TestE2E_TxLifecycle:
         cs.state.total_minted += 100 * TICKS_PER_LAPSE
 
         mp = mempool_mod.Mempool()
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        mp.add(confirm)
-        mp.add(resolve)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state)
+        ok, h = mp.add(t)
+        assert ok is True
 
-        txs = tx_mod.sort_txs(mp.confirmations()) + mp.resolutions()
-        b = make_block(1, cs.tip["hash"], txs)
+        b = make_block(1, cs.tip["hash"], mp.all_txs())
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
 
@@ -210,22 +167,17 @@ class TestE2E_TxLifecycle:
         assert mp.size() == 0
         assert cs2.state.get_balance(address(1)) == TICKS_PER_LAPSE
 
-    def test_rejected_confirmation_stays_in_mempool(self):
-        """A confirmation whose broadcaster can't cover the fee stays
-        pending until pruned by fee_height staleness or TTL."""
+    def test_rejected_tx_stays_in_mempool(self):
+        """Tx failing state validation stays pending."""
         cs = ChainState.from_genesis()
-        # No balance for the broadcaster -- confirmation is invalid
-        inner = tx_mod.create_inner_payload(
-            address(3), pubkey_hex(3), [{"to": address(4), "amount": TICKS_PER_LAPSE}],
-            1, keypair(3)[0])
-        confirm = make_confirmation(3, inner, fee_height=0)
+        # No balance for sender -- tx will be invalid
+        t = make_tx(3, 4, TICKS_PER_LAPSE, cs.state)
         mp = mempool_mod.Mempool()
-        # Added directly (bypassing node.submit_tx validation) for this test.
-        mp.add(confirm)
+        # We add it directly to the mempool (bypassing node.submit_tx validation)
+        mp.add(t)
         assert mp.size() == 1
-        # It stays in the mempool until pruned by fee_height/TTL -- the
-        # insufficient-balance failure would only be caught at block
-        # inclusion, not by prune_stale.
+        # It stays in the mempool until pruned by nonce staleness or TTL --
+        # the insufficient-balance failure is only caught at block inclusion.
         pruned = mp.prune_stale(chain_tip_height=0, state=cs.state)
         assert mp.size() + len(pruned) == 1
 
@@ -243,18 +195,17 @@ class TestE2E_BlockAssembly:
 
         txs = []
         for i in range(5):
-            confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-            txs.append(confirm)
+            t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state)
+            txs.append(t)
             try:
-                apply_transfer(cs.state, confirm, resolve)
+                cs.state.apply_tx(t)
             except Exception:
                 break
 
-        sorted_txs = tx_mod.sort_txs(txs)
-        assembled = block_mod.assemble(g, sorted_txs, address(0), INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS)
+        assembled = block_mod.assemble(g, txs, address(0), block_mod.VDF_ITERATIONS)
         assert assembled["height"] == 1
         assert assembled["previous_hash"] == g["hash"]
-        assert len(assembled["transactions"]) <= len(sorted_txs)
+        assert len(assembled["transactions"]) <= len(txs)
         assert "tx_bytes" in assembled
 
     def test_assembly_respects_block_size_limit(self):
@@ -266,14 +217,14 @@ class TestE2E_BlockAssembly:
         s.credit(address(0), 100_000 * TICKS_PER_LAPSE)
         s.total_minted = 100_000 * TICKS_PER_LAPSE
         for _ in range(100):
-            confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
-            dummy_txs.append(confirm)
+            t = make_tx(0, 1, TICKS_PER_LAPSE, s)
+            dummy_txs.append(t)
             try:
-                apply_transfer(s, confirm, resolve)
+                s.apply_tx(t)
             except Exception:
                 break
 
-        assembled = block_mod.assemble(g, dummy_txs, address(0), INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS)
+        assembled = block_mod.assemble(g, dummy_txs, address(0), block_mod.VDF_ITERATIONS)
         # Assembled block (with hash placeholder) must fit
         test_block = {**assembled, "hash": "x" * 64}
         assert block_mod.block_size(test_block) <= BLOCK_SIZE_LIMIT
@@ -317,8 +268,8 @@ class TestE2E_StatsAccumulator:
         cs0 = ChainState.from_genesis()
         cs0.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         cs0.state.total_minted += 100 * TICKS_PER_LAPSE
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs0.state, 0)
-        b1 = make_block(1, cs0.tip["hash"], [confirm, resolve])
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs0.state)
+        b1 = make_block(1, cs0.tip["hash"], [t])
         ok, _, cs1 = cs0.validate_and_apply(b1)
         assert ok
 

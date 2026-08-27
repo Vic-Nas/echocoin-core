@@ -23,7 +23,6 @@ import time
 import block as block_mod
 import crypto
 import mempool as mempool_mod
-import timelock as timelock_mod
 import tx as tx_mod
 import vdf as vdf_mod
 from chainstate import ChainState
@@ -39,17 +38,6 @@ SYNC_EVERY_N_CYCLES = 1   # check every cycle; forks are common at 2-min blocks
 # ---------------------------------------------------------------------------
 # Tail validation (pure, no node state touched)
 # ---------------------------------------------------------------------------
-
-def _validate_tx_by_kind(t, state, height, fee_rate_fn, queue=None):
-    """Dispatch validation for a single mempool-bound tx by its kind."""
-    kind = t.get("kind")
-    if kind == "confirm":
-        return tx_mod.validate_confirmation(t, state, height, fee_rate_fn)
-    if kind == "resolve":
-        confirmed = queue.lookup(t.get("confirmed_tx_hash")) if queue else None
-        return tx_mod.validate_resolution(t, confirmed, state)
-    return False, f"unknown transaction kind: {kind!r}"
-
 
 def _validate_tail(tail, prefix):
     """Validate new blocks against a trusted prefix. Pure: nothing is mutated.
@@ -127,7 +115,7 @@ class NodeView:
     Flask reads node.view; one reference swap, GIL-atomic, no lock needed.
     stats_points comes from node.stats, not carried here.
     """
-    __slots__ = ("chain", "height", "tip", "genesis_hash", "state", "queue")
+    __slots__ = ("chain", "height", "tip", "genesis_hash", "state")
 
     def __init__(self, cs):
         self.chain        = cs.chain
@@ -135,7 +123,6 @@ class NodeView:
         self.height       = cs.height
         self.genesis_hash = cs.genesis_hash
         self.state        = cs.state.snapshot()
-        self.queue         = cs.queue
 
 
 # ---------------------------------------------------------------------------
@@ -211,15 +198,12 @@ class Node:
             "height":       v.height,
             "tip_hash":     v.tip["hash"],
             "genesis_hash": v.genesis_hash,
-            "fee_rate":     v.tip["fee_rate"],
             "mempool_size": self.mempool.size(),
             "address":      self.addr,
             "peer_count":   self.pool.count(),
             "total_minted": v.state.total_minted,
             "can_mint":     v.state.compute_can_mint(),
             "block_reward": v.state.compute_block_reward(),
-            "queue_length": len(v.queue.remaining()),
-            "queue_front":  v.queue.front(),
         }
 
     def start(self, kek):
@@ -241,28 +225,21 @@ class Node:
         self.running = False
 
     def submit_tx(self, tx_dict):
-        """Validate and add a tx (confirmation or resolution). Node loop
-        thread only."""
+        """Validate and add a tx. Node loop thread only."""
         assert threading.current_thread() is self._loop_thread
-        kind = tx_dict.get("kind")
-        who  = tx_dict.get("broadcaster") or tx_dict.get("resolver") or "?"
-        if kind == "confirm":
-            ok, err = tx_mod.validate_confirmation(
-                tx_dict, self.cs.state, self.cs.height, self.cs.fee_rate_at)
-        elif kind == "resolve":
-            confirmed = self.cs.queue.lookup(tx_dict.get("confirmed_tx_hash"))
-            ok, err = tx_mod.validate_resolution(tx_dict, confirmed, self.cs.state)
-        else:
-            ok, err = False, f"unknown transaction kind: {kind!r}"
+        ok, err = tx_mod.validate(tx_dict, self.cs.state)
         if not ok:
-            log.debug("[tx] rejected  reason=%s  from=%s", err, who[:24])
+            log.debug("[tx] rejected  reason=%s  from=%s",
+                      err, tx_dict.get("from", "?")[:24])
             return False, err
         ok, h = self.mempool.add(tx_dict)
         if not ok:
-            log.debug("[tx] mempool add failed  reason=%s  from=%s", h, who[:24])
+            log.debug("[tx] mempool add failed  reason=%s  from=%s", h,
+                      tx_dict.get("from", "?")[:24])
             return False, h
         self.gossip.relay_tx(tx_dict)
-        log.info("[tx] accepted  kind=%s  hash=%s  from=%s", kind, h[:12], who[:24])
+        log.info("[tx] accepted  hash=%s  from=%s", h[:12],
+                 tx_dict.get("from", "?")[:24])
         return True, h
 
     def submit_tx_from_api(self, tx_dict, timeout=5):
@@ -274,41 +251,19 @@ class Node:
         except queue.Empty:
             return False, "node busy (timeout)"
 
-    def build_and_sign_tx(self, to_outputs, passphrase=None):
-        """Build a ciphertext confirmation for a transfer from this node's
-        own address, using this node's own key as both the real sender
-        (inside the encrypted inner payload) and the broadcaster (on the
-        visible wrapper). This is the wallet-layer default the brief calls
-        for; the protocol itself does not require broadcaster == sender
-        (see tx.py module docstring) -- a caller wanting sender-address
-        privacy would build the inner payload and confirmation separately
-        with two different keys.
-
-        The nonce only needs to be unique per sender, not sequential (see
-        state.py and tx.generate_nonce): resolution order is already forced
-        to equal confirmation order by the gapless queue rule, so there is
-        no "next nonce" to track across calls, in-flight sends, or restarts.
-        """
+    def build_and_sign_tx(self, to_outputs, fee=0, passphrase=None):
+        """Build, sign, and return a plaintext transaction from this node's
+        own address. fee is sender-chosen (default 0; callers building a
+        wallet UI should let the user pick a competitive fee)."""
         if not passphrase:
             raise ValueError("passphrase is required to sign a transaction")
-        kek        = crypto.derive_kek(self.keyfile, passphrase)
-        v          = self.view
-        nonce      = tx_mod.generate_nonce()
-
-        fee_height = v.height
+        kek       = crypto.derive_kek(self.keyfile, passphrase)
+        v         = self.view
+        committed = v.state.get_nonce(self.addr)
+        pending   = self.mempool.pending_nonce(self.addr)
+        nonce     = max(committed, pending) + 1
         sk = crypto.decrypt_secret_key(self.keyfile, kek=kek)
-        inner = tx_mod.create_inner_payload(self.addr, self.pk_hex, to_outputs, nonce, sk)
-        iterations = timelock_mod.get_timelock_iterations(v.chain)
-        t = tx_mod.create_confirmation(self.addr, self.pk_hex, inner,
-                                        fee_height, 0, sk, iterations=iterations)
-        # The puzzle (and its real-size ciphertext) is only known after
-        # create_confirmation builds it, so compute the real fee now and
-        # re-sign with it.
-        fee = tx_mod.compute_fee(self.addr, self.pk_hex, t["puzzle"],
-                                  fee_height, v.tip["fee_rate"], iterations=iterations)
-        t["fee"] = fee
-        msg = crypto.serialize_for_signing(t)
-        t["signature"] = crypto.sign(msg, sk).hex()
+        t  = tx_mod.create(self.addr, self.pk_hex, to_outputs, nonce, fee, sk)
         del sk, kek
         return t, fee
 
@@ -346,15 +301,12 @@ class Node:
         log.info("[vdf] proof ready  height=%d  seconds=%.1f  iterations=%d",
                  cs.height + 1, vdf_seconds, iterations)
 
-        fee_rate  = block_mod.compute_expected_fee_rate(cs.chain)
-        candidate = block_mod.assemble(cs.tip, self.mempool.all_txs(), self.addr,
-                                       fee_rate, iterations, cs.queue)
+        candidate = block_mod.assemble(cs.tip, self.mempool.all_txs(), self.addr, iterations)
         candidate["vdf_output"]    = vdf_out
         candidate["vdf_proof"]     = vdf_proof
         candidate["vdf_iterations"] = iterations
         candidate["hash"]          = block_mod.block_hash(candidate)
-        ok, err = block_mod.validate(candidate, cs.state.snapshot(), cs.chain,
-                                      cs.fee_rate_at, cs.queue)
+        ok, err = block_mod.validate(candidate, cs.state.snapshot(), cs.chain)
         if not ok:
             log.error("[vdf] self-produced block failed validation: %s", err)
             return
@@ -387,7 +339,7 @@ class Node:
             if blk.get("previous_hash") != tip["hash"]:
                 continue
             probe = cs.state.snapshot()
-            ok, err = block_mod.validate(blk, probe, cs.chain, cs.fee_rate_at, cs.queue)
+            ok, err = block_mod.validate(blk, probe, cs.chain)
             if not ok:
                 log.debug("[vdf] peer block rejected: %s", err)
                 continue
@@ -466,14 +418,13 @@ class Node:
         and added to the mempool if new and valid.
         """
         tx_dict   = msg["tx"]
-        sender    = (tx_dict.get("broadcaster") or tx_dict.get("resolver") or "?")[:24]
+        sender    = tx_dict.get("from", "?")[:24]
         remaining = msg.get("remaining_hops", 0)
         if msg.get("relay_type") == "tx_stem" and remaining > 0:
             log.debug("[tx] stem relay  hops_remaining=%d  from=%s", remaining, sender)
             self.gossip.dandelion_send(tx_dict, remaining)
             return
-        ok, err = _validate_tx_by_kind(tx_dict, self.cs.state, self.cs.height,
-                                        self.cs.fee_rate_at, self.cs.queue)
+        ok, err = tx_mod.validate(tx_dict, self.cs.state)
         if not ok:
             log.debug("[tx] inbound rejected  reason=%s  from=%s", err, sender)
             return
@@ -545,8 +496,7 @@ class Node:
             for t in blk.get("transactions", []):
                 if tx_mod.tx_hash(t) in confirmed:
                     continue
-                ok, _ = _validate_tx_by_kind(t, self.cs.state, self.cs.height,
-                                              self.cs.fee_rate_at, self.cs.queue)
+                ok, _ = tx_mod.validate(t, self.cs.state)
                 if ok:
                     self.mempool.add(t)
 

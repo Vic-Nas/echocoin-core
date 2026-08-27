@@ -19,32 +19,18 @@ def compute_reward(total_minted: int) -> int:
 class State:
     def __init__(self):
         self._balances    = {}  # addr -> int (ticks)
-        self._used_nonces = {}  # addr -> set of nonce strings already applied
+        self._nonces      = {}  # addr -> int (last used nonce, 0 = never transacted)
         self.total_minted = 0   # ticks minted via block rewards since genesis
-        self._escrow      = {}  # confirmed_tx_hash -> fee ticks awaiting a resolver
 
     # ------------------------------------------------------------------
     # Balance and nonce access
     # ------------------------------------------------------------------
-    #
-    # A nonce here only needs to be unique per sender, not sequential. The
-    # gapless front-of-queue block validity rule already forces resolution
-    # order to equal confirmation order, so a sender's own transactions are
-    # already applied in a fully deterministic order without any help from
-    # the nonce. The nonce's only remaining job is replay protection (the
-    # same signed inner payload cannot be applied twice), which a used-once
-    # check gives for free without requiring the sender to track a running
-    # counter (see tx.generate_nonce).
 
     def get_balance(self, addr):
         return self._balances.get(addr, 0)
 
-    def has_used_nonce(self, addr, nonce):
-        return nonce in self._used_nonces.get(addr, ())
-
-    def nonce_count(self, addr):
-        """Number of nonces this address has spent so far (display only)."""
-        return len(self._used_nonces.get(addr, ()))
+    def get_nonce(self, addr):
+        return self._nonces.get(addr, 0)
 
     def credit(self, addr, amount):
         if amount <= 0:
@@ -59,56 +45,26 @@ class State:
             raise ValueError(f"debit would make balance negative: {bal} - {amount}")
         self._balances[addr] = bal - amount
 
-    def mark_nonce_used(self, addr, nonce):
-        self._used_nonces.setdefault(addr, set()).add(nonce)
+    def set_nonce(self, addr, nonce):
+        self._nonces[addr] = nonce
 
     # ------------------------------------------------------------------
     # Transaction application
     # ------------------------------------------------------------------
 
-    def apply_confirmation(self, confirm_tx, confirmed_tx_hash):
-        """Apply a "confirm" ciphertext submission: debits the broadcaster's
-        fee into escrow, to be paid out to whichever resolver's solution
-        lands first (tx.py module docstring). The real transfer inside the
-        encrypted payload is not touched here -- it isn't visible yet."""
-        fee = confirm_tx["fee"]
-        broadcaster = confirm_tx["broadcaster"]
-        if fee > 0:
-            self.debit(broadcaster, fee)
-            self._escrow[confirmed_tx_hash] = fee
+    def apply_tx(self, tx_dict):
+        """Apply a validated transaction. Debits sender (outputs + fee),
+        credits recipients, advances nonce. The fee is not credited to
+        anyone here: it is collected by the block builder as part of
+        the block reward distribution (see chainstate._apply_builder_reward)."""
+        sender    = tx_dict["from"]
+        total_out = sum(o["amount"] for o in tx_dict["outputs"])
+        fee       = tx_dict["fee"]
 
-    def apply_inner_payload(self, payload):
-        """Apply the real transfer revealed by a resolution. No fee here --
-        the fee was already collected from the broadcaster at confirmation
-        time (see apply_confirmation)."""
-        sender    = payload["from"]
-        total_out = sum(o["amount"] for o in payload["outputs"])
-
-        self.debit(sender, total_out)
-        for out in payload["outputs"]:
+        self.debit(sender, total_out + fee)
+        for out in tx_dict["outputs"]:
             self.credit(out["to"], out["amount"])
-        self.mark_nonce_used(sender, payload["nonce"])
-
-    def apply_resolution(self, res_dict, payload_valid=True):
-        """Apply a validated resolution: releases escrow (if any) to the
-        resolver, then applies the revealed inner transfer -- but only if
-        payload_valid (see tx.payload_is_valid). The resolver is paid the
-        escrowed fee unconditionally: they did real, checkable work proving
-        the ciphertext's answer regardless of what it turned out to
-        contain. When the decrypted payload is not actually applicable
-        (nonce already used, sender can't afford it), no transfer happens
-        and no state beyond the escrow payout changes -- this still lets
-        the queue slot advance instead of being permanently stuck (see
-        tx.validate_resolution's docstring for why that matters)."""
-        confirmed_hash = res_dict["confirmed_tx_hash"]
-        fee = self._escrow.pop(confirmed_hash, 0)
-        if fee > 0:
-            self.credit(res_dict["resolver"], fee)
-        if payload_valid:
-            self.apply_inner_payload(res_dict["payload"])
-
-    def escrowed_fee(self, confirmed_tx_hash):
-        return self._escrow.get(confirmed_tx_hash, 0)
+        self.set_nonce(sender, tx_dict["nonce"])
 
     # ------------------------------------------------------------------
     # Emission
@@ -140,25 +96,14 @@ class State:
     # ------------------------------------------------------------------
 
     @classmethod
-    def from_snapshot(cls, balances: dict, used_nonces: dict,
-                      total_minted: int, escrow: dict | None = None) -> "State":
-        """Restore a State from persisted data. Replaces direct field assignment.
-
-        used_nonces: addr -> set/list of nonce strings already spent.
-        escrow: confirmed_tx_hash -> fee ticks still awaiting a resolver.
-        Without this, a confirmation still pending at restart would have
-        its escrowed fee silently vanish instead of eventually reaching
-        whichever resolver solves it.
-        """
+    def from_snapshot(cls, balances: dict, nonces: dict,
+                      total_minted: int) -> "State":
+        """Restore a State from persisted data. Replaces direct field assignment."""
         s = cls()
         s._balances    = balances
-        s._used_nonces = {addr: set(nonces) for addr, nonces in used_nonces.items()}
+        s._nonces      = nonces
         s.total_minted = total_minted
-        s._escrow      = dict(escrow) if escrow else {}
         return s
-
-    def all_escrow(self):
-        return dict(self._escrow)
 
     # ------------------------------------------------------------------
     # Snapshot / restore
@@ -169,9 +114,8 @@ class State:
         interned strings and values are ints, both immutable."""
         s = State()
         s._balances    = self._balances.copy()
-        s._used_nonces = {addr: set(nonces) for addr, nonces in self._used_nonces.items()}
+        s._nonces      = self._nonces.copy()
         s.total_minted = self.total_minted
-        s._escrow      = self._escrow.copy()
         return s
 
     # ------------------------------------------------------------------
@@ -181,5 +125,5 @@ class State:
     def all_balances(self):
         return dict(self._balances)
 
-    def all_used_nonces(self):
-        return {addr: set(nonces) for addr, nonces in self._used_nonces.items()}
+    def all_nonces(self):
+        return dict(self._nonces)

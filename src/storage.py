@@ -40,24 +40,14 @@ class Block(_Base):
 
 
 class State(_Base):
-    addr         = TextField(primary_key=True)
-    balance      = IntegerField(default=0)
-    used_nonces  = TextField(default="[]")  # JSON list of spent nonce strings
+    addr    = TextField(primary_key=True)
+    balance = IntegerField(default=0)
+    nonce   = IntegerField(default=0)
 
 
 class Emission(_Base):
     key   = TextField(primary_key=True)
     value = IntegerField(default=0)
-
-
-class Escrow(_Base):
-    """Fees debited from a confirmation's broadcaster, held until whichever
-    resolver's solution lands first (state.py apply_confirmation/
-    apply_resolution). Must be persisted like balances -- an unresolved
-    confirmation's fee otherwise vanishes on restart instead of eventually
-    reaching a resolver."""
-    confirmed_tx_hash = TextField(primary_key=True)
-    fee               = IntegerField()
 
 
 class Meta(_Base):
@@ -80,7 +70,7 @@ class AddrIndex(_Base):
         indexes = ((("addr",), False),)
 
 
-_TABLES = [Block, State, Emission, Escrow, Meta, TxIndex, AddrIndex]
+_TABLES = [Block, State, Emission, Meta, TxIndex, AddrIndex]
 
 
 class Storage:
@@ -95,30 +85,14 @@ class Storage:
     # ------------------------------------------------------------------
 
     def _index_block(self, blk):
-        """Insert TxIndex and AddrIndex rows for all transactions in blk.
-
-        A "confirm" tx only reveals its broadcaster (the real sender/
-        recipients are encrypted and invisible until resolution). A
-        "resolve" tx reveals the resolver plus, via its decrypted payload,
-        the real sender and recipients -- those become indexable only now.
-        """
+        """Insert TxIndex and AddrIndex rows for all transactions in blk."""
         height = blk["height"]
         txs = blk.get("transactions", [])
         tx_rows, addr_rows = [], []
         for t in txs:
             h = tx_mod.tx_hash(t)
             tx_rows.append({"tx_hash": h, "block_height": height})
-            kind = t.get("kind")
-            if kind == "confirm":
-                addrs = {t["broadcaster"]}
-            elif kind == "resolve":
-                payload = t.get("payload", {})
-                addrs = {t["resolver"]}
-                if "from" in payload:
-                    addrs.add(payload["from"])
-                addrs |= {o["to"] for o in payload.get("outputs", [])}
-            else:
-                addrs = set()
+            addrs = {t["from"]} | {o["to"] for o in t.get("outputs", [])}
             for addr in addrs:
                 addr_rows.append({"addr": addr, "tx_hash": h, "block_height": height})
         if tx_rows:
@@ -174,36 +148,27 @@ class Storage:
 
     def _save_state_inner(self, state):
         """Write state rows; must be called inside an existing db.atomic()."""
-        balances    = state.all_balances()
-        used_nonces = state.all_used_nonces()
+        balances = state.all_balances()
+        nonces   = state.all_nonces()
         rows = [
-            {"addr": addr, "balance": balances.get(addr, 0),
-             "used_nonces": json.dumps(sorted(used_nonces.get(addr, ())))}
-            for addr in balances.keys() | used_nonces.keys()
+            {"addr": addr, "balance": balances.get(addr, 0), "nonce": nonces.get(addr, 0)}
+            for addr in balances.keys() | nonces.keys()
         ]
         State.delete().execute()
         if rows:
             State.insert_many(rows).execute()
         Emission.insert(key="total_minted", value=state.total_minted).on_conflict_replace().execute()
 
-        escrow = state.all_escrow()
-        Escrow.delete().execute()
-        if escrow:
-            Escrow.insert_many([
-                {"confirmed_tx_hash": h, "fee": fee} for h, fee in escrow.items()
-            ]).execute()
-
     def save_state(self, state):
         with db.atomic():
             self._save_state_inner(state)
 
     def load_state(self):
-        rows        = State.select()
-        balances    = {r.addr: r.balance for r in rows}
-        used_nonces = {r.addr: json.loads(r.used_nonces) for r in rows}
-        em          = {r.key: r.value for r in Emission.select()}
-        escrow      = {r.confirmed_tx_hash: r.fee for r in Escrow.select()}
-        return balances, used_nonces, em.get("total_minted", 0), escrow
+        rows     = State.select()
+        balances = {r.addr: r.balance for r in rows}
+        nonces   = {r.addr: r.nonce   for r in rows}
+        em       = {r.key: r.value for r in Emission.select()}
+        return balances, nonces, em.get("total_minted", 0)
 
     def state_exists(self):
         return State.select().exists()

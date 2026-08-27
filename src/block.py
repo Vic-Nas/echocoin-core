@@ -7,32 +7,15 @@ import crypto
 from crypto import canonical_json
 import tx as tx_mod
 import vdf as vdf_mod
-import timelock as timelock_mod
 from params import (
     BLOCK_SIZE_LIMIT,
-    BLOCK_SIZE_TARGET_BYTES,
-    FEE_RATE_WINDOW,
     GENESIS_MESSAGE,
     GENESIS_TIMESTAMP,
-    INITIAL_FEE_RATE,
     VDF_ITERATIONS,
     VDF_ADJUST_INTERVAL,
     VDF_ADJUST_MIN_SECONDS,
     VDF_ADJUST_FACTOR,
 )
-
-_TX_SORT_FIELDS = {"fee_height"}
-
-
-class _EmptyQueue:
-    """Fallback used when validate()/assemble() are called without a real
-    queue (e.g. genesis, or tests that don't exercise the queue rule)."""
-
-    def remaining(self):
-        return []
-
-    def lookup(self, confirmed_tx_hash):
-        return None
 
 
 def get_vdf_iterations(chain) -> int:
@@ -103,7 +86,6 @@ def create_genesis():
         "previous_hash":    "0" * 64,
         "transactions":     [],
         "builder":          None,
-        "fee_rate":         INITIAL_FEE_RATE,
         "timestamp":        GENESIS_TIMESTAMP,
         "message":          GENESIS_MESSAGE,
         "vdf_output":       None,
@@ -115,13 +97,14 @@ def create_genesis():
 
 
 def create(height, previous_hash, transactions, builder,
-           fee_rate, vdf_output=None, vdf_proof=None, timestamp=None,
+           vdf_output=None, vdf_proof=None, timestamp=None,
            vdf_iterations=None):
     """Create a new block dict.
 
     builder: address of the node that produced the accepted VDF proof
-             and assembled this block. Receives the full block reward.
-             None only for the genesis block.
+             and assembled this block. Receives the full block reward
+             plus every transaction fee in the block. None only for the
+             genesis block.
     vdf_output: hex string of the VDF output element (from vdf.evaluate).
     vdf_proof:  hex string of the full VDF proof blob (from vdf.evaluate).
     vdf_iterations: iteration count used for this block's VDF. Set at
@@ -134,7 +117,6 @@ def create(height, previous_hash, transactions, builder,
         "timestamp":      timestamp if timestamp is not None else _time.time(),
         "transactions":   transactions,
         "builder":        builder,
-        "fee_rate":       fee_rate,
         "vdf_output":     vdf_output,
         "vdf_proof":      vdf_proof,
         "vdf_iterations": vdf_iterations if vdf_iterations is not None else VDF_ITERATIONS,
@@ -152,6 +134,11 @@ def block_hash(blk):
 def block_size(blk):
     """Size in bytes of serialized block."""
     return len(canonical_json(blk))
+
+
+def block_fees(blk):
+    """Sum of all transaction fees in blk, paid entirely to the builder."""
+    return sum(t.get("fee", 0) for t in blk.get("transactions", []))
 
 
 def _check_hash(blk):
@@ -207,120 +194,34 @@ def _check_builder_and_vdf(blk, chain):
     return True, None
 
 
-def _check_tx_ordering(blk):
-    """Canonical order applies to "confirm" ciphertext submissions only.
-    "resolve" txs are governed by the separate gapless front-of-queue rule
-    (_check_queue_resolution), not by this sort order -- assemble() puts
-    due resolutions first, ahead of any confirmations."""
-    confirms = [t for t in blk["transactions"] if isinstance(t, dict) and t.get("kind") == "confirm"]
-    if not confirms:
-        return True, None
-    for i, t in enumerate(confirms):
-        missing = _TX_SORT_FIELDS - t.keys()
-        if missing:
-            return False, f"confirmation at position {i} missing fields for ordering: {missing}"
-    # Verify canonical order in O(n) by checking each adjacent pair.
-    # Uses tx_mod.sort_key so this can never drift from tx.sort_txs().
-    keys = [tx_mod.sort_key(t) for t in confirms]
-    for i in range(len(keys) - 1):
-        if keys[i] > keys[i + 1]:
-            return False, f"confirmation ordering violation at position {i + 1}"
-    return True, None
+def _apply_transactions(blk, state):
+    """Apply blk's transactions to state in the block's listed order.
 
-
-def _check_fee_rate(blk, chain):
-    if blk["height"] == 0:
-        return True, None
-    expected_rate = compute_expected_fee_rate(chain)
-    if blk["fee_rate"] != expected_rate:
-        return False, f"fee rate mismatch: expected {expected_rate}, got {blk['fee_rate']}"
-    return True, None
-
-
-def _check_queue_resolution(blk, queue):
-    """A block is valid only if it resolves at least the current front of
-    the ciphertext queue, and any additional resolutions are a gapless
-    continuation from the front -- no skipping ahead.
-
-    This is a pure, positional rule: no deadline/window, no self-dealing
-    exploit from tying block weight to "how much backlog cleared" (both
-    were tried and rejected during design -- see timelock.py / tx.py
-    module docstrings). It is what makes even a fully dominant builder
-    face an all-or-nothing choice: resolve the front and keep building, or
-    stop building entirely. It cannot selectively stall one target while
-    operating normally on everything else.
+    Each transaction is validated against the running state incrementally
+    (standard practice for a plaintext mempool, e.g. Bitcoin): an included
+    transaction's nonce must be exactly current+1 given prior transactions
+    already applied within this same block. There is no consensus-level
+    canonical ordering requirement -- a block can list its transactions in
+    whatever order the builder chose, as long as each one is valid against
+    the state as of applying the ones before it.
     """
-    if blk["height"] == 0:
-        return True, None
-    remaining = queue.remaining()
-    if not remaining:
-        return True, None  # nothing pending; resolutions are optional
-    resolve_hashes = [t["confirmed_tx_hash"] for t in blk["transactions"]
-                      if isinstance(t, dict) and t.get("kind") == "resolve"]
-    if not resolve_hashes:
-        return False, "block must resolve at least the current front of the queue"
-    n = len(resolve_hashes)
-    if resolve_hashes != remaining[:n]:
-        return False, "resolutions are not a gapless continuation from the front of the queue"
-    return True, None
-
-
-def _apply_transactions(blk, state, get_fee_rate_at_height, queue, chain):
-    height = blk["height"]
-    local_confirmations = {}
-    # One expected difficulty for the whole block: TIMELOCK_ADJUST tracks
-    # VDF_ADJUST_INTERVAL (~2 weeks), far longer than FEE_HEIGHT_MAX_AGE
-    # (a confirmation's fee_height can only be a few blocks old), so a
-    # confirmation's fee_height can never actually straddle a difficulty
-    # boundary in practice -- computing this once per block rather than
-    # per fee_height is a safe simplification, not an approximation.
-    expected_iterations = timelock_mod.get_timelock_iterations(chain)
     for t in blk["transactions"]:
         if not isinstance(t, dict):
             return False, "transaction entry is not a dict"
-        kind = t.get("kind")
-        if kind == "confirm":
-            ok, err = tx_mod.validate_confirmation(t, state, height - 1, get_fee_rate_at_height,
-                                                    expected_iterations=expected_iterations)
-            if not ok:
-                return False, f"invalid confirmation: {err}"
-            h = tx_mod.tx_hash(t)
-            state.apply_confirmation(t, h)
-            local_confirmations[h] = t
-        elif kind == "resolve":
-            confirmed = (queue.lookup(t.get("confirmed_tx_hash"))
-                        or local_confirmations.get(t.get("confirmed_tx_hash")))
-            ok, err = tx_mod.validate_resolution(t, confirmed, state)
-            if not ok:
-                return False, f"invalid resolution: {err}"
-            # The crypto proof above is what gates inclusion. Whether the
-            # decrypted payload is still an applicable transfer (it may not
-            # be, e.g. the sender already spent the same balance via a
-            # different confirmation that resolved first) is checked
-            # separately and does not fail the block either way -- see
-            # tx.validate_resolution's docstring.
-            payload_ok, _ = tx_mod.payload_is_valid(t["payload"], state)
-            state.apply_resolution(t, payload_valid=payload_ok)
-        else:
-            return False, f"unknown transaction kind: {kind!r}"
+        ok, err = tx_mod.validate(t, state)
+        if not ok:
+            return False, f"invalid tx: {err}"
+        state.apply_tx(t)
     return True, None
 
 
-def validate(blk, state, chain, get_fee_rate_at_height, queue=None):
+def validate(blk, state, chain):
     """Full block validation. Returns (True, None) or (False, error_string).
 
     Applies transactions to `state` in place. Callers must pass
     state.snapshot() (not the live state) so a failure leaves it clean.
     Rewards are NOT applied here; the caller applies them after success.
-
-    queue: a TxQueue-like object (see chainstate.TxQueue) reflecting the
-    ciphertext queue state as of `chain`, i.e. before this block. Defaults
-    to an empty queue when omitted (e.g. genesis, or callers not exercising
-    the queue rule).
     """
-    if queue is None:
-        queue = _EmptyQueue()
-
     size = block_size(blk)
     if size > BLOCK_SIZE_LIMIT:
         return False, f"block exceeds size limit: {size} > {BLOCK_SIZE_LIMIT}"
@@ -330,10 +231,7 @@ def validate(blk, state, chain, get_fee_rate_at_height, queue=None):
         (_check_parent,          (blk, chain)),
         (_check_timestamp,       (blk, chain)),
         (_check_builder_and_vdf, (blk, chain)),
-        (_check_tx_ordering,     (blk,)),
-        (_check_fee_rate,        (blk, chain)),
-        (_check_queue_resolution, (blk, queue)),
-        (_apply_transactions,    (blk, state, get_fee_rate_at_height, queue, chain)),
+        (_apply_transactions,    (blk, state)),
     ):
         ok, err = check(*args)
         if not ok:
@@ -341,77 +239,25 @@ def validate(blk, state, chain, get_fee_rate_at_height, queue=None):
     return True, None
 
 
-def compute_expected_fee_rate(chain):
-    """Asymmetric fee rate adjustment.
-
-    Signal: median transaction byte volume over the last FEE_RATE_WINDOW blocks.
-    Using a median over 100 blocks gives a stable signal; individual full or
-    empty blocks don't cause wild swings.
-
-    Adjustment rules (applied to current_rate each block):
-      - Empty network (median_vol == 0): multiply by 0.999. Nearly frozen,
-        falls ~26% per 300 blocks (~10 hours) of zero activity.
-      - Below capacity (vol_ratio <= 1): multiply by max(0.999, vol_ratio^0.1).
-        Very slow decay; even at 50% fill the rate only falls ~7% per block.
-      - Above capacity (vol_ratio > 1): multiply by min(1.05, vol_ratio).
-        Rises up to 5% per block when blocks are full; a sustained spam
-        attack doubles fees in ~14 blocks (~28 minutes).
-
-    Hard minimum: 1 tick/byte (technical floor, not a pricing floor).
-    No hardcoded ceiling: fee pressure is the only cap on block fullness.
-
-    Volume is read from blk["tx_bytes"] if present (set by node._commit),
-    falling back to recomputing via tx_size() for blocks that pre-date this
-    field (e.g. blocks loaded from an old database).
-    """
-    if not chain:
-        return INITIAL_FEE_RATE
-
-    current_rate = chain[-1].get("fee_rate", INITIAL_FEE_RATE)
-    window       = chain[-FEE_RATE_WINDOW:]
-    byte_volumes = [
-        b["tx_bytes"] if "tx_bytes" in b
-        else sum(tx_mod.tx_size(t) for t in b.get("transactions", []))
-        for b in window
-    ]
-    median_vol = statistics.median(byte_volumes) if byte_volumes else 0
-
-    if median_vol == 0:
-        adjustment = 0.999
-    else:
-        vol_ratio = median_vol / BLOCK_SIZE_TARGET_BYTES
-        if vol_ratio > 1:
-            adjustment = min(1.05, vol_ratio)
-        else:
-            adjustment = max(0.999, vol_ratio ** 0.1)
-
-    return max(1, int(current_rate * adjustment))
-
-
-def assemble(tip, txs, builder_addr, fee_rate, iterations, queue=None, deadline=None):
+def assemble(tip, txs, builder_addr, iterations, deadline=None):
     """Assemble a candidate block from a mempool snapshot.
 
-    Pure function: does not touch node state. Pulls due (front-of-queue,
-    in order) resolutions first -- the same priority pattern
-    _check_tx_ordering/_check_queue_resolution enforce as a validity rule
-    -- then confirmations in canonical sort order. Adds them one at a
-    time, stopping before the block would exceed the size limit or the
-    deadline (if given). Returns a block dict without a VDF proof
-    attached; the caller adds vdf_output, vdf_proof, and recomputes the
-    hash.
+    Pure function: does not touch node state. Sorts candidate transactions
+    by fee-per-byte descending (standard block-building priority) and adds
+    them one at a time, stopping before the block would exceed the size
+    limit or the deadline (if given); a transaction that doesn't fit is
+    skipped rather than treated as a stopping point, since a later,
+    smaller transaction might still fit. Returns a block dict without a
+    VDF proof attached; the caller adds vdf_output, vdf_proof, and
+    recomputes the hash.
 
-    txs:        candidate txs from the mempool, both "confirm" and
-                "resolve" kinds, in any order.
-    queue:      a TxQueue-like object (see chainstate.TxQueue) reflecting
-                the ciphertext queue as of `tip`. Defaults to empty.
+    txs:        candidate txs from the mempool, in any order.
     iterations: this block's required vdf_iterations, from
                 get_vdf_iterations(chain). Taken directly rather than
                 a chain argument so callers that already computed it
                 (to run the VDF itself) don't pay for it twice.
     deadline:   float unix time; stop packing if exceeded
     """
-    if queue is None:
-        queue = _EmptyQueue()
     next_height = tip["height"] + 1
 
     skeleton = create(
@@ -419,7 +265,6 @@ def assemble(tip, txs, builder_addr, fee_rate, iterations, queue=None, deadline=
         previous_hash=tip["hash"],
         transactions=[],
         builder=builder_addr,
-        fee_rate=fee_rate,
         vdf_iterations=iterations,
     )
     # "[" + "]" = 2 bytes for empty list; we'll add ", ".join(tx_jsons) inside
@@ -427,21 +272,11 @@ def assemble(tip, txs, builder_addr, fee_rate, iterations, queue=None, deadline=
     running     = base_size
     valid_txs   = []
 
-    # Due resolutions first: a gapless prefix of queue.remaining() for which
-    # a solved resolution is already available in the mempool. Stops at the
-    # first missing one -- a later, out-of-order resolution can't be
-    # substituted without breaking the gapless rule.
-    resolutions_by_hash = {t["confirmed_tx_hash"]: t for t in txs
-                           if isinstance(t, dict) and t.get("kind") == "resolve"}
-    due_resolutions = []
-    for h in queue.remaining():
-        if h in resolutions_by_hash:
-            due_resolutions.append(resolutions_by_hash[h])
-        else:
-            break
-
-    confirms = tx_mod.sort_txs([t for t in txs if isinstance(t, dict) and t.get("kind") == "confirm"])
-    ordered  = due_resolutions + confirms
+    ordered = sorted(
+        (t for t in txs if isinstance(t, dict)),
+        key=lambda t: t.get("fee", 0) / max(tx_mod.tx_size(t), 1),
+        reverse=True,
+    )
 
     for t in ordered:
         if deadline is not None and _time.time() >= deadline:
@@ -450,9 +285,7 @@ def assemble(tip, txs, builder_addr, fee_rate, iterations, queue=None, deadline=
         # We add 1 for the "," separator between txs (except the first).
         t_size = tx_mod.tx_size_in_block(t, position=len(valid_txs))
         if running + t_size > BLOCK_SIZE_LIMIT:
-            if t in due_resolutions:
-                break  # a due resolution can't be skipped without a gap
-            continue  # not break: a later smaller confirmation might still fit
+            continue  # not break: a later smaller tx might still fit
         valid_txs.append(t)
         running += t_size
 

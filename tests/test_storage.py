@@ -105,34 +105,22 @@ class TestStatePersistence:
         s = fresh_state()
         s.credit(address(0), 5000)
         store.save_state(s)
-        balances, used_nonces, minted, escrow = store.load_state()
+        balances, nonces, minted = store.load_state()
         assert balances[address(0)] == 5000
 
-    def test_load_state_restores_used_nonces(self, store):
+    def test_load_state_restores_nonces(self, store):
         s = fresh_state()
-        s.mark_nonce_used(address(0), "ab" * 16)
+        s.set_nonce(address(0), 7)
         store.save_state(s)
-        _, used_nonces, _, _ = store.load_state()
-        assert used_nonces[address(0)] == ["ab" * 16]
+        _, nonces, _ = store.load_state()
+        assert nonces[address(0)] == 7
 
     def test_load_state_restores_emission(self, store):
         s = fresh_state()
         s.total_minted = 12345
         store.save_state(s)
-        _, _, minted, _ = store.load_state()
+        _, _, minted = store.load_state()
         assert minted == 12345
-
-    def test_load_state_restores_escrow(self, store):
-        """An unresolved confirmation's escrowed fee must survive a
-        restart, or it would silently vanish instead of eventually
-        reaching whichever resolver solves the puzzle."""
-        s = fresh_state()
-        s.credit(address(0), 1000)
-        confirm = {"broadcaster": address(0), "fee": 100}
-        s.apply_confirmation(confirm, "deadbeef")
-        store.save_state(s)
-        _, _, _, escrow = store.load_state()
-        assert escrow["deadbeef"] == 100
 
     def test_save_state_replaces_previous(self, store):
         s1 = fresh_state()
@@ -141,7 +129,7 @@ class TestStatePersistence:
         s2 = fresh_state()
         s2.credit(address(0), 9999)
         store.save_state(s2)
-        balances, _, _, _ = store.load_state()
+        balances, _, _ = store.load_state()
         assert balances[address(0)] == 9999
 
 
@@ -153,58 +141,42 @@ class TestTxAndAddrIndex:
     def test_tx_not_indexed_before_block_save(self, store):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
-        h = tx_mod.tx_hash(confirm)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
+        h = tx_mod.tx_hash(t)
         assert store.get_tx_height(h) is None
 
     def test_tx_indexed_after_block_save(self, store):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
-        h = tx_mod.tx_hash(confirm)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
+        h = tx_mod.tx_hash(t)
         g = genesis()
-        b1 = make_block(1, g["hash"], [confirm, resolve])
+        b1 = make_block(1, g["hash"], [t])
         store.save_block(g)
         store.save_block(b1)
         assert store.get_tx_height(h) == 1
 
     def test_addr_index_for_sender(self, store):
-        """The real sender is only indexable once resolved."""
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
         g = genesis()
-        b1 = make_block(1, g["hash"], [confirm, resolve])
+        b1 = make_block(1, g["hash"], [t])
         store.save_block(g)
         store.save_block(b1)
         rows = store.get_tx_heights_for_addr(address(0))
-        # address(0) is both broadcaster (indexed at confirm) and real
-        # sender (indexed at resolve) by default, so it appears twice.
-        assert len(rows) == 2
+        assert len(rows) == 1
         assert rows[0][0] == 1  # block height
 
     def test_addr_index_for_recipient(self, store):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
         g = genesis()
-        b1 = make_block(1, g["hash"], [confirm, resolve])
+        b1 = make_block(1, g["hash"], [t])
         store.save_block(g)
         store.save_block(b1)
         rows = store.get_tx_heights_for_addr(address(1))
-        assert len(rows) == 1
-
-    def test_addr_index_for_broadcaster(self, store):
-        """The broadcaster is indexable immediately at confirmation, even
-        before resolution reveals the real sender."""
-        s = fresh_state()
-        seed_balance(s, 9, 100.0)
-        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 0, broadcaster_index=9)
-        g = genesis()
-        b1 = make_block(1, g["hash"], [confirm])
-        store.save_block(g)
-        store.save_block(b1)
-        rows = store.get_tx_heights_for_addr(address(9))
         assert len(rows) == 1
 
 
@@ -248,7 +220,7 @@ class TestSaveBlockAndState:
         s.credit(address(0), 42_000)
         store.save_block_and_state(b1, s)
         assert store.chain_height() == 1
-        balances, _, _, _ = store.load_state()
+        balances, _, _ = store.load_state()
         assert balances[address(0)] == 42_000
 
 
@@ -272,7 +244,7 @@ class TestReplaceChainAndState:
         store.replace_chain_and_state(fork_point=1, blocks=[b1_new], state=s2)
 
         assert store.chain_height() == 1
-        balances, _, _, _ = store.load_state()
+        balances, _, _ = store.load_state()
         assert balances[address(0)] == 9999
 
 

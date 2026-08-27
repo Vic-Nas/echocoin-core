@@ -1,7 +1,7 @@
 """
 Unit tests for state.py
 
-Covers: credit, debit, mark_nonce_used, apply_tx, compute_block_reward,
+Covers: credit, debit, set_nonce, apply_tx, compute_block_reward,
 apply_reward_distribution, snapshot, from_snapshot, and the emission formula.
 
   - can_mint = SUPPLY_CAP - total_minted
@@ -17,12 +17,11 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import state as state_mod
-import tx as tx_mod
 from state import compute_reward
 from params import (
     EMISSION_RATE, SUPPLY_CAP, TICKS_PER_LAPSE
 )
-from tests.fixtures import address, make_tx, apply_transfer, seed_balance
+from tests.fixtures import address, make_tx, seed_balance
 
 
 def fresh_state():
@@ -89,16 +88,15 @@ class TestCreditDebit:
         s = fresh_state()
         assert s.get_balance("unknown.addr") == 0
 
-    def test_has_used_nonce_unknown_address_is_false(self):
+    def test_get_nonce_unknown_address_returns_zero(self):
         s = fresh_state()
-        assert s.has_used_nonce("unknown.addr", "ab" * 16) is False
+        assert s.get_nonce("unknown.addr") == 0
 
-    def test_mark_nonce_used_records_it(self):
+    def test_set_nonce_stores_value(self):
         s = fresh_state()
         addr = address(0)
-        s.mark_nonce_used(addr, "ab" * 16)
-        assert s.has_used_nonce(addr, "ab" * 16) is True
-        assert s.nonce_count(addr) == 1
+        s.set_nonce(addr, 7)
+        assert s.get_nonce(addr) == 7
 
 
 # ---------------------------------------------------------------------------
@@ -111,24 +109,24 @@ class TestApplyTx:
         seed_balance(s, 0, 100.0)
         addr0 = address(0)
         bal_before = s.get_balance(addr0)
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        apply_transfer(s, confirm, resolve)
-        expected = bal_before - TICKS_PER_LAPSE - confirm["fee"]
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
+        s.apply_tx(t)
+        expected = bal_before - TICKS_PER_LAPSE - t["fee"]
         assert s.get_balance(addr0) == expected
 
     def test_apply_tx_credits_recipient(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        apply_transfer(s, confirm, resolve)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
+        s.apply_tx(t)
         assert s.get_balance(address(1)) == TICKS_PER_LAPSE
 
     def test_apply_tx_advances_nonce(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        apply_transfer(s, confirm, resolve)
-        assert s.has_used_nonce(address(0), resolve["payload"]["nonce"]) is True
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
+        s.apply_tx(t)
+        assert s.get_nonce(address(0)) == t["nonce"]
 
     def test_multiple_outputs_all_credited(self):
         s = fresh_state()
@@ -137,47 +135,10 @@ class TestApplyTx:
             {"to": address(1), "amount": TICKS_PER_LAPSE},
             {"to": address(2), "amount": 2 * TICKS_PER_LAPSE},
         ]
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, outputs_override=outputs)
-        apply_transfer(s, confirm, resolve)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s, outputs_override=outputs)
+        s.apply_tx(t)
         assert s.get_balance(address(1)) == TICKS_PER_LAPSE
         assert s.get_balance(address(2)) == 2 * TICKS_PER_LAPSE
-
-    def test_fee_escrowed_at_confirmation(self):
-        s = fresh_state()
-        seed_balance(s, 0, 100.0)
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        h = tx_mod.tx_hash(confirm)
-        s.apply_confirmation(confirm, h)
-        assert s.escrowed_fee(h) == confirm["fee"]
-
-    def test_resolution_pays_resolver_the_escrowed_fee(self):
-        s = fresh_state()
-        seed_balance(s, 0, 100.0)
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, resolver_index=3)
-        h = tx_mod.tx_hash(confirm)
-        s.apply_confirmation(confirm, h)
-        resolver_before = s.get_balance(address(3))
-        s.apply_resolution(resolve)
-        assert s.get_balance(address(3)) == resolver_before + confirm["fee"]
-        assert s.escrowed_fee(h) == 0
-
-    def test_resolution_with_invalid_payload_still_pays_resolver_no_transfer(self):
-        """The resolver did real, checkable work regardless of whether the
-        decrypted payload can still be applied, so they're still paid --
-        but no transfer happens and no other state changes (see
-        tx.validate_resolution's docstring for why a resolution's
-        inclusion can't depend on payload validity)."""
-        s = fresh_state()
-        seed_balance(s, 0, 100.0)
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, resolver_index=3)
-        h = tx_mod.tx_hash(confirm)
-        s.apply_confirmation(confirm, h)
-        recipient_before = s.get_balance(address(1))
-        resolver_before  = s.get_balance(address(3))
-        s.apply_resolution(resolve, payload_valid=False)
-        assert s.get_balance(address(3)) == resolver_before + confirm["fee"]
-        assert s.get_balance(address(1)) == recipient_before  # transfer not applied
-        assert s.escrowed_fee(h) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -294,9 +255,9 @@ class TestSnapshot:
     def test_from_snapshot_restores_state(self):
         s = fresh_state()
         seed_balance(s, 0, 10.0)
-        balances    = s.all_balances()
-        used_nonces = s.all_used_nonces()
-        s2 = state_mod.State.from_snapshot(balances, used_nonces, s.total_minted)
+        balances = s.all_balances()
+        nonces   = s.all_nonces()
+        s2 = state_mod.State.from_snapshot(balances, nonces, s.total_minted)
         assert s2.get_balance(address(0)) == s.get_balance(address(0))
         assert s2.total_minted == s.total_minted
 

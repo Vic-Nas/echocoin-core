@@ -12,11 +12,7 @@ EMISSION_RATE     = 0.5 ** (1 / EMISSION_HALFLIFE)  # per-block decay factor
 
 BLOCK_CYCLE_SECONDS = 120
 
-FEE_RATE_WINDOW    = 100      # blocks used for median volume signal
-FEE_HEIGHT_MAX_AGE = 20       # max age of fee_height field in a tx
-
-BLOCK_SIZE_TARGET_BYTES = 200_000   # 200 KB soft target for vol_ratio in fee formula
-BLOCK_SIZE_LIMIT        = 10_000_000  # 10 MB hard cap, raised only by network upgrade
+BLOCK_SIZE_LIMIT = 10_000_000  # 10 MB hard cap, raised only by network upgrade
 
 MAX_PEERS           = 125
 PEER_CHECK_INTERVAL = 60
@@ -24,8 +20,6 @@ PEER_CHECK_INTERVAL = 60
 ADDRESS_BITS       = 132
 ADDRESS_WORD_COUNT = 12
 WORD_BITS          = 11
-
-INITIAL_FEE_RATE = 10     # ticks/byte; low start, fee formula rises under load
 
 # VDF iteration count targeting ~120 seconds of sequential computation on
 # target testnet hardware. Calibrated from real benchmark runs: median of
@@ -52,34 +46,6 @@ VDF_ITERATIONS = 12_200_000  # calibrated: ~120s on target hardware
 VDF_ADJUST_INTERVAL    = 10_080  # blocks between adjustments (~2 weeks)
 VDF_ADJUST_MIN_SECONDS = 100    # trigger increase if median falls below this
 VDF_ADJUST_FACTOR      = 1.02   # max 2% increase per adjustment period
-
-# Time-lock puzzle (RSW construction, see timelock.py) difficulty. This is a
-# protocol-wide constant: every transaction uses the same T. A sender-chosen
-# T would leak a visible metadata signal even before decryption, defeating
-# the content-blindness the ciphertext format is meant to provide.
-#
-# Calibration mirrors vdf.py's methodology (see that module's docstring),
-# but the underlying operation here is RSA-style modular squaring, not
-# class-group arithmetic, so the throughput numbers differ. Published
-# benchmarks (a 2023 time-lock-puzzle paper measuring 2048-bit modular
-# squaring) show roughly 0.6-0.85 million squarings/second on modern
-# single-core hardware: about 0.85M/s on an Apple M1 Pro, 0.6-0.7M/s on
-# server-class Xeon/EPYC parts. Targeting the same ~120 s floor used for
-# VDF_ITERATIONS at the slower, more conservative end of that range gives
-# roughly 80-100 million iterations; 90,000,000 is chosen as the midpoint.
-TIMELOCK_ITERATIONS = 90_000_000  # calibrated: ~120-150s on target hardware
-
-# RSA modulus size for each disposable puzzle. 2048 bits (two ~1024-bit
-# safe-prime-derived factors) matches conventional RSA security margins.
-TIMELOCK_MODULUS_BITS = 2048
-
-# Safety margin applied when TIMELOCK_ITERATIONS is bumped in lockstep with
-# a VDF_ADJUST_FACTOR increase (see timelock.get_timelock_iterations). RSA
-# modular squaring has far more mature, widely-deployed dedicated hardware
-# acceleration in the wild (TLS/crypto accelerators, ASICs) than class-group
-# arithmetic does, so tracking VDF hardware improvements 1:1 would be
-# optimistic. This multiplier is a heuristic margin, not a guarantee.
-TIMELOCK_MARGIN_MULTIPLIER = 1.5
 
 # Genesis message. Embedded in block 0 and hashed into the genesis block hash.
 # Cannot change after launch without breaking network identity.

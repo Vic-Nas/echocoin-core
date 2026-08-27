@@ -3,36 +3,30 @@ Unit tests for chainstate.py
 
 Covers: from_genesis, from_chain, from_storage, validate_and_apply,
 apply_block, _apply_block_with_state, is_better_than (fork choice),
-accessors (tip, height, genesis_hash, fee_rate_at).
+accessors (tip, height, genesis_hash).
 
 Fork choice: most cumulative proven VDF work wins; tip hash breaks ties.
 """
 
 import os
 import sys
-from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import block as block_mod
-import tx as tx_mod
 import state as state_mod
-from chainstate import ChainState, TxQueue
-from params import INITIAL_FEE_RATE, TICKS_PER_LAPSE
+from chainstate import ChainState
+from params import TICKS_PER_LAPSE
 from tests.fixtures import (
-    address, genesis, make_block, make_tx, seed_balance,
+    address, genesis, make_block, make_tx,
 )
 
 
 @pytest.fixture(autouse=True)
 def mock_vdf(monkeypatch):
     monkeypatch.setattr("block.vdf_mod.verify", lambda *a, **kw: True)
-
-
-def fee_rate_at(height):
-    return INITIAL_FEE_RATE
 
 
 # ---------------------------------------------------------------------------
@@ -66,19 +60,6 @@ class TestAccessors:
     def test_genesis_hash_property(self):
         cs = ChainState.from_genesis()
         assert cs.genesis_hash == cs.chain[0]["hash"]
-
-    def test_fee_rate_at_known_height(self):
-        cs = ChainState.from_genesis()
-        rate = cs.fee_rate_at(0)
-        assert rate == INITIAL_FEE_RATE
-
-    def test_fee_rate_at_unknown_height_returns_none(self):
-        cs = ChainState.from_genesis()
-        assert cs.fee_rate_at(999) is None
-
-    def test_fee_rate_at_negative_returns_none(self):
-        cs = ChainState.from_genesis()
-        assert cs.fee_rate_at(-1) is None
 
 
 # ---------------------------------------------------------------------------
@@ -117,44 +98,25 @@ class TestValidateAndApply:
         cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         cs.state.total_minted += 100 * TICKS_PER_LAPSE
         g = cs.tip
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        b = make_block(1, g["hash"], [confirm, resolve])
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state)
+        b = make_block(1, g["hash"], [t])
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
         assert cs2.state.get_balance(address(1)) == TICKS_PER_LAPSE
 
-    def test_confirmation_with_wrong_iterations_rejected(self, monkeypatch):
-        """A confirmation's recorded iterations must match what the chain
-        actually requires (timelock.get_timelock_iterations) -- it is not
-        the sender's to choose, the same way a block's vdf_iterations must
-        match block.get_vdf_iterations. Signed while the chain expected one
-        difficulty, then the chain's expectation moves before validation --
-        e.g. a late-arriving confirmation from just before a bump."""
+    def test_fees_credited_to_builder_after_valid_block(self):
         cs = ChainState.from_genesis()
         cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         cs.state.total_minted += 100 * TICKS_PER_LAPSE
         g = cs.tip
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        b = make_block(1, g["hash"], [confirm, resolve])
-
-        import timelock as timelock_mod
-        monkeypatch.setattr(timelock_mod, "TIMELOCK_ITERATIONS",
-                            confirm["iterations"] + 1)
-        ok, err, cs2 = cs.validate_and_apply(b)
-        assert ok is False
-        assert "iterations" in err
-
-    def test_resolver_credited_the_fee_after_valid_block(self):
-        cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
-        cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        g = cs.tip
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0, resolver_index=7)
-        b = make_block(1, g["hash"], [confirm, resolve], builder_index=2)
+        reward = cs.state.compute_block_reward()
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state)
+        b = make_block(1, g["hash"], [t], builder_index=2)
         ok, err, cs2 = cs.validate_and_apply(b)
         assert ok is True, err
-        # The resolver -- not the builder -- receives the confirmation's fee.
-        assert cs2.state.get_balance(address(7)) == confirm["fee"]
+        # Builder receives the fee plus the full block reward.
+        expected = t["fee"] + reward
+        assert cs2.state.get_balance(address(2)) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -295,96 +257,7 @@ class TestApplyBlock:
         cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         cs.state.total_minted += 100 * TICKS_PER_LAPSE
         g = cs.tip
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        b1 = make_block(1, g["hash"], [confirm, resolve])
+        t = make_tx(0, 1, TICKS_PER_LAPSE, cs.state)
+        b1 = make_block(1, g["hash"], [t])
         cs2 = cs.apply_block(b1)
         assert cs2.state.get_balance(address(1)) == TICKS_PER_LAPSE
-
-
-# ---------------------------------------------------------------------------
-# 9. TxQueue: canonical global queue position for confirmed ciphertexts
-# ---------------------------------------------------------------------------
-
-class TestTxQueue:
-    def test_empty_queue_has_no_front(self):
-        assert TxQueue().front() is None
-
-    def test_confirm_appends_to_order_and_confirmations(self):
-        cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
-        cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        b = make_block(1, cs.tip["hash"], [confirm])
-        ok, err, cs2 = cs.validate_and_apply(b)
-        assert ok is True, err
-        h = tx_mod.tx_hash(confirm)
-        assert cs2.queue.front() == h
-        assert cs2.queue.lookup(h) == confirm
-
-    def test_resolve_advances_front(self):
-        cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
-        cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        b1 = make_block(1, cs.tip["hash"], [confirm])
-        _, _, cs1 = cs.validate_and_apply(b1)
-        b2 = make_block(2, cs1.tip["hash"], [resolve])
-        ok, err, cs2 = cs1.validate_and_apply(b2)
-        assert ok is True, err
-        assert cs2.queue.front() is None
-
-    def test_chain_does_not_halt_on_a_double_spent_confirmation(self):
-        """Reproduces the scenario tx.validate_resolution's docstring
-        exists to prevent: a sender confirms two ciphertexts both spending
-        their entire balance (to different recipients, e.g. two wallet
-        sends racing each other). Whichever resolves first succeeds; the
-        second's real payload is now permanently unpayable. That must not
-        stop the chain from ever accepting a resolution for it -- the
-        gapless queue rule requires the front be resolved every block, and
-        there is exactly one payload the second ciphertext can ever decrypt
-        to, so if that payload's invalidity blocked inclusion, no block
-        could ever be valid again."""
-        cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
-        cs.state.total_minted += 100 * TICKS_PER_LAPSE
-
-        confirm1, resolve1 = make_tx(0, 1, 100 * TICKS_PER_LAPSE, cs.state, 0)
-        confirm2, resolve2 = make_tx(0, 2, 100 * TICKS_PER_LAPSE, cs.state, 0)
-
-        b1 = make_block(1, cs.tip["hash"], tx_mod.sort_txs([confirm1, confirm2]))
-        ok, err, cs1 = cs.validate_and_apply(b1)
-        assert ok is True, err
-
-        front = cs1.queue.front()
-        resolve_by_hash = {tx_mod.tx_hash(confirm1): resolve1,
-                           tx_mod.tx_hash(confirm2): resolve2}
-
-        # Resolve the front: succeeds and drains the sender's balance.
-        b2 = make_block(2, cs1.tip["hash"], [resolve_by_hash[front]])
-        ok, err, cs2 = cs1.validate_and_apply(b2)
-        assert ok is True, err
-        assert cs2.queue.remaining() != []  # one confirmation still pending
-
-        # Resolve the second (now-unpayable) front: must still be a valid
-        # block -- this is the assertion that would fail without the fix.
-        second_front = cs2.queue.front()
-        b3 = make_block(3, cs2.tip["hash"], [resolve_by_hash[second_front]])
-        ok, err, cs3 = cs2.validate_and_apply(b3)
-        assert ok is True, err
-        assert cs3.queue.remaining() == []  # queue fully drained, chain not stuck
-
-        # And the chain keeps producing blocks afterward -- not halted.
-        b4 = make_block(4, cs3.tip["hash"], [])
-        ok, err, cs4 = cs3.validate_and_apply(b4)
-        assert ok is True, err
-        assert cs4.height == 4
-
-    def test_queue_rebuilt_by_from_storage(self):
-        cs = ChainState.from_genesis()
-        cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
-        cs.state.total_minted += 100 * TICKS_PER_LAPSE
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, cs.state, 0)
-        b = make_block(1, cs.tip["hash"], [confirm])
-        _, _, cs1 = cs.validate_and_apply(b)
-        rebuilt = ChainState.from_storage(cs1.chain, cs1.state)
-        assert rebuilt.queue.front() == cs1.queue.front()

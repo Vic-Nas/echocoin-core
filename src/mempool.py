@@ -1,18 +1,8 @@
-"""Pending tx storage. No I/O.
-
-Holds both "confirm" (ciphertext submissions) and "resolve" (published
-puzzle solutions) tx kinds, keyed by tx_hash exactly like the old
-plaintext-only pool. There is no mempool-wide notion of "pending nonce"
-any more: a confirmation's real sender and nonce live inside its
-encrypted payload and are invisible until resolution, so nonce tracking
-for an outgoing wallet is the wallet's own responsibility (it authored
-the inner payload and knows its own pending nonces), not something
-derivable by scanning the mempool.
-"""
+"""Pending tx storage. No I/O."""
 
 import time
 
-from params import FEE_HEIGHT_MAX_AGE
+import tx as tx_mod
 
 MEMPOOL_TTL_SECONDS = 30 * 60
 
@@ -29,7 +19,6 @@ class Mempool:
         self._pool: dict = {}
 
     def add(self, tx_dict) -> tuple:
-        import tx as tx_mod
         h = tx_mod.tx_hash(tx_dict)
         if h in self._pool:
             return False, "duplicate"
@@ -56,43 +45,24 @@ class Mempool:
     def all_txs(self):
         return [tx for tx, _ in self._pool.values()]
 
-    def confirmations(self):
-        """All pending "confirm" txs."""
-        return [t for t, _ in self._pool.values() if t.get("kind") == "confirm"]
-
-    def resolutions(self):
-        """All pending "resolve" txs."""
-        return [t for t, _ in self._pool.values() if t.get("kind") == "resolve"]
+    def pending_nonce(self, addr):
+        """Highest nonce in the mempool for addr, or 0 if none. Lets a
+        wallet queue up several sends in a row without waiting for each
+        one to confirm first."""
+        nonces = [t["nonce"] for t, _ in self._pool.values()
+                  if t.get("from") == addr]
+        return max(nonces) if nonces else 0
 
     def pending_hashes(self):
         return frozenset(self._pool.keys())
 
     def prune_stale(self, chain_tip_height, state, ttl_seconds=MEMPOOL_TTL_SECONDS):
-        """Evict txs that can never become valid, or have simply aged out.
-
-        "confirm" entries: stale fee_height or too old.
-        "resolve" entries: too old, or already resolved on chain (checked
-        via state's escrow -- once a confirmed tx's escrow is gone, either
-        it was already paid out, or it was never confirmed at all in this
-        state; either way a stale resolution for it can be dropped).
-        Returns list of pruned hashes.
-        """
+        """Evict txs that can never become valid: a nonce already superseded
+        on chain, or simply too old. Returns list of pruned hashes."""
         now = time.monotonic()
         pruned = []
         for h, (t, entered) in list(self._pool.items()):
-            too_old = now - entered > ttl_seconds
-            if t.get("kind") == "confirm":
-                fh = t.get("fee_height")
-                stale_fee = (
-                    not isinstance(fh, int)
-                    or fh > chain_tip_height
-                    or fh < chain_tip_height - (FEE_HEIGHT_MAX_AGE - 1)
-                )
-                if stale_fee or too_old:
-                    pruned.append(h)
-                    del self._pool[h]
-            else:
-                if too_old:
-                    pruned.append(h)
-                    del self._pool[h]
+            if t["nonce"] <= state.get_nonce(t["from"]) or now - entered > ttl_seconds:
+                pruned.append(h)
+                del self._pool[h]
         return pruned

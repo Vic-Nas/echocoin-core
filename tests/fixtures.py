@@ -11,24 +11,11 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import time
-
 import crypto
 import block as block_mod
 import state as state_mod
 import tx as tx_mod
-import timelock as timelock_mod
-from params import (
-    GENESIS_TIMESTAMP,
-    INITIAL_FEE_RATE,
-    TICKS_PER_LAPSE,
-    SUPPLY_CAP,
-)
-
-# Tiny puzzle difficulty so tests can solve instantly. Never used for
-# anything but test fixtures -- TIMELOCK_ITERATIONS (params.py) is the
-# real, fixed protocol constant.
-TEST_ITERATIONS = 8
+from params import GENESIS_TIMESTAMP, TICKS_PER_LAPSE
 
 # ---------------------------------------------------------------------------
 # Fixed keypairs -- generated once, reused across the suite for speed.
@@ -62,90 +49,30 @@ def pubkey_hex(index: int) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Minimal valid confirm/resolve pair builder
+# Minimal valid transaction builder
 # ---------------------------------------------------------------------------
-
-def make_confirmation(
-    broadcaster_index: int,
-    inner_payload: dict,
-    fee_height: int,
-    fee_rate: int = INITIAL_FEE_RATE,
-    iterations: int = TEST_ITERATIONS,
-):
-    """Build and sign a "confirm" ciphertext submission wrapping
-    inner_payload, broadcast under broadcaster_index's key."""
-    sk = keypair(broadcaster_index)[0]
-    bcast_addr = address(broadcaster_index)
-    pk_hex = pubkey_hex(broadcaster_index)
-    confirm = tx_mod.create_confirmation(bcast_addr, pk_hex, inner_payload,
-                                          fee_height, 0, sk, iterations=iterations)
-    fee = tx_mod.compute_fee(bcast_addr, pk_hex, confirm["puzzle"], fee_height, fee_rate,
-                              iterations=iterations)
-    confirm["fee"] = fee
-    msg = crypto.serialize_for_signing(confirm)
-    confirm["signature"] = crypto.sign(msg, sk).hex()
-    return confirm
-
-
-def solve_confirmation(confirm_tx, resolver_index: int = 0, iterations: int = TEST_ITERATIONS):
-    """Solve a confirmation built with make_confirmation and build the
-    matching resolution. Uses TEST_ITERATIONS so this is instant."""
-    puzzle = confirm_tx["puzzle"]
-    N, x = int(puzzle["N"], 16), int(puzzle["x"], 16)
-    K = timelock_mod.solve_for_key(N, x, iterations=iterations)
-    payload = timelock_mod.decrypt_with_key(K, N.bit_length(), puzzle["ciphertext"])
-    import json
-    payload = json.loads(payload)
-    confirmed_hash = tx_mod.tx_hash(confirm_tx)
-    return tx_mod.create_resolution(confirmed_hash, address(resolver_index), K, payload)
-
 
 def make_tx(
     sender_index: int,
     recipient_index: int,
     amount: int,
     state: "state_mod.State",
-    chain_tip_height: int,
-    fee_rate: int = INITIAL_FEE_RATE,
+    fee: int = 0,
     outputs_override: list | None = None,
-    nonce_override: str | None = None,
-    fee_height_override: int | None = None,
-    broadcaster_index: int | None = None,
-    resolver_index: int = 50,
+    nonce_override: int | None = None,
 ):
-    """Build a (confirm, resolve) pair for a transfer from sender_index to
-    recipient_index. Returns (confirm_tx, resolve_tx); including both in a
-    block (in that relative order -- or resolve first is fine too, since a
-    same-block confirm+resolve pair is looked up from the block's own
-    local_confirmations map) reproduces the old atomic single-tx behavior
-    for test purposes. broadcaster_index defaults to sender_index (the
-    wallet-layer default described in tx.py); pass a different index to
-    exercise broadcaster != sender.
-    """
+    """Build and sign a minimal valid plaintext transaction."""
     sk, _ = keypair(sender_index)
     from_addr = address(sender_index)
     to_addr   = address(recipient_index)
     pk_hex    = pubkey_hex(sender_index)
 
-    nonce      = (nonce_override if nonce_override is not None
-                  else tx_mod.generate_nonce())
-    fee_height = (fee_height_override if fee_height_override is not None
-                  else chain_tip_height)
+    nonce = (nonce_override if nonce_override is not None
+             else state.get_nonce(from_addr) + 1)
 
     outputs = outputs_override or [{"to": to_addr, "amount": amount}]
-    inner = tx_mod.create_inner_payload(from_addr, pk_hex, outputs, nonce, sk)
 
-    bcast_idx = sender_index if broadcaster_index is None else broadcaster_index
-    confirm = make_confirmation(bcast_idx, inner, fee_height, fee_rate)
-    resolve = solve_confirmation(confirm, resolver_index=resolver_index)
-    return confirm, resolve
-
-
-def apply_transfer(state, confirm, resolve):
-    """Apply a (confirm, resolve) pair directly to a State, bypassing
-    validation -- mirrors the old State.apply_tx for test convenience."""
-    state.apply_confirmation(confirm, tx_mod.tx_hash(confirm))
-    state.apply_resolution(resolve)
+    return tx_mod.create(from_addr, pk_hex, outputs, nonce, fee, sk)
 
 
 # ---------------------------------------------------------------------------
@@ -171,44 +98,18 @@ def make_block(
     previous_hash: str,
     transactions: list,
     builder_index: int = 0,
-    fee_rate: int | None = None,
     timestamp_offset: int = 0,
     vdf_output: str | None = None,
     vdf_proof: str | None = None,
     chain: list | None = None,
 ) -> dict:
-    """Create a block dict without a real VDF proof (for unit tests that mock VDF).
-
-    fee_rate defaults to None, which means: compute the correct rate from
-    block.compute_expected_fee_rate(chain).  Pass chain=[...] when you have one,
-    or pass an explicit fee_rate to override.  This ensures block.validate
-    does not fail with 'fee rate mismatch'.
-    """
-    if fee_rate is None:
-        if chain is not None:
-            fee_rate = block_mod.compute_expected_fee_rate(chain)
-        else:
-            # Build a minimal chain stub sufficient for the fee formula:
-            # a single genesis block produces the rate for height-1 blocks.
-            stub = [genesis()]
-            for h in range(1, height):
-                prev = stub[-1]
-                stub_blk = {
-                    "height": h,
-                    "fee_rate": block_mod.compute_expected_fee_rate(stub),
-                    "tx_bytes": 0,
-                    "transactions": [],
-                }
-                stub.append(stub_blk)
-            fee_rate = block_mod.compute_expected_fee_rate(stub)
-
+    """Create a block dict without a real VDF proof (for unit tests that mock VDF)."""
     ts = _BASE_TS + height * 120 + timestamp_offset
     blk = block_mod.create(
         height=height,
         previous_hash=previous_hash,
         transactions=transactions,
         builder=address(builder_index),
-        fee_rate=fee_rate,
         vdf_output=vdf_output or ("aa" * 100),
         vdf_proof=vdf_proof or ("bb" * 100),
         timestamp=ts,

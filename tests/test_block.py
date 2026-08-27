@@ -1,24 +1,14 @@
 """
 Unit tests for block.py
 
-Covers: create_genesis, create, block_hash, block_size, validate (all sub-checks),
-compute_expected_fee_rate, assemble.
+Covers: create_genesis, create, block_hash, block_size, validate (all
+sub-checks), assemble.
 
 VDF verification is mocked because vdf.evaluate takes ~120s.
-Whitepaper constraints enforced:
-  - hash integrity (tamper detection)
-  - parent chain linkage and height sequence
-  - timestamp not more than 30s in the future
-  - VDF proof mandatory for height > 0
-  - fee_rate computed by asymmetric formula (Section 2)
-  - tx canonical ordering inside block
-  - block size <= BLOCK_SIZE_LIMIT
 """
 
 import os
 import sys
-import time as _time
-from unittest.mock import patch
 
 import pytest
 
@@ -26,14 +16,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import block as block_mod
 import state as state_mod
-import tx as tx_mod
 from params import (
-    BLOCK_CYCLE_SECONDS, BLOCK_SIZE_LIMIT, BLOCK_SIZE_TARGET_BYTES,
-    GENESIS_MESSAGE, GENESIS_TIMESTAMP, INITIAL_FEE_RATE, TICKS_PER_LAPSE,
+    BLOCK_CYCLE_SECONDS, BLOCK_SIZE_LIMIT, GENESIS_MESSAGE,
+    GENESIS_TIMESTAMP, TICKS_PER_LAPSE,
 )
-from tests.fixtures import (
-    address, genesis, keypair, make_block, make_tx, apply_transfer, seed_balance,
-)
+from tests.fixtures import address, genesis, make_block, make_tx, seed_balance
 
 
 # ---------------------------------------------------------------------------
@@ -47,10 +34,6 @@ def mock_vdf(monkeypatch):
 
 def fresh_state():
     return state_mod.State()
-
-
-def noop_fee_rate(height):
-    return INITIAL_FEE_RATE
 
 
 # ---------------------------------------------------------------------------
@@ -87,10 +70,6 @@ class TestCreateGenesis:
     def test_genesis_timestamp_matches_params(self):
         g = genesis()
         assert g["timestamp"] == GENESIS_TIMESTAMP
-
-    def test_genesis_fee_rate_is_initial(self):
-        g = genesis()
-        assert g["fee_rate"] == INITIAL_FEE_RATE
 
     def test_genesis_builder_is_none(self):
         g = genesis()
@@ -129,13 +108,13 @@ class TestBlockHash:
 class TestValidateHash:
     def test_valid_genesis_passes(self):
         g = genesis()
-        ok, err = block_mod.validate(g, fresh_state(), [], noop_fee_rate)
+        ok, err = block_mod.validate(g, fresh_state(), [])
         assert ok is True, err
 
     def test_tampered_hash_fails(self):
         g = genesis()
         g["hash"] = "00" * 32
-        ok, err = block_mod.validate(g, fresh_state(), [], noop_fee_rate)
+        ok, err = block_mod.validate(g, fresh_state(), [])
         assert ok is False
         assert "hash" in err
 
@@ -144,7 +123,7 @@ class TestValidateHash:
         g["height"] = 999
         # Recompute hash so it's consistent but height is wrong
         g["hash"] = block_mod.block_hash(g)
-        ok, err = block_mod.validate(g, fresh_state(), [], noop_fee_rate)
+        ok, err = block_mod.validate(g, fresh_state(), [])
         # Either height check or hash recompute catches the tamper
         assert ok is False
 
@@ -157,13 +136,13 @@ class TestValidateParent:
     def test_block_with_correct_parent_passes(self):
         g = genesis()
         b = make_block(1, g["hash"], [])
-        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        ok, err = block_mod.validate(b, fresh_state(), [g])
         assert ok is True, err
 
     def test_wrong_previous_hash_fails(self):
         g = genesis()
         b = make_block(1, "00" * 32, [])
-        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        ok, err = block_mod.validate(b, fresh_state(), [g])
         assert ok is False
         assert "previous_hash" in err
 
@@ -171,7 +150,7 @@ class TestValidateParent:
         g = genesis()
         # Build a block with height=2 against a height-0 parent
         b = make_block(2, g["hash"], [])
-        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        ok, err = block_mod.validate(b, fresh_state(), [g])
         assert ok is False
 
 
@@ -184,23 +163,21 @@ class TestValidateTimestamp:
         # No minimum-gap rule: any past timestamp is valid
         g = genesis()
         b = make_block(1, g["hash"], [], timestamp_offset=-(BLOCK_CYCLE_SECONDS + 1))
-        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        ok, err = block_mod.validate(b, fresh_state(), [g])
         assert ok is True, err
 
     def test_future_timestamp_fails(self):
         g = genesis()
-        from params import GENESIS_TIMESTAMP
-        far_future = GENESIS_TIMESTAMP + 365 * 24 * 3600 + 3600  # past the mocked "now"
-        correct_rate = block_mod.compute_expected_fee_rate([g])
+        far_future = GENESIS_TIMESTAMP + 365 * 24 * 3600 + 3600
         b = block_mod.create(1, g["hash"], [], address(0),
-                             correct_rate, "aa" * 100, "bb" * 100, timestamp=far_future)
-        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+                             "aa" * 100, "bb" * 100, timestamp=far_future)
+        ok, err = block_mod.validate(b, fresh_state(), [g])
         assert ok is False
         assert "future" in err
 
 
 # ---------------------------------------------------------------------------
-# 6. validate -- VDF proof (whitepaper Section 3: chain is its own clock)
+# 6. validate -- VDF proof (whitepaper: chain is its own clock)
 # ---------------------------------------------------------------------------
 
 class TestValidateVDF:
@@ -208,14 +185,14 @@ class TestValidateVDF:
         g = genesis()
         b = make_block(1, g["hash"], [])
         # VDF mock returns True by default -- should pass
-        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        ok, err = block_mod.validate(b, fresh_state(), [g])
         assert ok is True, err
 
     def test_invalid_vdf_proof_fails(self, monkeypatch):
         monkeypatch.setattr("block.vdf_mod.verify", lambda *a, **kw: False)
         g = genesis()
         b = make_block(1, g["hash"], [])
-        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        ok, err = block_mod.validate(b, fresh_state(), [g])
         assert ok is False
         assert "VDF" in err
 
@@ -224,7 +201,7 @@ class TestValidateVDF:
         b = make_block(1, g["hash"], [])
         b["vdf_output"] = None
         b["hash"] = block_mod.block_hash(b)
-        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        ok, err = block_mod.validate(b, fresh_state(), [g])
         assert ok is False
 
     def test_challenge_binds_previous_hash_and_builder(self):
@@ -246,7 +223,7 @@ class TestValidateVDF:
                             lambda challenge, *a, **kw: seen.setdefault("c", challenge) or True)
         g = genesis()
         b = make_block(1, g["hash"], [], builder_index=0)
-        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        ok, err = block_mod.validate(b, fresh_state(), [g])
         assert ok is True, err
         assert seen["c"] == block_mod.vdf_challenge(g["hash"], address(0))
         assert seen["c"] != bytes.fromhex(g["hash"])
@@ -262,19 +239,17 @@ class TestValidateVDF:
         g = genesis()
         victim, thief = address(0), address(1)
         honest_challenge = block_mod.vdf_challenge(g["hash"], victim)
-        # Stand-in for real VDF verification: a proof verifies only against
-        # the challenge it was actually evaluated over.
         monkeypatch.setattr("block.vdf_mod.verify",
                             lambda challenge, *a, **kw: challenge == honest_challenge)
 
         original = make_block(1, g["hash"], [], builder_index=0)
-        ok, err = block_mod.validate(original, fresh_state(), [g], noop_fee_rate)
+        ok, err = block_mod.validate(original, fresh_state(), [g])
         assert ok is True, err
 
         stolen = dict(original)
         stolen["builder"] = thief
         stolen["hash"]    = block_mod.block_hash(stolen)
-        ok, err = block_mod.validate(stolen, fresh_state(), [g], noop_fee_rate)
+        ok, err = block_mod.validate(stolen, fresh_state(), [g])
         assert ok is False
         assert "VDF" in err
 
@@ -293,20 +268,20 @@ class TestValidateVDF:
 
         st = fresh_state()
         seed_balance(st, 2, 100.0)
-        confirm, resolve = make_tx(2, 3, TICKS_PER_LAPSE, st, 0)
+        t = make_tx(2, 3, TICKS_PER_LAPSE, st)
 
         empty    = make_block(1, g["hash"], [],  builder_index=0)
-        refilled = make_block(1, g["hash"], [confirm, resolve], builder_index=0,
+        refilled = make_block(1, g["hash"], [t], builder_index=0,
                               vdf_output=empty["vdf_output"],
                               vdf_proof=empty["vdf_proof"])
         assert refilled["vdf_output"] == empty["vdf_output"]
-        ok, err = block_mod.validate(refilled, st, [g], noop_fee_rate)
+        ok, err = block_mod.validate(refilled, st, [g])
         assert ok is True, err
 
     def test_genesis_skips_vdf_check(self):
         g = genesis()
         # Genesis has vdf_output=None -- should still pass
-        ok, err = block_mod.validate(g, fresh_state(), [], noop_fee_rate)
+        ok, err = block_mod.validate(g, fresh_state(), [])
         assert ok is True, err
 
     def test_invalid_builder_address_fails(self):
@@ -314,146 +289,60 @@ class TestValidateVDF:
         b = make_block(1, g["hash"], [])
         b["builder"] = "not.a.valid.address"
         b["hash"] = block_mod.block_hash(b)
-        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        ok, err = block_mod.validate(b, fresh_state(), [g])
         assert ok is False
         assert "builder" in err
 
 
 # ---------------------------------------------------------------------------
-# 7. validate -- tx ordering
+# 7. validate -- transaction application (no consensus-level ordering)
 # ---------------------------------------------------------------------------
 
-class TestValidateTxOrdering:
-    def test_canonical_tx_order_passes(self):
+class TestValidateTransactions:
+    def test_single_valid_tx_passes(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        # fee_height must equal genesis height (0) because block.validate
-        # checks txs against chain_tip_height = block.height - 1 = 0
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, chain_tip_height=0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
         g = genesis()
-        b = make_block(1, g["hash"], [confirm, resolve])
-        ok, err = block_mod.validate(b, s.snapshot(), [g], noop_fee_rate)
+        b = make_block(1, g["hash"], [t])
+        ok, err = block_mod.validate(b, s.snapshot(), [g])
         assert ok is True, err
 
-    def test_wrong_tx_order_fails(self):
+    def test_invalid_tx_fails_block(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
+        t["signature"] = "00" * 752  # tampered
+        g = genesis()
+        b = make_block(1, g["hash"], [t])
+        ok, err = block_mod.validate(b, s.snapshot(), [g])
+        assert ok is False
+        assert "invalid tx" in err
+
+    def test_multiple_txs_from_different_senders_applied_in_listed_order(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
         seed_balance(s, 1, 100.0)
-        # Create two confirmations from different broadcasters (order is by
-        # (fee_height, tx_hash), independent of any per-sender nonce)
-        c1, _ = make_tx(0, 2, TICKS_PER_LAPSE, s, chain_tip_height=0)
-        c2, _ = make_tx(1, 2, TICKS_PER_LAPSE, s, chain_tip_height=0)
-        sorted_txs = tx_mod.sort_txs([c1, c2])
-        # Reverse them to create wrong order
-        wrong_order = list(reversed(sorted_txs))
-        if wrong_order == sorted_txs:
-            pytest.skip("Hashes happened to sort into same order")
+        t1 = make_tx(0, 2, TICKS_PER_LAPSE, s)
+        t2 = make_tx(1, 2, TICKS_PER_LAPSE, s)
         g = genesis()
-        b = make_block(1, g["hash"], wrong_order)
-        # Rebuild hash to match wrong content
-        b["hash"] = block_mod.block_hash(b)
-        ok, err = block_mod.validate(b, s.snapshot(), [g], noop_fee_rate)
-        assert ok is False
-        assert "order" in err
-
-
-# ---------------------------------------------------------------------------
-# 8. validate -- fee_rate check
-# ---------------------------------------------------------------------------
-
-class TestValidateFeeRate:
-    def test_correct_fee_rate_passes(self):
-        g = genesis()
-        expected_rate = block_mod.compute_expected_fee_rate([g])
-        ts = g["timestamp"] + BLOCK_CYCLE_SECONDS
-        b = block_mod.create(1, g["hash"], [], address(0),
-                             expected_rate, "aa" * 100, "bb" * 100,
-                             timestamp=ts)
-        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
+        b = make_block(1, g["hash"], [t1, t2])
+        ok, err = block_mod.validate(b, s.snapshot(), [g])
         assert ok is True, err
 
-    def test_wrong_fee_rate_fails(self):
+    def test_fee_paid_by_sender_goes_to_builder(self):
+        """block_fees sums every tx's fee, which chainstate credits entirely
+        to the builder alongside the block reward."""
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s, fee=500)
         g = genesis()
-        b = make_block(1, g["hash"], [], fee_rate=INITIAL_FEE_RATE + 9999)
-        ok, err = block_mod.validate(b, fresh_state(), [g], noop_fee_rate)
-        assert ok is False
-        assert "fee rate" in err
+        b = make_block(1, g["hash"], [t])
+        assert block_mod.block_fees(b) == 500
 
 
 # ---------------------------------------------------------------------------
-# 9. compute_expected_fee_rate (whitepaper Section 2 asymmetric formula)
-# ---------------------------------------------------------------------------
-
-class TestComputeExpectedFeeRate:
-    def test_empty_chain_returns_initial_rate(self):
-        assert block_mod.compute_expected_fee_rate([]) == INITIAL_FEE_RATE
-
-    def test_zero_volume_decays_slowly(self):
-        g = genesis()
-        # Empty blocks for 100 slots
-        chain = [g]
-        for h in range(1, 101):
-            blk = make_block(h, chain[-1]["hash"], [])
-            blk["tx_bytes"] = 0
-            chain.append(blk)
-        rate = block_mod.compute_expected_fee_rate(chain)
-        # Rate should have dropped but still >= 1
-        assert rate >= 1
-        assert rate <= INITIAL_FEE_RATE
-
-    def test_high_volume_adjustment_is_above_one(self):
-        """vol_ratio > 1 -> adjustment = min(1.05, vol_ratio) > 1.
-        The rate only visibly rises once it's large enough to survive int truncation
-        (int(rate * 1.05) > rate requires rate >= 21). We test the formula directly.
-        """
-        from params import FEE_RATE_WINDOW
-        import statistics
-        g = genesis()
-        chain = [g]
-        # Seed chain with high-volume blocks
-        for h in range(1, FEE_RATE_WINDOW + 1):
-            blk = make_block(h, chain[-1]["hash"], [])
-            blk["tx_bytes"] = BLOCK_SIZE_TARGET_BYTES * 2
-            blk["fee_rate"] = INITIAL_FEE_RATE
-            chain.append(blk)
-        window = chain[-FEE_RATE_WINDOW:]
-        vols = [b.get("tx_bytes", 0) for b in window]
-        median_vol = statistics.median(vols)
-        vol_ratio = median_vol / BLOCK_SIZE_TARGET_BYTES
-        # With 2x volume, vol_ratio = 2.0, adjustment = min(1.05, 2.0) = 1.05
-        assert vol_ratio > 1
-        adjustment = min(1.05, vol_ratio)
-        assert adjustment > 1.0
-
-    def test_rate_minimum_is_one(self):
-        g = genesis()
-        # Drive rate down with zero-volume blocks
-        chain = [g]
-        for h in range(1, 501):
-            blk = make_block(h, chain[-1]["hash"], [])
-            blk["tx_bytes"] = 0
-            blk["fee_rate"] = max(1, int(chain[-1].get("fee_rate", INITIAL_FEE_RATE) * 0.999))
-            chain.append(blk)
-        rate = block_mod.compute_expected_fee_rate(chain)
-        assert rate >= 1
-
-    def test_fee_rate_rise_capped_at_5pct_per_block(self):
-        """Whitepaper: rises up to 5% per block (min(1.05, vol_ratio))."""
-        g = genesis()
-        chain = [g]
-        for h in range(1, 11):
-            blk = make_block(h, chain[-1]["hash"], [])
-            blk["tx_bytes"] = BLOCK_SIZE_TARGET_BYTES * 100  # extreme volume
-            blk["fee_rate"] = INITIAL_FEE_RATE
-            chain.append(blk)
-        rate = block_mod.compute_expected_fee_rate(chain)
-        # Rate increase from previous step can be at most 5%
-        prev_rate = chain[-1].get("fee_rate", INITIAL_FEE_RATE)
-        assert rate <= int(prev_rate * 1.05) + 1  # +1 for int rounding
-
-
-# ---------------------------------------------------------------------------
-# 10. assemble
+# 8. assemble
 # ---------------------------------------------------------------------------
 
 class TestVdfIterationsAdjustment:
@@ -482,14 +371,13 @@ class TestVdfIterationsAdjustment:
         assert iterations == block_mod.VDF_ITERATIONS * 2, \
             "sanity check: the window's real timestamps should trigger a bump"
 
-        fee_rate = block_mod.compute_expected_fee_rate(chain)
-        blk3 = block_mod.assemble(chain[-1], [], address(0), fee_rate, iterations)
+        blk3 = block_mod.assemble(chain[-1], [], address(0), iterations)
         assert blk3["vdf_iterations"] == iterations
         blk3["vdf_output"] = "aa" * 100
         blk3["vdf_proof"]  = "bb" * 100
         blk3["hash"] = block_mod.block_hash(blk3)
 
-        ok, err = block_mod.validate(blk3, fresh_state(), chain, noop_fee_rate)
+        ok, err = block_mod.validate(blk3, fresh_state(), chain)
         assert ok is True, err
 
     def test_iterations_never_decrease(self, monkeypatch):
@@ -509,135 +397,54 @@ class TestVdfIterationsAdjustment:
 class TestAssemble:
     def test_assemble_returns_block_without_hash(self):
         g = genesis()
-        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS)
+        b = block_mod.assemble(g, [], address(0), block_mod.VDF_ITERATIONS)
         assert "hash" not in b
 
     def test_assemble_includes_valid_txs(self):
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
         g = genesis()
-        b = block_mod.assemble(g, [confirm], address(0), INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS)
+        b = block_mod.assemble(g, [t], address(0), block_mod.VDF_ITERATIONS)
         assert len(b["transactions"]) == 1
+
+    def test_assemble_prioritizes_higher_fee_per_byte(self):
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        seed_balance(s, 1, 100.0)
+        low  = make_tx(0, 2, TICKS_PER_LAPSE, s, fee=1)
+        high = make_tx(1, 2, TICKS_PER_LAPSE, s, fee=10_000)
+        g = genesis()
+        b = block_mod.assemble(g, [low, high], address(0), block_mod.VDF_ITERATIONS)
+        assert b["transactions"][0] is high
 
     def test_assemble_respects_size_limit(self):
         g = genesis()
-        # Create many dummy confirmations to fill the block
         dummy_txs = []
         s = fresh_state()
         seed_balance(s, 0, 10_000.0)
         for i in range(50):
-            confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
-            dummy_txs.append(confirm)
+            t = make_tx(0, 1, TICKS_PER_LAPSE, s)
+            dummy_txs.append(t)
             try:
-                apply_transfer(s, confirm, resolve)
+                s.apply_tx(t)
             except Exception:
                 break
-        b = block_mod.assemble(g, dummy_txs, address(0), INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS)
+        b = block_mod.assemble(g, dummy_txs, address(0), block_mod.VDF_ITERATIONS)
         blk_size = block_mod.block_size({**b, "hash": "x"})
         assert blk_size <= BLOCK_SIZE_LIMIT
 
     def test_assemble_records_tx_bytes(self):
         g = genesis()
-        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS)
+        b = block_mod.assemble(g, [], address(0), block_mod.VDF_ITERATIONS)
         assert "tx_bytes" in b
 
     def test_assemble_height_is_parent_plus_one(self):
         g = genesis()
-        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS)
+        b = block_mod.assemble(g, [], address(0), block_mod.VDF_ITERATIONS)
         assert b["height"] == g["height"] + 1
 
     def test_assemble_previous_hash_matches_tip(self):
         g = genesis()
-        b = block_mod.assemble(g, [], address(0), INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS)
+        b = block_mod.assemble(g, [], address(0), block_mod.VDF_ITERATIONS)
         assert b["previous_hash"] == g["hash"]
-
-
-# ---------------------------------------------------------------------------
-# 11. Gapless front-of-queue ciphertext resolution
-# ---------------------------------------------------------------------------
-
-class _FakeQueue:
-    """Minimal stand-in for chainstate.TxQueue for pure block.py tests."""
-
-    def __init__(self, remaining_hashes, confirmations=None):
-        self._remaining = list(remaining_hashes)
-        self._confirmations = confirmations or {}
-
-    def remaining(self):
-        return list(self._remaining)
-
-    def lookup(self, h):
-        return self._confirmations.get(h)
-
-
-class TestQueueResolution:
-    def test_empty_queue_requires_no_resolution(self):
-        g = genesis()
-        b = make_block(1, g["hash"], [])
-        ok, err = block_mod._check_queue_resolution(b, _FakeQueue([]))
-        assert ok is True, err
-
-    def test_nonempty_queue_with_no_resolution_fails(self):
-        g = genesis()
-        b = make_block(1, g["hash"], [])
-        ok, err = block_mod._check_queue_resolution(b, _FakeQueue(["deadbeef"]))
-        assert ok is False
-        assert "front" in err
-
-    def test_resolving_the_front_passes(self):
-        g = genesis()
-        res = {"kind": "resolve", "confirmed_tx_hash": "deadbeef",
-               "resolver": address(0), "K_hex": "1", "payload": {}}
-        b = make_block(1, g["hash"], [res])
-        ok, err = block_mod._check_queue_resolution(b, _FakeQueue(["deadbeef", "cafef00d"]))
-        assert ok is True, err
-
-    def test_skipping_ahead_fails(self):
-        """Resolving the second item while skipping the front is rejected --
-        no selective stalling of one target while resolving everything else."""
-        g = genesis()
-        res = {"kind": "resolve", "confirmed_tx_hash": "cafef00d",
-               "resolver": address(0), "K_hex": "1", "payload": {}}
-        b = make_block(1, g["hash"], [res])
-        ok, err = block_mod._check_queue_resolution(b, _FakeQueue(["deadbeef", "cafef00d"]))
-        assert ok is False
-        assert "gapless" in err
-
-    def test_resolving_two_in_order_passes(self):
-        g = genesis()
-        r1 = {"kind": "resolve", "confirmed_tx_hash": "deadbeef",
-              "resolver": address(0), "K_hex": "1", "payload": {}}
-        r2 = {"kind": "resolve", "confirmed_tx_hash": "cafef00d",
-              "resolver": address(0), "K_hex": "1", "payload": {}}
-        b = make_block(1, g["hash"], [r1, r2])
-        ok, err = block_mod._check_queue_resolution(b, _FakeQueue(["deadbeef", "cafef00d", "f00d"]))
-        assert ok is True, err
-
-    def test_assemble_pulls_due_resolution_first(self):
-        """assemble() must put a due (front-of-queue) resolution ahead of
-        any confirmations, mirroring _check_tx_ordering's priority."""
-        s = fresh_state()
-        seed_balance(s, 0, 100.0)
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 0)
-        confirmed_hash = tx_mod.tx_hash(confirm)
-        queue = _FakeQueue([confirmed_hash], {confirmed_hash: confirm})
-
-        other_confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 0, nonce_override=99)
-
-        g = genesis()
-        b = block_mod.assemble(g, [other_confirm, resolve], address(0),
-                               INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS, queue)
-        assert b["transactions"][0] is resolve
-
-    def test_assemble_stops_at_first_missing_resolution(self):
-        """A due resolution not yet in the mempool means no later,
-        out-of-order resolution can be substituted -- the gapless rule."""
-        confirmed_hash = "deadbeef"
-        queue = _FakeQueue([confirmed_hash, "cafef00d"])
-        later_res = {"kind": "resolve", "confirmed_tx_hash": "cafef00d",
-                     "resolver": address(0), "K_hex": "1", "payload": {}}
-        g = genesis()
-        b = block_mod.assemble(g, [later_res], address(0),
-                               INITIAL_FEE_RATE, block_mod.VDF_ITERATIONS, queue)
-        assert later_res not in b["transactions"]

@@ -2,22 +2,18 @@
 Unit tests for mempool.py
 
 Covers: add, remove, remove_many, get, get_txs_by_hashes, size, all_txs,
-pending_hashes, prune_stale.
+pending_nonce, pending_hashes, prune_stale.
 """
 
 import os
 import sys
-import time
-
-import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import mempool as mempool_mod
-import tx as tx_mod
 import state as state_mod
-from params import INITIAL_FEE_RATE, TICKS_PER_LAPSE
-from tests.fixtures import address, make_tx, apply_transfer, seed_balance
+from params import TICKS_PER_LAPSE
+from tests.fixtures import address, make_tx, seed_balance
 
 
 def fresh_mempool():
@@ -28,12 +24,10 @@ def fresh_state():
     return state_mod.State()
 
 
-def sample_tx(sender_index=0, recipient_index=1, amount=TICKS_PER_LAPSE,
-              tip_height=10):
+def sample_tx(sender_index=0, recipient_index=1, amount=TICKS_PER_LAPSE):
     s = fresh_state()
     seed_balance(s, sender_index, 100.0)
-    confirm, _ = make_tx(sender_index, recipient_index, amount, s, tip_height)
-    return confirm
+    return make_tx(sender_index, recipient_index, amount, s)
 
 
 # ---------------------------------------------------------------------------
@@ -132,7 +126,7 @@ class TestGet:
 
 
 # ---------------------------------------------------------------------------
-# 4. all_txs / pending_hashes
+# 4. all_txs / pending_nonce / pending_hashes
 # ---------------------------------------------------------------------------
 
 class TestAllTxs:
@@ -149,6 +143,20 @@ class TestAllTxs:
         all_t = mp.all_txs()
         assert len(all_t) == 2
 
+    def test_pending_nonce_returns_zero_when_absent(self):
+        mp = fresh_mempool()
+        assert mp.pending_nonce(address(0)) == 0
+
+    def test_pending_nonce_returns_highest_for_sender(self):
+        mp = fresh_mempool()
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t1 = make_tx(0, 1, 1, s)
+        mp.add(t1)
+        t2 = make_tx(0, 1, 1, s, nonce_override=t1["nonce"] + 1)
+        mp.add(t2)
+        assert mp.pending_nonce(address(0)) == t2["nonce"]
+
     def test_pending_hashes_returns_frozenset(self):
         mp = fresh_mempool()
         t = sample_tx()
@@ -163,29 +171,15 @@ class TestAllTxs:
 # ---------------------------------------------------------------------------
 
 class TestPruneStale:
-    def test_prune_stale_fee_height(self):
-        """Tx with a fee_height too old relative to current tip is pruned."""
+    def test_prune_superseded_nonce(self):
+        """Tx whose nonce is already used by state is pruned."""
         mp = fresh_mempool()
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10, fee_height_override=10)
-        mp.add(confirm)
-        # Tip is now 35, so fee_height=10 is 25 blocks old (max_age=20)
-        pruned = mp.prune_stale(chain_tip_height=35, state=s)
-        assert len(pruned) == 1
-        assert mp.size() == 0
-
-    def test_prune_superseded_resolution(self):
-        """A resolution whose confirmed tx has already been paid out (no
-        longer escrowed) is pruned as stale -- ttl-based here since a
-        resolve entry carries no fee_height of its own."""
-        mp = fresh_mempool()
-        s = fresh_state()
-        seed_balance(s, 0, 100.0)
-        confirm, resolve = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        mp.add(resolve)
-        apply_transfer(s, confirm, resolve)  # resolved already
-        pruned = mp.prune_stale(chain_tip_height=10, state=s, ttl_seconds=0)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
+        mp.add(t)
+        s.apply_tx(t)  # nonce is now consumed
+        pruned = mp.prune_stale(chain_tip_height=10, state=s)
         assert len(pruned) == 1
         assert mp.size() == 0
 
@@ -194,8 +188,8 @@ class TestPruneStale:
         mp = fresh_mempool()
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        mp.add(confirm)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
+        mp.add(t)
         # Force very short TTL
         pruned = mp.prune_stale(chain_tip_height=10, state=s, ttl_seconds=0)
         assert len(pruned) == 1
@@ -204,8 +198,8 @@ class TestPruneStale:
         mp = fresh_mempool()
         s = fresh_state()
         seed_balance(s, 0, 100.0)
-        confirm, _ = make_tx(0, 1, TICKS_PER_LAPSE, s, 10)
-        mp.add(confirm)
+        t = make_tx(0, 1, TICKS_PER_LAPSE, s)
+        mp.add(t)
         pruned = mp.prune_stale(chain_tip_height=10, state=s)
         assert len(pruned) == 0
         assert mp.size() == 1
