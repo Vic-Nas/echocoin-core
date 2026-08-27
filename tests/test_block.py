@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import block as block_mod
 import state as state_mod
+import tx as tx_mod
 from params import (
     BLOCK_CYCLE_SECONDS, BLOCK_SIZE_LIMIT, GENESIS_MESSAGE,
     GENESIS_TIMESTAMP, TICKS_PER_LAPSE,
@@ -417,6 +418,44 @@ class TestAssemble:
         g = genesis()
         b = block_mod.assemble(g, [low, high], address(0), block_mod.VDF_ITERATIONS)
         assert b["transactions"][0] is high
+
+    def test_assemble_keeps_same_sender_txs_in_nonce_order_despite_fee(self):
+        """A later nonce with a higher fee must not be sorted ahead of an
+        earlier, cheaper nonce from the same sender: block._apply_transactions
+        requires strict current+1 nonce order with no gaps, so a block that
+        put nonce 2 before nonce 1 would fail its own validation, wasting
+        the whole VDF cycle that produced it."""
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        low = make_tx(0, 1, TICKS_PER_LAPSE, s, fee=1)
+        s.apply_tx(low)
+        high = make_tx(0, 1, TICKS_PER_LAPSE, s, fee=10_000)
+        g = genesis()
+        b = block_mod.assemble(g, [high, low], address(0), block_mod.VDF_ITERATIONS)
+        assert [t["nonce"] for t in b["transactions"]] == [low["nonce"], high["nonce"]]
+
+    def test_assemble_stops_sender_group_at_first_non_fitting_tx(self):
+        """If a sender's second transaction doesn't fit, its later ones
+        must not be included either, or the block would apply a nonce with
+        a gap before it and fail validation."""
+        s = fresh_state()
+        seed_balance(s, 0, 100.0)
+        t1 = make_tx(0, 1, TICKS_PER_LAPSE, s)
+        s.apply_tx(t1)
+        t2 = make_tx(0, 1, TICKS_PER_LAPSE, s)
+        s.apply_tx(t2)
+        t3 = make_tx(0, 1, TICKS_PER_LAPSE, s)
+        g = genesis()
+        # Reproduce assemble()'s own base_size exactly: measured on the
+        # freshly-created skeleton before tx_bytes is added or hash removed.
+        skeleton_size = block_mod.block_size(block_mod.create(
+            height=g["height"] + 1, previous_hash=g["hash"], transactions=[],
+            builder=address(0), vdf_iterations=block_mod.VDF_ITERATIONS))
+        t1_size = tx_mod.tx_size_in_block(t1, position=0)
+        import unittest.mock as _mock
+        with _mock.patch("block.BLOCK_SIZE_LIMIT", skeleton_size + t1_size):
+            b = block_mod.assemble(g, [t1, t2, t3], address(0), block_mod.VDF_ITERATIONS)
+        assert [t["nonce"] for t in b["transactions"]] == [t1["nonce"]]
 
     def test_assemble_respects_size_limit(self):
         g = genesis()

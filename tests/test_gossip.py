@@ -13,14 +13,11 @@ import sys
 from unittest.mock import MagicMock, patch
 import threading
 
-import pytest
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from gossip import Gossip, STEM_HOPS_MAX as STEM_HOPS, SEEN_TX_CACHE_SIZE
-import tx as tx_mod
+from gossip import Gossip
 import state as state_mod
-from tests.fixtures import address, make_tx, seed_balance
+from tests.fixtures import make_tx, seed_balance
 from params import TICKS_PER_LAPSE
 
 

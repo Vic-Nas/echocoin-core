@@ -16,8 +16,7 @@ import os
 import sys
 import queue
 import threading
-import tempfile
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -28,11 +27,10 @@ import crypto
 import state as state_mod
 import tx as tx_mod
 from chainstate import ChainState
-from node import Node, NodeView, StatsAccumulator, _validate_tail
-from storage import Storage
+from node import Node, NodeView, _validate_tail
 from params import TICKS_PER_LAPSE
 from tests.fixtures import (
-    address, genesis, keypair, make_block, make_tx, pubkey_hex, seed_balance,
+    address, genesis, keypair, make_block, make_tx,
 )
 
 

@@ -242,14 +242,19 @@ def validate(blk, state, chain):
 def assemble(tip, txs, builder_addr, iterations, deadline=None):
     """Assemble a candidate block from a mempool snapshot.
 
-    Pure function: does not touch node state. Sorts candidate transactions
-    by fee-per-byte descending (standard block-building priority) and adds
-    them one at a time, stopping before the block would exceed the size
-    limit or the deadline (if given); a transaction that doesn't fit is
-    skipped rather than treated as a stopping point, since a later,
-    smaller transaction might still fit. Returns a block dict without a
-    VDF proof attached; the caller adds vdf_output, vdf_proof, and
-    recomputes the hash.
+    Pure function: does not touch node state. Groups candidate transactions
+    by sender and sorts each sender's own group by nonce ascending, since a
+    block is only valid if a sender's transactions apply in strict nonce
+    order (block.py's _apply_transactions requires current+1 with no gaps).
+    Groups are then prioritized against each other by their lead (lowest
+    pending nonce) transaction's fee-per-byte, the standard block-building
+    priority. Adds whole groups in that priority order; within a group,
+    stops at the first transaction that doesn't fit, since including a
+    later nonce without its predecessor would create a gap and invalidate
+    the whole block -- unlike across different senders, where skipping one
+    that doesn't fit to let a later, smaller one from someone else in is
+    fine. Returns a block dict without a VDF proof attached; the caller
+    adds vdf_output, vdf_proof, and recomputes the hash.
 
     txs:        candidate txs from the mempool, in any order.
     iterations: this block's required vdf_iterations, from
@@ -272,22 +277,35 @@ def assemble(tip, txs, builder_addr, iterations, deadline=None):
     running     = base_size
     valid_txs   = []
 
-    ordered = sorted(
-        (t for t in txs if isinstance(t, dict)),
-        key=lambda t: t.get("fee", 0) / max(tx_mod.tx_size(t), 1),
+    by_sender = {}
+    for t in txs:
+        if isinstance(t, dict):
+            by_sender.setdefault(t.get("from"), []).append(t)
+    for group in by_sender.values():
+        group.sort(key=lambda t: t["nonce"])
+
+    groups = sorted(
+        by_sender.values(),
+        key=lambda g: g[0].get("fee", 0) / max(tx_mod.tx_size(g[0]), 1),
         reverse=True,
     )
 
-    for t in ordered:
-        if deadline is not None and _time.time() >= deadline:
+    hit_deadline = False
+    for group in groups:
+        if hit_deadline:
             break
-        # Size of this tx as it would appear serialized inside the block.
-        # We add 1 for the "," separator between txs (except the first).
-        t_size = tx_mod.tx_size_in_block(t, position=len(valid_txs))
-        if running + t_size > BLOCK_SIZE_LIMIT:
-            continue  # not break: a later smaller tx might still fit
-        valid_txs.append(t)
-        running += t_size
+        for t in group:
+            if deadline is not None and _time.time() >= deadline:
+                hit_deadline = True
+                break
+            # Size of this tx as it would appear serialized inside the
+            # block. We add 1 for the "," separator between txs (except
+            # the first).
+            t_size = tx_mod.tx_size_in_block(t, position=len(valid_txs))
+            if running + t_size > BLOCK_SIZE_LIMIT:
+                break  # this sender's remaining txs would leave a nonce gap
+            valid_txs.append(t)
+            running += t_size
 
     skeleton["transactions"] = valid_txs
     skeleton["tx_bytes"]     = running - base_size

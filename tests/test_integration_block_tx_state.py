@@ -14,20 +14,17 @@ Flows covered:
 
 import os
 import sys
-from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-import block as block_mod
-import state as state_mod
 import tx as tx_mod
 import mempool as mempool_mod
 from chainstate import ChainState
-from params import TICKS_PER_LAPSE, SUPPLY_CAP
+from params import TICKS_PER_LAPSE
 from tests.fixtures import (
-    address, genesis, make_block, make_tx, seed_balance,
+    address, make_block, make_tx,
 )
 
 

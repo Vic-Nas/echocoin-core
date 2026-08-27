@@ -10,9 +10,7 @@ UDP calls are mocked via udp.request_sync -- no network.
 
 import os
 import sys
-from unittest.mock import MagicMock, patch, call
-
-import pytest
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 

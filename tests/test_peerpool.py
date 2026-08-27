@@ -11,14 +11,11 @@ All tests are local -- no network, no disk.
 import os
 import sys
 import time
-from unittest.mock import patch
-
-import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from peerpool import (
-    PeerPool, COOLDOWN_SECONDS, COOLDOWN_MAX_SECONDS, MAX_STRIKES, STALE_SECONDS
+    PeerPool, COOLDOWN_MAX_SECONDS, MAX_STRIKES, STALE_SECONDS
 )
 
 
