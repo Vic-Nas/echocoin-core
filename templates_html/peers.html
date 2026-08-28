@@ -29,14 +29,7 @@
         <td class="hash-short" style="color:var(--muted)">unknown</td>
         {% endif %}
         <td>{{ height if height is not none else "?" }}</td>
-        {% if version %}
-        <td>{{ version }}</td>
-        {% else %}
-        <td style="color:var(--accent);font-style:italic"
-            title="Not yet confirmed by this peer; showing our own version as a default">
-          {{ self_version }} (assumed)
-        </td>
-        {% endif %}
+        <td style="color:{{ 'var(--muted)' if not version }}">{{ version if version else "unknown" }}</td>
         <td data-ts="{{ last_seen | int }}" class="peer-last-seen">{{ last_seen | int }}</td>
         <td style="color:{{ 'var(--green)' if active else 'var(--muted)' }}">{{ "active" if active else "cooldown" }}</td>
       </tr>

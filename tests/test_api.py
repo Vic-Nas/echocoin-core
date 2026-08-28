@@ -126,8 +126,7 @@ class TestPeersPage:
         assert "?" in html        # peer with no cached height yet
         assert "9.9.9.9:9000" in html
         assert "inferred.wallet.addr" in html
-        assert "0.2.0" in html          # peer's confirmed version
-        assert "(assumed)" in html      # fallback for peers with no confirmed version
+        assert "0.2.0" in html  # peer's confirmed version
 
 
 class TestUpdateNav:
