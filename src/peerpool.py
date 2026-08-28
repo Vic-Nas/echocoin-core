@@ -20,6 +20,27 @@ COOLDOWN_MAX_SECONDS = 300
 MAX_STRIKES          = 3
 STALE_SECONDS        = 300
 
+# Diversity cap: reject a new peer once this many already-held peers share
+# its /24 (IPv4) or /64 (IPv6). Renting many distinct addresses from one
+# contiguous block is cheap for an attacker; this bounds how much of the
+# pool one such block can ever occupy, regardless of how many addresses
+# it presents. Deliberately subnet-only (no ASN lookup): that would need a
+# live external service or a bundled IP-to-ASN database, which this project
+# has otherwise avoided in favor of self-contained UDP discovery.
+MAX_PEERS_PER_SUBNET = 3
+
+
+def _subnet_key(addr: str) -> str | None:
+    """Return the /24 (IPv4) or /64 (IPv6) network the addr's host falls in,
+    or None if the host isn't a parseable IP."""
+    try:
+        host, _port = addr.rsplit(":", 1)
+        ip = ipaddress.ip_address(host)
+    except (ValueError, AttributeError):
+        return None
+    prefix = 24 if ip.version == 4 else 64
+    return str(ipaddress.ip_network(f"{ip}/{prefix}", strict=False))
+
 
 def is_routable_peer_addr(addr: str) -> bool:
     """Reject loopback/private/link-local/multicast hosts. A malicious DHT
@@ -51,15 +72,23 @@ class PeerPool:
             return False
         now_mono = time.monotonic()
         with self._lock:
+            if addr in self._peers:
+                self._peers[addr] = time.time()
+                return False
             if len(self._peers) >= self._max_peers:
                 return False
             if now_mono < self._fails.get(addr, {}).get("cooldown_until", 0.0):
                 return False
-            was_new = addr not in self._peers
+            subnet = _subnet_key(addr)
+            if subnet is not None:
+                same_subnet = sum(
+                    1 for p in self._peers if _subnet_key(p) == subnet
+                )
+                if same_subnet >= MAX_PEERS_PER_SUBNET:
+                    return False
             self._peers[addr] = time.time()
-        if was_new:
-            log.debug("[peer] added  addr=%s", addr)
-        return was_new
+        log.debug("[peer] added  addr=%s", addr)
+        return True
 
     def touch(self, addr):
         """Update last-seen timestamp and clear strikes on successful contact."""
