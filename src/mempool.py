@@ -15,10 +15,6 @@ MEMPOOL_TTL_SECONDS = 30 * 60
 MEMPOOL_MAX_BYTES = 100_000_000
 
 
-def _fee_rate(t):
-    return t.get("fee", 0) / max(tx_mod.tx_size(t), 1)
-
-
 class Mempool:
     """
     The node loop is the only writer. Flask threads are read-only.
@@ -40,16 +36,16 @@ class Mempool:
         overflow = self._total_bytes + size - MEMPOOL_MAX_BYTES
         to_evict = []
         if overflow > 0:
-            rate = _fee_rate(tx_dict)
+            rate = tx_mod.fee_rate(tx_dict)
             by_worst_first = sorted(
                 ((h2, t2) for h2, (t2, _) in self._pool.items()),
-                key=lambda item: _fee_rate(item[1]),
+                key=lambda item: tx_mod.fee_rate(item[1]),
             )
             freed = 0
             for h2, t2 in by_worst_first:
                 if freed >= overflow:
                     break
-                if _fee_rate(t2) >= rate:
+                if tx_mod.fee_rate(t2) >= rate:
                     break
                 to_evict.append(h2)
                 freed += tx_mod.tx_size(t2)

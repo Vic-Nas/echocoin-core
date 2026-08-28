@@ -35,6 +35,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from discovery_dht import DHTDiscovery, PUT_REFRESH_INTERVAL
+from peerpool import is_routable_peer_addr
 
 log = logging.getLogger("ec.discovery")
 
@@ -70,7 +71,7 @@ class Discovery:
     # ------------------------------------------------------------------
 
     def enqueue_candidate(self, addr):
-        if isinstance(addr, str) and ":" in addr:
+        if isinstance(addr, str) and ":" in addr and is_routable_peer_addr(addr):
             with self._lock:
                 self._candidates.add(addr)
 

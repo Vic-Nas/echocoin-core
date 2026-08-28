@@ -141,10 +141,6 @@ def _parse_csv_outputs(outputs_raw):
     return outputs, errors
 
 
-def _fee_rate(t):
-    return t.get("fee", 0) / max(tx_mod.tx_size(t), 1)
-
-
 def fee_estimate(node):
     """Current mempool fee-per-byte picture for the send UI.
 
@@ -161,7 +157,7 @@ def fee_estimate(node):
     if not pending:
         return {"pending": 0, "min": 0, "median": 0, "max": 0, "next_block": 0}
 
-    rates = sorted(_fee_rate(t) for t in pending)
+    rates = sorted(tx_mod.fee_rate(t) for t in pending)
     n = len(rates)
     median = rates[n // 2] if n % 2 else (rates[n // 2 - 1] + rates[n // 2]) / 2
 
@@ -172,7 +168,7 @@ def fee_estimate(node):
     # Full block: the going rate is the lowest fee-per-byte that still made
     # it in. Otherwise everything pending fits, so nothing is required to
     # clear the next block.
-    next_block = min((_fee_rate(t) for t in included), default=0) if len(included) < n else 0
+    next_block = min((tx_mod.fee_rate(t) for t in included), default=0) if len(included) < n else 0
 
     return {"pending": n, "min": rates[0], "median": median, "max": rates[-1],
             "next_block": next_block}

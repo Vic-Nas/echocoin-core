@@ -5,6 +5,7 @@ touches peers reads from or writes to a PeerPool instance, but they
 never call each other.
 """
 
+import ipaddress
 import logging
 import secrets
 import threading
@@ -20,6 +21,20 @@ MAX_STRIKES          = 3
 STALE_SECONDS        = 300
 
 
+def is_routable_peer_addr(addr: str) -> bool:
+    """Reject loopback/private/link-local/multicast hosts. A malicious DHT
+    or peer-exchange entry pointing at e.g. 127.0.0.1 or a 10.x address
+    would otherwise make this node send UDP probes into its own host or
+    internal network on the attacker's behalf."""
+    try:
+        host, _port = addr.rsplit(":", 1)
+        ip = ipaddress.ip_address(host)
+    except (ValueError, AttributeError):
+        return False
+    return not (ip.is_private or ip.is_loopback or ip.is_link_local
+                or ip.is_multicast or ip.is_reserved or ip.is_unspecified)
+
+
 class PeerPool:
 
     def __init__(self, host, port, max_peers=None):
@@ -32,6 +47,8 @@ class PeerPool:
 
     def add(self, addr):
         """Add a peer. Returns True if it was new."""
+        if not is_routable_peer_addr(addr):
+            return False
         now_mono = time.monotonic()
         with self._lock:
             if len(self._peers) >= self._max_peers:

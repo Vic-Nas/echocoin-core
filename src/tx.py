@@ -46,6 +46,12 @@ def tx_size(tx_dict):
     return len(canonical_json(fields))
 
 
+def fee_rate(tx_dict):
+    """Fee per fee-basis byte. Shared by mempool eviction and API fee estimates
+    so the two can't drift apart."""
+    return tx_dict.get("fee", 0) / max(tx_size(tx_dict), 1)
+
+
 def tx_size_in_block(tx_dict, position=0):
     """Size of tx_dict as it appears serialized inside a block's JSON array.
     Position 0 = first element (no leading comma). Position > 0 adds 1 byte

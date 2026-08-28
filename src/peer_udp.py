@@ -72,6 +72,20 @@ RECV_TIMEOUT     = 2.0    # seconds select/recvfrom timeout
 SYNC_TIMEOUT     = 30.0   # seconds to wait for a full sync response
 PING_TIMEOUT     = 8.0    # seconds to wait for PONG
 
+# Caps against a spoofed-source amplification attack: an attacker who forges
+# a peer's source address in a GETSYNC and requests the whole chain would
+# otherwise turn one small datagram into a multi-MB reply blasted at the
+# victim. This bounds both how many blocks one request can pull and how
+# large a single reassembled message (chunk_total) may claim to be.
+MAX_SYNC_BLOCKS   = 500
+MAX_CHUNK_TOTAL   = 2000   # ~2.8MB reassembled, well above any real message
+
+# Per-source-IP token bucket: caps how many datagrams/sec one address can
+# push into the worker pool, so a flood (PING or otherwise) from one sender
+# can't starve processing of legitimate traffic from everyone else.
+RATE_LIMIT_PER_SEC = 50
+RATE_LIMIT_BURST    = 100
+
 # Header: 1 (type) + 4 (msg_id) + 2 (chunk_idx) + 2 (chunk_total) = 9 bytes
 HDR_FMT  = "!BIHh"  # note: chunk_total signed so -1 = ACK special
 HDR_SIZE = struct.calcsize(HDR_FMT)
@@ -126,6 +140,8 @@ class _Reassembler:
         """Return complete payload bytes when all chunks arrive, else None."""
         if chunk_total == 1:
             return payload  # single-chunk, no reassembly needed
+        if chunk_total <= 0 or chunk_total > MAX_CHUNK_TOTAL:
+            return None  # bogus or oversized claim; refuse to allocate for it
 
         key = (addr, msg_id)
         with self._lock:
@@ -157,6 +173,8 @@ class _PendingSync:
         self.result  = None   # set when complete
 
     def feed(self, chunk_idx, chunk_total, payload):
+        if chunk_total <= 0 or chunk_total > MAX_CHUNK_TOTAL:
+            return  # bogus or oversized claim from a malicious sync peer
         self.total = chunk_total
         self.chunks[chunk_idx] = payload
         if len(self.chunks) == chunk_total:
@@ -191,9 +209,11 @@ class UDPTransport:
         self._info_lock   = threading.Lock()
 
         self.our_external_addr: str | None = None  # set from PONG responses
-        self._ext_addr_votes: dict[str, int] = {}  # addr -> vote count
+        self._ext_addr_votes: dict[str, set] = {}  # observed addr -> {voter ip, ...}
         self._seen_msg: dict[int, float] = {}      # msg_id -> ts for dedup
         self._seen_lock = threading.Lock()
+        self._rate_buckets: dict[str, list] = {}   # source ip -> [tokens, last_refill]
+        self._rate_lock   = threading.Lock()
         self._executor  = ThreadPoolExecutor(max_workers=16, thread_name_prefix="udp-cb")
         self._on_punch_go   = None  # set by discovery after init
         self._get_tip_fn    = None  # set by main after node init
@@ -242,10 +262,15 @@ class UDPTransport:
             with self._pong_lock:
                 result = self._pong_addrs.pop(msg_id, None)
                 self._pong_events.pop(msg_id, None)
-            # Vote on our external address; require 2 agreements before committing
+            # Vote on our external address. Require agreement from 2 distinct
+            # voters that are already admitted to the peer pool -- otherwise
+            # two throwaway addresses answering our own outbound PINGs could
+            # feed a false "observed" address before ever being trusted.
             if result:
-                self._ext_addr_votes[result] = self._ext_addr_votes.get(result, 0) + 1
-                if self._ext_addr_votes[result] >= 2:
+                voters = self._ext_addr_votes.setdefault(result, set())
+                if addr in self._pool.all_addrs():
+                    voters.add(addr)
+                if len(voters) >= 2:
                     self.our_external_addr = result
                 elif self.our_external_addr is None:
                     self.our_external_addr = result  # tentative until confirmed
@@ -378,7 +403,32 @@ class UDPTransport:
                 continue
             except OSError:
                 break
+            if not self._allow_rate(sender[0]):
+                continue
             self._executor.submit(self._handle_datagram, data, sender)
+
+    def _allow_rate(self, source_ip: str) -> bool:
+        """Token-bucket check per source IP. Cheap, in the recv thread itself
+        so an over-limit sender never even reaches the worker pool."""
+        now = time.monotonic()
+        with self._rate_lock:
+            bucket = self._rate_buckets.get(source_ip)
+            if bucket is None:
+                self._rate_buckets[source_ip] = [RATE_LIMIT_BURST - 1, now]
+                if len(self._rate_buckets) > 20_000:
+                    cutoff = now - 60
+                    self._rate_buckets = {
+                        ip: b for ip, b in self._rate_buckets.items() if b[1] > cutoff
+                    }
+                return True
+            tokens, last = bucket
+            tokens = min(RATE_LIMIT_BURST, tokens + (now - last) * RATE_LIMIT_PER_SEC)
+            if tokens < 1:
+                bucket[1] = now
+                return False
+            bucket[0] = tokens - 1
+            bucket[1] = now
+            return True
 
     def _handle_datagram(self, data: bytes, sender: tuple):
         unpacked = _unpack(data)
@@ -513,7 +563,11 @@ class UDPTransport:
         sender_addr = f"{sender[0]}:{sender[1]}"
         self._pool.touch(sender_addr)
         from_h = data.get("from_h", 0)
-        to_h   = data.get("to_h")
+        if not isinstance(from_h, int) or from_h < 0:
+            from_h = 0
+        to_h = data.get("to_h")
+        capped_to = from_h + MAX_SYNC_BLOCKS - 1
+        to_h = capped_to if not isinstance(to_h, int) else min(to_h, capped_to)
         chain  = self._get_chain_fn(from_h, to_h) if self._get_chain_fn else []
         payload = _encode({"genesis": self.genesis_hash, "chain": chain})
         self._send_chunked(MT_SYNC, msg_id, payload, sender)
