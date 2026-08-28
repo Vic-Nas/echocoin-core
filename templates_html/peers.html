@@ -14,10 +14,19 @@
         <td>&mdash;</td>
       </tr>
     {% if rows %}
-      {% for addr, last_seen, active, height, wallet in rows %}
+      {% for addr, last_seen, active, height, wallet, inferred_wallet in rows %}
       <tr>
         <td class="hash-short">{{ addr }}</td>
-        <td class="hash-short">{{ wallet if wallet else "unknown" }}</td>
+        {% if wallet %}
+        <td class="hash-short">{{ wallet }}</td>
+        {% elif inferred_wallet %}
+        <td class="hash-short" style="color:var(--accent);font-style:italic"
+            title="Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly">
+          {{ inferred_wallet }} (unconfirmed)
+        </td>
+        {% else %}
+        <td class="hash-short" style="color:var(--muted)">unknown</td>
+        {% endif %}
         <td>{{ height if height is not none else "?" }}</td>
         <td data-ts="{{ last_seen | int }}" class="peer-last-seen">{{ last_seen | int }}</td>
         <td style="color:{{ 'var(--green)' if active else 'var(--muted)' }}">{{ "active" if active else "cooldown" }}</td>

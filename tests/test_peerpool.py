@@ -290,12 +290,13 @@ class TestSnapshot:
         p.add("1.2.3.4:9000")
         rows = p.snapshot()
         assert len(rows) == 1
-        addr, last_seen, active, height, wallet = rows[0]
+        addr, last_seen, active, height, wallet, inferred_wallet = rows[0]
         assert addr == "1.2.3.4:9000"
         assert last_seen > 0
         assert active is True
         assert height is None
         assert wallet == ""
+        assert inferred_wallet == ""
 
     def test_snapshot_reports_cooldown_peer_as_inactive(self):
         p = make_pool()
@@ -315,6 +316,51 @@ class TestSnapshot:
         rows = p.snapshot()
         assert rows[0][3] == 42
         assert rows[0][4] == "a.b.c"
+
+    def test_snapshot_includes_inferred_wallet(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.note_relayed_builder(peer, "x.y.z")
+        rows = p.snapshot()
+        assert rows[0][4] == ""       # no confirmed wallet
+        assert rows[0][5] == "x.y.z"  # inferred, from the relayed block
+
+    def test_confirmed_wallet_does_not_clear_inferred(self):
+        """update_info and note_relayed_builder update different fields --
+        neither should wipe the other out."""
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.note_relayed_builder(peer, "inferred.addr")
+        p.update_info(peer, height=1, wallet="confirmed.addr")
+        rows = p.snapshot()
+        assert rows[0][4] == "confirmed.addr"
+        assert rows[0][5] == "inferred.addr"
+
+
+class TestNoteRelayedBuilder:
+    def test_noop_for_unknown_peer(self):
+        p = make_pool()
+        p.note_relayed_builder("1.2.3.4:9000", "some.addr")
+        assert p.snapshot() == []
+
+    def test_noop_when_builder_is_falsy(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.note_relayed_builder(peer, None)
+        p.note_relayed_builder(peer, "")
+        assert p.snapshot()[0][5] == ""
+
+    def test_cleared_on_remove(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.note_relayed_builder(peer, "some.addr")
+        p.remove(peer)
+        p.add(peer)
+        assert p.snapshot()[0][5] == ""
 
 
 class TestUpdateInfo:

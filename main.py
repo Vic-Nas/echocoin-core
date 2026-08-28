@@ -117,6 +117,10 @@ def main():
     # UDP transport: single socket for all peer communication
     # ------------------------------------------------------------------
     def on_block(block, sender_addr):
+        # Best-effort placeholder wallet for the peers page, shown as
+        # unconfirmed until/unless a GETINFO exchange confirms one directly --
+        # sender_addr may just be relaying someone else's block.
+        pool.note_relayed_builder(sender_addr, block.get("builder"))
         net_in_q.put({"type": "block", "block": block, "sender": sender_addr})
 
     def on_tx(tx, sender_addr, msg_id, remaining_hops=0, relay_type="tx_fluff"):
