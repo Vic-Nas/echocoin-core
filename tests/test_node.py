@@ -595,16 +595,34 @@ class TestReorgMempool:
         # Produce a new chain that does NOT contain t.
         # Use apply_better_chain directly with a chain that _evaluate_remote_chain
         # will accept — we patch is_better_than to always return True so the test
-        # focuses on mempool restoration logic, not fork choice.
+        # focuses on mempool restoration logic, not fork choice. from_chain is
+        # wrapped so the *fully replayed* remote chain's state also has
+        # address(0)'s balance (not just node.cs.state's manual credit above)
+        # -- otherwise t correctly fails re-validation on balance under the
+        # new chain, which is the fix under test working as intended, not a
+        # bug. _validate_tail's own from_chain(prefix) call is left alone.
         b1_new = make_block(1, g["hash"], [], builder_index=1)
         b2_new = make_block(2, b1_new["hash"], [], builder_index=1)
+        full_chain = [g, b1_new, b2_new]
+        orig_from_chain = ChainState.from_chain.__func__
+
+        def patched_from_chain(cls, chain):
+            cs = orig_from_chain(cls, chain)
+            if chain == full_chain:
+                cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
+                cs.state.total_minted += 100 * TICKS_PER_LAPSE
+            return cs
+
         import unittest.mock as _mock
         with _mock.patch.object(
             node.cs.__class__, "is_better_than", return_value=True
+        ), _mock.patch.object(
+            ChainState, "from_chain", classmethod(patched_from_chain)
         ):
-            ok, err = node.apply_better_chain([g, b1_new, b2_new])
+            ok, err = node.apply_better_chain(full_chain)
         assert ok is True, err
-        # t was in the old chain at fork_point=1 and is not in the new chain
+        # t was in the old chain at fork_point=1, is not in the new chain,
+        # and is still valid (nonce/balance) against the new chain's state.
         assert node.mempool.get(tx_mod.tx_hash(t)) is not None
 
     def test_reorg_drops_confirmed_txs(self, node_env):
@@ -627,7 +645,35 @@ class TestReorgMempool:
 
         # New chain also contains t (same tx confirmed there too)
         b1_new = make_block(1, g["hash"], [t], builder_index=1)
-        node._reorg_mempool(fork_point=1, new_chain=[g, b1_new])
+        node._reorg_mempool(fork_point=1, new_chain=[g, b1_new], new_state=node.cs.state)
 
         # t is confirmed in new chain -> must NOT appear in mempool
         assert node.mempool.get(h) is None
+
+    def test_reorg_does_not_readd_tx_invalid_under_new_state(self, node_env):
+        """A tx from the abandoned branch that's no longer valid against the
+        new chain's state (e.g. its nonce is already used there by a
+        different tx) must not be silently re-admitted -- doing so would
+        make every subsequent self-produced block fail validation."""
+        node, *_ = node_env
+        node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
+        node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
+
+        g = node.cs.chain[0]
+        t_old = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)  # nonce 1
+        b1_old = make_block(1, g["hash"], [t_old])
+        node.cs = ChainState.from_genesis()
+        node.cs.chain.append(b1_old)
+
+        # New chain confirms a *different* tx from address(0) at the same
+        # nonce, so t_old's nonce is now stale against the new state.
+        new_state = state_mod.State()
+        new_state.credit(address(0), 100 * TICKS_PER_LAPSE)
+        new_state.total_minted += 100 * TICKS_PER_LAPSE
+        t_new = make_tx(0, 2, TICKS_PER_LAPSE, new_state, nonce_override=1)
+        new_state.apply_tx(t_new)
+        b1_new = make_block(1, g["hash"], [t_new], builder_index=1)
+
+        node._reorg_mempool(fork_point=1, new_chain=[g, b1_new], new_state=new_state)
+
+        assert node.mempool.get(tx_mod.tx_hash(t_old)) is None

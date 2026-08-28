@@ -6,6 +6,18 @@ import tx as tx_mod
 
 MEMPOOL_TTL_SECONDS = 30 * 60
 
+# Hard cap on total pending tx bytes (fee-basis size, signature excluded --
+# same measure block.assemble() prioritizes by). ~10x BLOCK_SIZE_LIMIT: room
+# for several blocks' worth of backlog without letting the mempool grow
+# unbounded under spam. Once full, a new tx is admitted only by outbidding
+# and evicting enough of the lowest fee-per-byte txs currently held to fit --
+# same eviction policy as Bitcoin Core's mempool.
+MEMPOOL_MAX_BYTES = 100_000_000
+
+
+def _fee_rate(t):
+    return t.get("fee", 0) / max(tx_mod.tx_size(t), 1)
+
 
 class Mempool:
     """
@@ -17,20 +29,46 @@ class Mempool:
     def __init__(self):
         # tx_hash -> (tx_dict, entered_monotonic)
         self._pool: dict = {}
+        self._total_bytes = 0
 
     def add(self, tx_dict) -> tuple:
         h = tx_mod.tx_hash(tx_dict)
         if h in self._pool:
             return False, "duplicate"
+
+        size = tx_mod.tx_size(tx_dict)
+        overflow = self._total_bytes + size - MEMPOOL_MAX_BYTES
+        to_evict = []
+        if overflow > 0:
+            rate = _fee_rate(tx_dict)
+            by_worst_first = sorted(
+                ((h2, t2) for h2, (t2, _) in self._pool.items()),
+                key=lambda item: _fee_rate(item[1]),
+            )
+            freed = 0
+            for h2, t2 in by_worst_first:
+                if freed >= overflow:
+                    break
+                if _fee_rate(t2) >= rate:
+                    break
+                to_evict.append(h2)
+                freed += tx_mod.tx_size(t2)
+            if freed < overflow:
+                return False, "mempool full: fee too low to replace pending txs"
+
+        self.remove_many(to_evict)
         self._pool[h] = (tx_dict, time.monotonic())
+        self._total_bytes += size
         return True, h
 
     def remove(self, tx_hash):
-        self._pool.pop(tx_hash, None)
+        entry = self._pool.pop(tx_hash, None)
+        if entry:
+            self._total_bytes -= tx_mod.tx_size(entry[0])
 
     def remove_many(self, tx_hashes):
         for h in tx_hashes:
-            self._pool.pop(h, None)
+            self.remove(h)
 
     def get(self, tx_hash):
         entry = self._pool.get(tx_hash)
@@ -75,9 +113,7 @@ class Mempool:
         """Evict txs that can never become valid: a nonce already superseded
         on chain, or simply too old. Returns list of pruned hashes."""
         now = time.monotonic()
-        pruned = []
-        for h, (t, entered) in list(self._pool.items()):
-            if t["nonce"] <= state.get_nonce(t["from"]) or now - entered > ttl_seconds:
-                pruned.append(h)
-                del self._pool[h]
+        pruned = [h for h, (t, entered) in self._pool.items()
+                  if t["nonce"] <= state.get_nonce(t["from"]) or now - entered > ttl_seconds]
+        self.remove_many(pruned)
         return pruned

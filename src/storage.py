@@ -130,18 +130,6 @@ class Storage:
         row = Block.select(Block.height).order_by(Block.height.desc()).first()
         return row.height if row else -1
 
-    def replace_chain(self, from_height, blocks):
-        with db.atomic():
-            Block.delete().where(Block.height >= from_height).execute()
-            TxIndex.delete().where(TxIndex.block_height >= from_height).execute()
-            AddrIndex.delete().where(AddrIndex.block_height >= from_height).execute()
-            Block.insert_many([
-                {"height": b["height"], "hash": b["hash"], "data": json.dumps(b)}
-                for b in blocks
-            ]).on_conflict_replace().execute()
-            for blk in blocks:
-                self._index_block(blk)
-
     # ------------------------------------------------------------------
     # State snapshots
     # ------------------------------------------------------------------

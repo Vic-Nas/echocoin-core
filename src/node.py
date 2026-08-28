@@ -435,22 +435,26 @@ class Node:
 
         return True, None, fork_point, tail, remote_cs
 
+    def _readd_valid_txs(self, txs, exclude_hashes, state):
+        """Re-add unconfirmed txs to the mempool, each validated against
+        state first -- a stale-nonce or otherwise now-invalid tx must not
+        be silently re-admitted."""
+        for t in txs:
+            if tx_mod.tx_hash(t) in exclude_hashes:
+                continue
+            ok, _ = tx_mod.validate(t, state)
+            if ok:
+                self.mempool.add(t)
+
     def _salvage_fork_txs(self, fork_point, tail):
-        """Add unconfirmed, still-valid txs from a rejected fork into the
+        """Re-add unconfirmed, still-valid txs from a rejected fork into the
         local mempool. self.cs is unchanged here (the remote chain lost),
-        so txs are checked against the current local state before being
-        re-added -- a stale-nonce or otherwise invalid tx from the losing
-        fork must not silently sit in the mempool."""
+        so txs are checked against the current local state."""
         confirmed = {tx_mod.tx_hash(t)
                      for blk in self.cs.chain[fork_point:]
                      for t in blk.get("transactions", [])}
-        for blk in tail:
-            for t in blk.get("transactions", []):
-                if tx_mod.tx_hash(t) in confirmed:
-                    continue
-                ok, _ = tx_mod.validate(t, self.cs.state)
-                if ok:
-                    self.mempool.add(t)
+        txs = (t for blk in tail for t in blk.get("transactions", []))
+        self._readd_valid_txs(txs, confirmed, self.cs.state)
 
     def apply_better_chain(self, remote_chain):
         """Accept remote_chain if it is better than local. Used by syncer."""
@@ -462,7 +466,7 @@ class Node:
 
         # Storage write first; if it fails, mempool stays consistent with self.cs.
         self.storage.replace_chain_and_state(fork_point, tail, remote_cs.state)
-        self._reorg_mempool(fork_point, remote_chain)
+        self._reorg_mempool(fork_point, remote_chain, remote_cs.state)
         self.cs = remote_cs
         self.view = NodeView(self.cs)
 
@@ -472,14 +476,16 @@ class Node:
             log.info("[sync] height=%d  fork_point=%d", self.cs.height, fork_point)
         return True, None
 
-    def _reorg_mempool(self, fork_point, new_chain):
-        old_txs = {tx_mod.tx_hash(t): t
-                   for blk in self.cs.chain[fork_point:]
-                   for t in blk.get("transactions", [])}
+    def _reorg_mempool(self, fork_point, new_chain, new_state):
+        """Re-add unconfirmed txs from the abandoned local branch, validated
+        against the new chain's state (not the old self.cs being replaced --
+        a tx that's no longer valid under the new chain must not be
+        silently re-admitted, or it can stall this node's own block
+        production every cycle until it's pruned)."""
+        old_txs = [t for blk in self.cs.chain[fork_point:]
+                   for t in blk.get("transactions", [])]
         new_confirmed = {tx_mod.tx_hash(t)
                          for blk in new_chain[fork_point:]
                          for t in blk.get("transactions", [])}
         self.mempool.remove_many(new_confirmed)
-        for h, t in old_txs.items():
-            if h not in new_confirmed:
-                self.mempool.add(t)
+        self._readd_valid_txs(old_txs, new_confirmed, new_state)

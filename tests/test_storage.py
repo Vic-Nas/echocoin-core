@@ -2,7 +2,7 @@
 Unit tests for storage.py
 
 Covers: save_block, load_block, load_all_blocks, chain_height,
-save_state, load_state, state_exists, replace_chain, save_block_and_state,
+save_state, load_state, state_exists, save_block_and_state,
 replace_chain_and_state, TxIndex, AddrIndex, get_meta, set_meta.
 
 Uses an in-memory SQLite database via tmp_path fixture.
@@ -181,7 +181,7 @@ class TestTxAndAddrIndex:
 
 
 # ---------------------------------------------------------------------------
-# 4. replace_chain
+# 4. replace_chain_and_state (reorg path)
 # ---------------------------------------------------------------------------
 
 class TestReplaceChain:
@@ -194,7 +194,7 @@ class TestReplaceChain:
         store.save_block(b2)
         # Reorg: replace from height 1 with a new block
         b1_new = make_block(1, g["hash"], [], builder_index=1)
-        store.replace_chain(from_height=1, blocks=[b1_new])
+        store.replace_chain_and_state(fork_point=1, blocks=[b1_new], state=fresh_state())
         assert store.chain_height() == 1
         assert store.load_block(2) is None
 
@@ -202,7 +202,7 @@ class TestReplaceChain:
         g = genesis()
         store.save_block(g)
         b1_new = make_block(1, g["hash"], [], builder_index=1)
-        store.replace_chain(from_height=1, blocks=[b1_new])
+        store.replace_chain_and_state(fork_point=1, blocks=[b1_new], state=fresh_state())
         loaded = store.load_block(1)
         assert loaded["builder"] == address(1)
 
