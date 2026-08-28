@@ -16,6 +16,8 @@ jobs:
     outputs:
       tag:      ${{ steps.read.outputs.tag }}
       prev_ver: ${{ steps.read.outputs.prev_ver }}
+      severity: ${{ steps.read.outputs.severity }}
+      title:    ${{ steps.read.outputs.title }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -30,8 +32,29 @@ jobs:
             exit 1
           fi
           PREV=$(git show HEAD~1:VERSION 2>/dev/null | tr -d '[:space:]' || echo "")
-          echo "tag=v$VERSION"  >> "$GITHUB_OUTPUT"
-          echo "prev_ver=$PREV" >> "$GITHUB_OUTPUT"
+
+          # Same severity rule as src/update_check.py's classify_update():
+          # first component (major) changed -> protocol (wire/consensus
+          # break likely); second component (minor) changed -> critical;
+          # otherwise a routine patch bump. Keep these in sync.
+          SEVERITY="minor"
+          TITLE_PREFIX=""
+          if echo "$PREV" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            V_MAJ=$(echo "$VERSION" | cut -d. -f1); V_MIN=$(echo "$VERSION" | cut -d. -f2)
+            P_MAJ=$(echo "$PREV"    | cut -d. -f1); P_MIN=$(echo "$PREV"    | cut -d. -f2)
+            if [ "$V_MAJ" != "$P_MAJ" ]; then
+              SEVERITY="protocol"
+              TITLE_PREFIX="[PROTOCOL CHANGE] "
+            elif [ "$V_MIN" != "$P_MIN" ]; then
+              SEVERITY="critical"
+              TITLE_PREFIX="[CRITICAL] "
+            fi
+          fi
+
+          echo "tag=v$VERSION"      >> "$GITHUB_OUTPUT"
+          echo "prev_ver=$PREV"     >> "$GITHUB_OUTPUT"
+          echo "severity=$SEVERITY" >> "$GITHUB_OUTPUT"
+          echo "title=${TITLE_PREFIX}LapseCoin v$VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Check tag does not already exist
         run: |
@@ -243,8 +266,17 @@ jobs:
             }
           ' | sort -rn | head -10 | awk '{$1=""; print NR"."$0}' > /tmp/largest.txt
 
+          SEVERITY="${{ needs.version.outputs.severity }}"
+          case "$SEVERITY" in
+            protocol) SEVERITY_LINE="**Protocol change** -- old and new nodes may not sync with each other. Upgrade recommended." ;;
+            critical) SEVERITY_LINE="**Critical update** -- upgrading is recommended." ;;
+            *)        SEVERITY_LINE="Routine update." ;;
+          esac
+
           echo "CHANGELOG<<EOF" >> "$GITHUB_OUTPUT"
           echo "## ${{ needs.version.outputs.tag }}" >> "$GITHUB_OUTPUT"
+          echo "" >> "$GITHUB_OUTPUT"
+          echo "$SEVERITY_LINE" >> "$GITHUB_OUTPUT"
           echo "" >> "$GITHUB_OUTPUT"
           echo "### 10 largest commits" >> "$GITHUB_OUTPUT"
           cat /tmp/largest.txt >> "$GITHUB_OUTPUT"
@@ -254,7 +286,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.version.outputs.tag }}
-          name: LapseCoin ${{ needs.version.outputs.tag }}
+          name: ${{ needs.version.outputs.title }}
           body: ${{ steps.changelog.outputs.CHANGELOG }}
           files: |
             artifacts/linux/lapsecoin
