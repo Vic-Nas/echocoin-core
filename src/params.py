@@ -8,7 +8,22 @@ TICKS_PER_LAPSE = 100_000_000
 # over a 20-year half-life. No halvings, no supply shock.
 SUPPLY_CAP        = 21_000_000 * TICKS_PER_LAPSE
 EMISSION_HALFLIFE = 5_000_000  # blocks (~20 years at 2 min/block)
-EMISSION_RATE     = 0.5 ** (1 / EMISSION_HALFLIFE)  # per-block decay factor
+
+# Per-block decay fraction (1 - 0.5**(1/EMISSION_HALFLIFE)), as an exact
+# integer ratio rather than a float. Every node must derive byte-identical
+# block rewards or they silently fork on replay; float exponentiation
+# (`0.5 ** (1/N)`) depends on the platform's libm and isn't guaranteed
+# bit-identical across interpreters/OSes/CPUs, which a plain integer ratio
+# is immune to. Computed once (see EMISSION_DECAY_NUMERATOR's derivation
+# below) with 60-digit decimal precision -- far more precision than a
+# double carries -- then fixed as constants; never recomputed at runtime.
+#   from decimal import Decimal, getcontext
+#   getcontext().prec = 60
+#   one_minus = 1 - (Decimal(1) / 2) ** (Decimal(1) / EMISSION_HALFLIFE)
+#   EMISSION_DECAY_NUMERATOR = int((one_minus * EMISSION_DECAY_DENOMINATOR)
+#                                  .to_integral_value())
+EMISSION_DECAY_DENOMINATOR = 10 ** 40
+EMISSION_DECAY_NUMERATOR   = 1386294265029292275522718605160789
 
 BLOCK_CYCLE_SECONDS = 120
 

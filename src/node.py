@@ -464,11 +464,22 @@ class Node:
                 self._salvage_fork_txs(fork_point, tail)
             return False, err
 
-        # Storage write first; if it fails, mempool stays consistent with self.cs.
+        # Storage write first; if it fails, mempool and self.cs stay untouched
+        # and consistent with each other.
         self.storage.replace_chain_and_state(fork_point, tail, remote_cs.state)
-        self._reorg_mempool(fork_point, remote_chain, remote_cs.state)
+        old_chain = self.cs.chain  # abandoned branch; _reorg_mempool needs
+                                    # this, not the new chain we're about to swap in
+        # self.cs/self.view must track storage the instant it succeeds. A
+        # failure past this point (e.g. a malformed re-added tx) must not
+        # leave storage on the new chain while self.cs -- what mining and
+        # validation actually run against -- still points at the old one.
         self.cs = remote_cs
         self.view = NodeView(self.cs)
+        try:
+            self._reorg_mempool(fork_point, old_chain, remote_chain, remote_cs.state)
+        except Exception:
+            log.exception("[reorg] mempool re-add failed; chain state already "
+                          "committed, mempool may hold stale entries until pruned")
 
         if fork_point < self.cs.height:
             log.warning("[reorg] height=%d  fork_point=%d", self.cs.height, fork_point)
@@ -476,13 +487,13 @@ class Node:
             log.info("[sync] height=%d  fork_point=%d", self.cs.height, fork_point)
         return True, None
 
-    def _reorg_mempool(self, fork_point, new_chain, new_state):
+    def _reorg_mempool(self, fork_point, old_chain, new_chain, new_state):
         """Re-add unconfirmed txs from the abandoned local branch, validated
-        against the new chain's state (not the old self.cs being replaced --
+        against the new chain's state (not the old chain being replaced --
         a tx that's no longer valid under the new chain must not be
         silently re-admitted, or it can stall this node's own block
         production every cycle until it's pruned)."""
-        old_txs = [t for blk in self.cs.chain[fork_point:]
+        old_txs = [t for blk in old_chain[fork_point:]
                    for t in blk.get("transactions", [])]
         new_confirmed = {tx_mod.tx_hash(t)
                          for blk in new_chain[fork_point:]

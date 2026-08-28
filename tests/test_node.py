@@ -645,7 +645,8 @@ class TestReorgMempool:
 
         # New chain also contains t (same tx confirmed there too)
         b1_new = make_block(1, g["hash"], [t], builder_index=1)
-        node._reorg_mempool(fork_point=1, new_chain=[g, b1_new], new_state=node.cs.state)
+        node._reorg_mempool(fork_point=1, old_chain=node.cs.chain,
+                           new_chain=[g, b1_new], new_state=node.cs.state)
 
         # t is confirmed in new chain -> must NOT appear in mempool
         assert node.mempool.get(h) is None
@@ -674,6 +675,7 @@ class TestReorgMempool:
         new_state.apply_tx(t_new)
         b1_new = make_block(1, g["hash"], [t_new], builder_index=1)
 
-        node._reorg_mempool(fork_point=1, new_chain=[g, b1_new], new_state=new_state)
+        node._reorg_mempool(fork_point=1, old_chain=node.cs.chain,
+                           new_chain=[g, b1_new], new_state=new_state)
 
         assert node.mempool.get(tx_mod.tx_hash(t_old)) is None

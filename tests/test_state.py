@@ -5,7 +5,7 @@ Covers: credit, debit, set_nonce, apply_tx, compute_block_reward,
 apply_reward_distribution, snapshot, from_snapshot, and the emission formula.
 
   - can_mint = SUPPLY_CAP - total_minted
-  - reward = int(can_mint * (1 - EMISSION_RATE))
+  - reward = (can_mint * EMISSION_DECAY_NUMERATOR) // EMISSION_DECAY_DENOMINATOR
   - the full block reward mints to the builder (no burn-based split)
 """
 
@@ -19,7 +19,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import state as state_mod
 from state import compute_reward
 from params import (
-    EMISSION_RATE, SUPPLY_CAP, TICKS_PER_LAPSE
+    EMISSION_DECAY_NUMERATOR, EMISSION_DECAY_DENOMINATOR, SUPPLY_CAP, TICKS_PER_LAPSE
 )
 from tests.fixtures import address, make_tx, seed_balance
 
@@ -159,10 +159,11 @@ class TestEmission:
         assert compute_reward(SUPPLY_CAP) == 0
 
     def test_reward_formula(self):
-        """can_mint = SUPPLY_CAP - total_minted;  reward = int(can_mint * (1 - RATE))"""
+        """can_mint = SUPPLY_CAP - total_minted;
+        reward = (can_mint * EMISSION_DECAY_NUMERATOR) // EMISSION_DECAY_DENOMINATOR"""
         minted = 5_000_000 * TICKS_PER_LAPSE
         can_mint = SUPPLY_CAP - minted
-        expected = int(can_mint * (1 - EMISSION_RATE))
+        expected = (can_mint * EMISSION_DECAY_NUMERATOR) // EMISSION_DECAY_DENOMINATOR
         assert compute_reward(minted) == expected
 
     def test_state_compute_block_reward_uses_state_totals(self):
@@ -181,7 +182,7 @@ class TestEmission:
         minted = 5_000_000 * TICKS_PER_LAPSE
         pool   = state_mod.compute_can_mint(minted)
         assert pool == SUPPLY_CAP - minted
-        assert compute_reward(minted) == int(pool * (1 - EMISSION_RATE))
+        assert compute_reward(minted) == (pool * EMISSION_DECAY_NUMERATOR) // EMISSION_DECAY_DENOMINATOR
 
     def test_compute_can_mint_floors_at_zero(self):
         assert state_mod.compute_can_mint(SUPPLY_CAP + TICKS_PER_LAPSE) == 0

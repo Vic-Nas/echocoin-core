@@ -1,6 +1,6 @@
 """Balance ledger, nonce tracking, and emission accounting. No disk I/O."""
 
-from params import EMISSION_RATE, SUPPLY_CAP
+from params import EMISSION_DECAY_NUMERATOR, EMISSION_DECAY_DENOMINATOR, SUPPLY_CAP
 
 
 def compute_can_mint(total_minted: int) -> int:
@@ -12,8 +12,13 @@ def compute_can_mint(total_minted: int) -> int:
 
 
 def compute_reward(total_minted: int) -> int:
-    """Single source of truth for block reward. Used by State and NodeView stats."""
-    return int(compute_can_mint(total_minted) * (1 - EMISSION_RATE))
+    """Single source of truth for block reward. Used by State and NodeView stats.
+
+    Pure integer arithmetic -- no floating point -- so every node computes
+    the exact same reward regardless of platform. See params.py for how
+    the decay ratio was derived.
+    """
+    return (compute_can_mint(total_minted) * EMISSION_DECAY_NUMERATOR) // EMISSION_DECAY_DENOMINATOR
 
 
 class State:
