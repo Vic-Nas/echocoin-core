@@ -63,6 +63,7 @@ _all_binaries = [
     *chiavdf_binaries, *_liboqs_bins, *_msvc_dlls,
 ]
 _all_datas = [
+    ("VERSION", "."),
     ("src/bip39_english.txt", "."),
     ("docs/whitepaper.md", "docs"),
     ("lapsecoin.svg",       "."),

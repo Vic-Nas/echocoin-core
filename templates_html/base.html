@@ -16,6 +16,7 @@
     --accent: #4fa3e0;
     --green:  #3ecf8e;
     --red:    #e05c5c;
+    --warn:   #e0a53e;
     --mono:   "JetBrains Mono", "Fira Mono", "Consolas", monospace;
     --sans:   "Inter", system-ui, sans-serif;
   }
@@ -83,6 +84,17 @@
   <a href="/address">Address</a>
   <a href="/peers">Peers</a>
   <a href="/whitepaper">Whitepaper</a>
+  {% if update_checker and update_checker.severity %}
+  <a href="{{ update_checker.releases_url }}" target="_blank" rel="noopener"
+     style="margin-left:auto; font-weight:600; color:{{
+       {'protocol': 'var(--red)', 'critical': 'var(--warn)', 'minor': 'var(--accent)'
+       }[update_checker.severity] }}"
+     title="Current: {{ update_checker.local_version }}  Latest: {{ update_checker.latest_version }}">
+    {{ {'protocol': 'Protocol update required',
+        'critical': 'Critical update available',
+        'minor': 'New version available'}[update_checker.severity] }} &rarr;
+  </a>
+  {% endif %}
 </nav>
 <div class="page">
 {% block content %}{% endblock %}

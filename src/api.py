@@ -193,7 +193,8 @@ def _submit_and_alert(node, outputs, fee, passphrase, ctx):
 
 
 def _shared_read_only_routes(app, node, pool, limiter,
-                              private_port, public_port, is_private):
+                              private_port, public_port, is_private,
+                              update_checker=None):
     """Register all read-only UI and API routes on app."""
     # Use a prefix so public and private apps don't collide on endpoint names
     pfx = "priv_" if is_private else "pub_"
@@ -202,7 +203,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
     def inject_ctx():
         return {"is_private": is_private,
                 "private_port": private_port,
-                "public_port": public_port}
+                "public_port": public_port,
+                "update_checker": update_checker}
 
     # ---- UI pages --------------------------------------------------------
 
@@ -390,7 +392,7 @@ def _base_dir():
 # Public app factory  (port 8333)
 # ---------------------------------------------------------------------------
 
-def create_app(node, pool, private_port=8334, public_port=8333):
+def create_app(node, pool, private_port=8334, public_port=8333, update_checker=None):
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(fmt_balance=fmt_balance)
@@ -404,7 +406,8 @@ def create_app(node, pool, private_port=8334, public_port=8333):
                       default_limits=["60 per minute"], storage_uri="memory://")
 
     _shared_read_only_routes(app, node, pool, limiter,
-                             private_port, public_port, is_private=False)
+                             private_port, public_port, is_private=False,
+                             update_checker=update_checker)
 
     # Send disabled on public port; show locked page
     @app.route("/send")
@@ -420,7 +423,7 @@ def create_app(node, pool, private_port=8334, public_port=8333):
 # Private app factory  (port 8334, 127.0.0.1 only)
 # ---------------------------------------------------------------------------
 
-def create_private_app(node, pool, private_port=8334, public_port=8333):
+def create_private_app(node, pool, private_port=8334, public_port=8333, update_checker=None):
     """Full-featured app for local use. Never expose via Funnel or public port."""
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
@@ -440,7 +443,8 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
     csrf_token = secrets.token_hex(32)
 
     _shared_read_only_routes(app, node, pool, limiter,
-                             private_port, public_port, is_private=True)
+                             private_port, public_port, is_private=True,
+                             update_checker=update_checker)
 
     @app.route("/send", methods=["GET", "POST"])
     def send():

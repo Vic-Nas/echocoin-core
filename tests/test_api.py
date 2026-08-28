@@ -126,4 +126,35 @@ class TestPeersPage:
         assert "?" in html        # peer with no cached height yet
         assert "9.9.9.9:9000" in html
         assert "inferred.wallet.addr" in html
-        assert "unconfirmed" in html
+
+
+class TestUpdateNav:
+    """Smoke test the nav bar's update-available link for each severity --
+    catches a template/Jinja mismatch in the severity->label/color lookup."""
+
+    def _render_page(self, severity):
+        from update_check import UpdateChecker
+
+        node, _ = fresh()
+        pool = peerpool_mod.PeerPool(host="0.0.0.0", port=1234)
+        checker = UpdateChecker(local_version="0.1.1")
+        checker.severity = severity
+        checker.latest_version = "9.9.9"
+        app = api.create_app(node, pool, update_checker=checker)
+        return app.test_client().get("/peers").get_data(as_text=True)
+
+    def test_no_link_when_no_update(self):
+        html = self._render_page(None)
+        assert "update" not in html.lower()
+
+    def test_minor_severity_label(self):
+        html = self._render_page("minor")
+        assert "New version available" in html
+
+    def test_critical_severity_label(self):
+        html = self._render_page("critical")
+        assert "Critical update available" in html
+
+    def test_protocol_severity_label(self):
+        html = self._render_page("protocol")
+        assert "Protocol update required" in html

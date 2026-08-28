@@ -26,6 +26,8 @@ from params import DB_PATH
 from peer_udp import UDPTransport
 from peerpool import PeerPool
 from syncer import Syncer
+from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
+from version import LOCAL_VERSION
 
 logging.basicConfig(
     level=logging.INFO,
@@ -102,6 +104,19 @@ def main():
         "--log-level", default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
     )
+    parser.add_argument(
+        "--update-check-url", default=DEFAULT_VERSION_URL,
+        help="Raw VERSION file URL to poll for newer releases. "
+             "Point this at your own fork's VERSION file if you maintain one.",
+    )
+    parser.add_argument(
+        "--releases-url", default=DEFAULT_RELEASES_URL,
+        help="Where the UI's 'new version available' link points.",
+    )
+    parser.add_argument(
+        "--no-update-check", action="store_true",
+        help="Disable the periodic check for newer releases entirely.",
+    )
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
     logging.getLogger("ec").setLevel(getattr(logging, args.log_level))
@@ -172,21 +187,28 @@ def main():
 
     threading.Thread(target=discovery.run, daemon=True).start()
 
+    update_checker = UpdateChecker(
+        local_version=LOCAL_VERSION,
+        version_url="" if args.no_update_check else args.update_check_url,
+        releases_url=args.releases_url,
+    )
+    update_checker.start()
+
     # ------------------------------------------------------------------
     # HTTP servers: browser UI only, no peer routes
     # ------------------------------------------------------------------
     private_port = args.private_port if args.private_port else args.port + 2
 
-    app = create_app(node, pool,
-                     private_port=private_port, public_port=args.port)
+    app = create_app(node, pool, private_port=private_port,
+                     public_port=args.port, update_checker=update_checker)
     threading.Thread(
         target=lambda: app.run(host=args.host, port=args.port, threaded=True),
         daemon=True,
     ).start()
     log.info("[startup] public API on http://%s:%d", args.host, args.port)
 
-    private_app = create_private_app(node, pool,
-                                     private_port=private_port, public_port=args.port)
+    private_app = create_private_app(node, pool, private_port=private_port,
+                                     public_port=args.port, update_checker=update_checker)
     threading.Thread(
         target=lambda: private_app.run(host="127.0.0.1", port=private_port, threaded=True),
         daemon=True,
