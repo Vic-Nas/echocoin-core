@@ -88,6 +88,69 @@ def fmt_lapse(ticks):
 
 
 # ---------------------------------------------------------------------------
+# Wealth distribution (Lorenz curve, Gini, holder-size histogram)
+# ---------------------------------------------------------------------------
+
+def compute_gini(balances):
+    """Gini coefficient (0 = perfectly equal, ~1 = maximally unequal) over
+    a list of positive balances. None if there are fewer than 2 holders or
+    total balance is 0 (undefined / meaningless)."""
+    n = len(balances)
+    total = sum(balances)
+    if n < 2 or total == 0:
+        return None
+    ordered = sorted(balances)
+    weighted_sum = sum((i + 1) * b for i, b in enumerate(ordered))
+    return (2 * weighted_sum - (n + 1) * total) / (n * total)
+
+
+def compute_lorenz_points(balances, num_points=40):
+    """Lorenz curve as a list of (cumulative % of holders, cumulative % of
+    wealth) points, ascending, from (0, 0) to (100, 100). Downsampled to
+    at most num_points+1 points so the curve stays cheap to render
+    regardless of holder count."""
+    n = len(balances)
+    total = sum(balances)
+    if n == 0 or total == 0:
+        return [(0.0, 0.0), (100.0, 100.0)]
+    ordered = sorted(balances)
+    cum = 0
+    cum_wealth = [0.0]
+    for b in ordered:
+        cum += b
+        cum_wealth.append(cum / total * 100.0)
+    points = [(0.0, 0.0)]
+    step = max(1, n // num_points)
+    for i in range(step, n, step):
+        points.append((i / n * 100.0, cum_wealth[i]))
+    points.append((100.0, 100.0))
+    return points
+
+
+# Bucket edges in whole LAPSE (upper-exclusive, last bucket unbounded).
+HOLDER_BUCKET_EDGES = [1, 10, 100, 1_000, 10_000, 100_000, 1_000_000]
+
+
+def compute_holder_histogram(balances):
+    """Count holders per order-of-magnitude LAPSE bucket. Returns a list of
+    (label, count) pairs, smallest holders first."""
+    lapse_amounts = [b // TICKS_PER_LAPSE for b in balances]
+    edges = HOLDER_BUCKET_EDGES
+    counts = [0] * (len(edges) + 1)
+    for amt in lapse_amounts:
+        i = 0
+        while i < len(edges) and amt >= edges[i]:
+            i += 1
+        counts[i] += 1
+
+    labels = [f"<{edges[0]:,}"]
+    for lo, hi in zip(edges, edges[1:]):
+        labels.append(f"{lo:,}-{hi:,}")
+    labels.append(f"{edges[-1]:,}+")
+    return list(zip(labels, counts))
+
+
+# ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
 
@@ -270,11 +333,19 @@ def _shared_read_only_routes(app, node, pool, limiter,
         addr = request.args.get("addr", "").strip()
         page = max(request.args.get("page", 1, type=int) or 1, 1)
         v = node.view
-        top_balances = v.state.get_top_balances(10)
-        circulating  = v.state.get_circulating_supply()
+        all_balances = v.state.get_all_balances()
+        lorenz_points = compute_lorenz_points(all_balances)
+        # SVG coordinate space is 0..100 with y growing downward, so flip
+        # the wealth axis; preserveAspectRatio="none" lets CSS size the box.
+        lorenz_svg_points = " ".join(f"{x:.2f},{100 - y:.2f}" for x, y in lorenz_points)
+        histogram = compute_holder_histogram(all_balances)
+        histogram_max = max((c for _, c in histogram), default=0)
         ctx = dict(title="Balance", addr=addr, alert_err="", page=page,
                    history=None, balance=0, tx_count=0, has_prev=False, has_next=False,
-                   top_balances=top_balances, circulating=circulating)
+                   holder_count=len(all_balances),
+                   gini=compute_gini(all_balances),
+                   lorenz_svg_points=lorenz_svg_points,
+                   histogram=histogram, histogram_max=histogram_max)
         if addr and not crypto_mod.is_valid_address(addr):
             ctx["alert_err"] = "Invalid address format."
             ctx["addr"] = ""

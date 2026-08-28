@@ -1,23 +1,43 @@
 {% extends "base.html" %}
 {% block content %}
 <h2>Balance</h2>
-{% if top_balances %}
+{% if holder_count %}
 <div class="card">
-  <div class="card-title">Wealth distribution &mdash; top {{ top_balances | length }} holders</div>
-  <div style="overflow-x:auto">
-  <div style="min-width:520px">
-  {% for addr_row, bal in top_balances %}
-  {% set pct = (bal / circulating * 100) if circulating else 0 %}
-  <div style="display:flex; align-items:center; gap:.6rem; margin-bottom:.4rem; font-size:.8rem">
-    <a href="/address?addr={{ addr_row }}" title="{{ addr_row }}" class="hash-short" style="width:8rem; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ addr_row }}</a>
-    <div style="flex:1; background:#0a0c11; border-radius:3px; overflow:hidden; height:1.1rem">
-      <div style="height:100%; width:{{ '%.2f' % pct }}%; min-width:2px; background:var(--accent)"></div>
+  <div class="card-title">Wealth distribution &mdash; {{ holder_count }} holder{{ 's' if holder_count != 1 }}</div>
+  <div style="display:flex; gap:1.5rem; flex-wrap:wrap; align-items:flex-start">
+    <div style="flex:1; min-width:260px">
+      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:.4rem">
+        <h3 style="margin:0">Lorenz curve</h3>
+        {% if gini is not none %}
+        <span style="font-family:var(--mono); font-size:1.1rem; font-weight:700; color:{{ 'var(--red)' if gini > 0.7 else ('var(--warn)' if gini > 0.4 else 'var(--green)') }}"
+              title="Gini coefficient: 0 = perfectly equal, 1 = maximally unequal">
+          Gini {{ '%.3f' % gini }}
+        </span>
+        {% endif %}
+      </div>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%; height:220px; background:#0a0c11; border-radius:4px; display:block">
+        <line x1="0" y1="100" x2="100" y2="0" stroke="var(--border)" stroke-width="1" vector-effect="non-scaling-stroke" stroke-dasharray="3,3"/>
+        <polyline points="0,100 {{ lorenz_svg_points }}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+      </svg>
+      <div style="display:flex; justify-content:space-between; font-size:.7rem; color:var(--muted); margin-top:.25rem">
+        <span>0% of holders</span>
+        <span>cumulative % of supply held by poorest x% &rarr;</span>
+        <span>100% of holders</span>
+      </div>
     </div>
-    <span style="width:3.5rem; text-align:right; color:var(--muted); flex-shrink:0">{{ '%.1f' % pct }}%</span>
-    <span style="width:8rem; text-align:right; font-family:var(--mono); white-space:nowrap; flex-shrink:0">{{ fmt_lapse(bal) }}</span>
-  </div>
-  {% endfor %}
-  </div>
+    <div style="flex:1; min-width:260px">
+      <h3>Holders by balance</h3>
+      {% for label, count in histogram %}
+      <div style="display:flex; align-items:center; gap:.6rem; margin-bottom:.35rem; font-size:.8rem">
+        <span style="width:5.5rem; flex-shrink:0; color:var(--muted); font-family:var(--mono)">{{ label }}</span>
+        <div style="flex:1; background:#0a0c11; border-radius:3px; overflow:hidden; height:1rem">
+          <div style="height:100%; width:{{ '%.2f' % (count / histogram_max * 100 if histogram_max else 0) }}%; min-width:{{ '2px' if count else '0' }}; background:var(--accent)"></div>
+        </div>
+        <span style="width:2.5rem; text-align:right; flex-shrink:0">{{ count }}</span>
+      </div>
+      {% endfor %}
+      <div style="font-size:.7rem; color:var(--muted); margin-top:.25rem">balance buckets in whole LAPSE</div>
+    </div>
   </div>
 </div>
 {% endif %}

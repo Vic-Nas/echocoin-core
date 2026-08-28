@@ -37,10 +37,10 @@ class State:
     def get_nonce(self, addr):
         return self._nonces.get(addr, 0)
 
-    def get_top_balances(self, n):
-        """Top n (addr, balance) pairs by balance, descending. Zero balances
-        are never stored, so every entry returned is a holder."""
-        return sorted(self._balances.items(), key=lambda kv: kv[1], reverse=True)[:n]
+    def get_all_balances(self):
+        """Every holder's balance (ticks), unsorted. Zero balances are never
+        stored, so every entry is a real holder."""
+        return list(self._balances.values())
 
     def get_circulating_supply(self):
         return sum(self._balances.values())
