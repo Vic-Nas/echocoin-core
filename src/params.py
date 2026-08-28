@@ -56,6 +56,11 @@ GENESIS_MESSAGE = (
 
 DB_PATH = "lapsecoin_chain.db"
 
+# Allowed clock-skew tolerance for block timestamps, applied symmetrically:
+# a block's timestamp must exceed its parent's by at least this much, and
+# cannot be more than this much ahead of the validator's own clock.
+TIMESTAMP_SKEW_SECONDS = 30
+
 # Genesis timestamp: unix time when the chain was launched. Set once manually
 # before the first release and never changed.
 GENESIS_TIMESTAMP = 1787869281

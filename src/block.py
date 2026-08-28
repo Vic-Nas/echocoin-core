@@ -15,6 +15,7 @@ from params import (
     VDF_ADJUST_INTERVAL,
     VDF_ADJUST_MIN_SECONDS,
     VDF_ADJUST_FACTOR,
+    TIMESTAMP_SKEW_SECONDS,
 )
 
 
@@ -173,12 +174,13 @@ def _check_timestamp(blk, chain):
     ts = blk.get("timestamp")
     if not isinstance(ts, (int, float)):
         return False, "block missing timestamp"
-    if ts > _time.time() + 30:
+    if ts > _time.time() + TIMESTAMP_SKEW_SECONDS:
         return False, f"block timestamp {ts} is too far in the future"
     if chain:
         parent_ts = chain[-1]["timestamp"]
-        if ts <= parent_ts:
-            return False, f"block timestamp {ts} does not exceed parent timestamp {parent_ts}"
+        if ts < parent_ts + TIMESTAMP_SKEW_SECONDS:
+            return False, (f"block timestamp {ts} must be at least "
+                           f"{TIMESTAMP_SKEW_SECONDS}s after parent timestamp {parent_ts}")
     return True, None
 
 
