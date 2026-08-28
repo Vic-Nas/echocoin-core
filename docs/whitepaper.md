@@ -74,7 +74,7 @@ LapseCoin keeps Bitcoin's core guarantee: no trust required, everything verifiab
 ## References
 
 1. S. Nakamoto, "Bitcoin: A Peer-to-Peer Electronic Cash System," 2008.
-2. NIST, "FALCON Post-Quantum Signature Standard," 2024.
+2. NIST, "FIPS 206 (Draft): FN-DSA (FALCON)," 2025.
 3. G. Fanti et al., "Dandelion: Redesigning the Bitcoin Network for Anonymity," 2018.
 4. A. Loewenstern et al., "BEP 44: Storing arbitrary data in the DHT," 2014.
 5. D. Boneh et al., "Verifiable Delay Functions," 2018.
