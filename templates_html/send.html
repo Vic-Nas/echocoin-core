@@ -1,8 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
 <h2>Send</h2>
-{% if alert_ok %}<div class="alert alert-ok">{{ alert_ok | safe }}</div>{% endif %}
-{% if alert_err %}<div class="alert alert-err">{{ alert_err | safe }}</div>{% endif %}
+{% if alert_ok_tx %}<div class="alert alert-ok">{{ alert_ok_verb }} tx: <span class="hash">{{ alert_ok_tx }}</span></div>{% endif %}
+{% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
+{% if alert_err_lines %}<div class="alert alert-err">{% for line in alert_err_lines %}{{ line }}<br>{% endfor %}</div>{% endif %}
 <div class="card">
   <div class="card-title">Your address</div>
   <div class="hash" style="margin-bottom:.5rem">{{ from_addr }}</div>
@@ -32,6 +33,7 @@
 <div class="card">
   <div class="card-title">Outputs, paste CSV (address,amount) or upload file</div>
   <form method="POST" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-group">
       <label>CSV outputs (one per line: address,amount)</label>
       <textarea name="outputs" rows="6" placeholder="word1.word2...word12,1000&#10;word1.word2...word12,500"></textarea>

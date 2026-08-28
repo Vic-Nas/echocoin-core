@@ -50,6 +50,7 @@ Private app  (default port 8334, 127.0.0.1 only):
 
 import logging
 import os
+import secrets
 import sys
 
 import markdown
@@ -182,7 +183,8 @@ def _submit_and_alert(node, outputs, fee, passphrase, ctx):
         t, _fee = node.build_and_sign_tx(outputs, fee=fee, passphrase=passphrase or None)
         ok, result = node.submit_tx_from_api(t)
         if ok:
-            ctx["alert_ok"] = f'Submitted. tx: <span class="hash">{result}</span>'
+            ctx["alert_ok_tx"]   = result
+            ctx["alert_ok_verb"] = "Submitted."
         else:
             ctx["alert_err"] = f"Error: {result}"
     except Exception as e:
@@ -426,6 +428,15 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
     limiter = Limiter(get_remote_address, app=app, default_limits=[],
                       storage_uri="memory://")
 
+    # Per-process CSRF token for the /send form. This is a private,
+    # single-user, 127.0.0.1-only app with no session/login, so a
+    # synchronizer token that's fixed for the process lifetime (rather
+    # than per-request) is sufficient: same-origin policy already stops a
+    # cross-site page from reading it out of the rendered page, so all it
+    # needs to do is not be guessable and not travel to another origin --
+    # both hold here since it's rendered in a hidden field, never in a URL.
+    csrf_token = secrets.token_hex(32)
+
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=True)
 
@@ -434,9 +445,12 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
         v = node.view
         ctx = dict(title="Send", from_addr=node.addr,
                    balance=v.state.get_balance(node.addr),
-                   fees=fee_estimate(node),
-                   alert_ok="", alert_err="")
+                   fees=fee_estimate(node), csrf_token=csrf_token,
+                   alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[])
         if request.method == "POST":
+            if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
+                ctx["alert_err"] = "Session expired; reload the page and try again."
+                return render_template("send.html", **ctx)
             outputs_raw = request.form.get("outputs", "").strip()
             fee_raw     = request.form.get("fee", "0").strip()
             passphrase  = request.form.get("passphrase", "").strip()
@@ -452,13 +466,13 @@ def create_private_app(node, pool, private_port=8334, public_port=8333):
                 errors.append("Fee must be a non-negative integer.")
                 fee = 0
             if errors:
-                ctx["alert_err"] = "<br>".join(errors)
+                ctx["alert_err_lines"] = errors
             elif not outputs:
                 ctx["alert_err"] = "No valid outputs."
             else:
                 _submit_and_alert(node, outputs, fee, passphrase, ctx)
-                if ctx["alert_ok"]:
-                    ctx["alert_ok"] = ctx["alert_ok"].replace("Submitted.", "Sent.")
+                if ctx["alert_ok_tx"]:
+                    ctx["alert_ok_verb"] = "Sent."
         return render_template("send.html", **ctx)
 
     @app.route("/api/peers/add", methods=["POST"])
