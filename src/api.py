@@ -338,6 +338,10 @@ def _shared_read_only_routes(app, node, pool, limiter,
         # SVG coordinate space is 0..100 with y growing downward, so flip
         # the wealth axis; preserveAspectRatio="none" lets CSS size the box.
         lorenz_svg_points = " ".join(f"{x:.2f},{100 - y:.2f}" for x, y in lorenz_points)
+        # Same points, x-descending -- used to close the inequality-gap
+        # polygon back from (100,0) to (0,100) along the curve.
+        lorenz_svg_points_rev = " ".join(
+            f"{x:.2f},{100 - y:.2f}" for x, y in reversed(lorenz_points))
         histogram = compute_holder_histogram(all_balances)
         histogram_max = max((c for _, c in histogram), default=0)
         ctx = dict(title="Balance", addr=addr, alert_err="", page=page,
@@ -345,6 +349,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
                    holder_count=len(all_balances),
                    gini=compute_gini(all_balances),
                    lorenz_svg_points=lorenz_svg_points,
+                   lorenz_svg_points_rev=lorenz_svg_points_rev,
                    histogram=histogram, histogram_max=histogram_max)
         if addr and not crypto_mod.is_valid_address(addr):
             ctx["alert_err"] = "Invalid address format."

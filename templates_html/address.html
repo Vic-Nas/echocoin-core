@@ -2,44 +2,90 @@
 {% block content %}
 <h2>Balance</h2>
 {% if holder_count %}
-<div class="card">
+<div class="card wealth">
   <div class="card-title">Wealth distribution &mdash; {{ holder_count }} holder{{ 's' if holder_count != 1 }}</div>
-  <div style="display:flex; gap:1.5rem; flex-wrap:wrap; align-items:flex-start">
-    <div style="flex:1; min-width:260px">
-      <div style="display:flex; justify-content:space-between; align-items:baseline; margin-bottom:.4rem">
-        <h3 style="margin:0">Lorenz curve</h3>
+  <div class="wealth-grid">
+
+    <div class="wealth-col">
+      <div class="wealth-col-head">
+        <h3>Lorenz curve</h3>
         {% if gini is not none %}
-        <span style="font-family:var(--mono); font-size:1.1rem; font-weight:700; color:{{ 'var(--red)' if gini > 0.7 else ('var(--warn)' if gini > 0.4 else 'var(--green)') }}"
-              title="Gini coefficient: 0 = perfectly equal, 1 = maximally unequal">
-          Gini {{ '%.3f' % gini }}
+        <span class="gini-badge {{ 'gini-high' if gini > 0.7 else ('gini-mid' if gini > 0.4 else 'gini-low') }}"
+              title="Gini coefficient: 0 = perfectly equal, 1 = one address holds everything">
+          Gini&nbsp;{{ '%.3f' % gini }}
         </span>
         {% endif %}
       </div>
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" style="width:100%; height:220px; background:#0a0c11; border-radius:4px; display:block">
-        <line x1="0" y1="100" x2="100" y2="0" stroke="var(--border)" stroke-width="1" vector-effect="non-scaling-stroke" stroke-dasharray="3,3"/>
-        <polyline points="0,100 {{ lorenz_svg_points }}" fill="none" stroke="var(--accent)" stroke-width="2" vector-effect="non-scaling-stroke"/>
+      <svg class="lorenz-svg" viewBox="0 0 110 110" preserveAspectRatio="none">
+        <!-- gridlines at 0/25/50/75/100 -->
+        {% for g in [0, 25, 50, 75, 100] %}
+        <line x1="0" y1="{{ 100 - g }}" x2="100" y2="{{ 100 - g }}" class="grid-line"/>
+        <line x1="{{ g }}" y1="0" x2="{{ g }}" y2="100" class="grid-line"/>
+        {% endfor %}
+        <!-- equality diagonal -->
+        <line x1="0" y1="100" x2="100" y2="0" class="equality-line"/>
+        <!-- inequality gap fill, between equality line and the curve -->
+        <polygon points="0,100 100,0 {{ lorenz_svg_points_rev }}" class="lorenz-fill"/>
+        <!-- lorenz curve -->
+        <polyline points="0,100 {{ lorenz_svg_points }}" class="lorenz-line"/>
       </svg>
-      <div style="display:flex; justify-content:space-between; font-size:.7rem; color:var(--muted); margin-top:.25rem">
-        <span>0% of holders</span>
-        <span>cumulative % of supply held by poorest x% &rarr;</span>
-        <span>100% of holders</span>
+      <div class="lorenz-axis-labels">
+        <span>0%</span>
+        <span class="lorenz-axis-caption">cumulative share of supply held by the poorest x% of holders &rarr;</span>
+        <span>100%</span>
       </div>
     </div>
-    <div style="flex:1; min-width:260px">
+
+    <div class="wealth-col">
       <h3>Holders by balance</h3>
+      <div class="histo">
       {% for label, count in histogram %}
-      <div style="display:flex; align-items:center; gap:.6rem; margin-bottom:.35rem; font-size:.8rem">
-        <span style="width:5.5rem; flex-shrink:0; color:var(--muted); font-family:var(--mono)">{{ label }}</span>
-        <div style="flex:1; background:#0a0c11; border-radius:3px; overflow:hidden; height:1rem">
-          <div style="height:100%; width:{{ '%.2f' % (count / histogram_max * 100 if histogram_max else 0) }}%; min-width:{{ '2px' if count else '0' }}; background:var(--accent)"></div>
+      <div class="histo-row">
+        <span class="histo-label">{{ label }}</span>
+        <div class="histo-track">
+          <div class="histo-bar" style="width:{{ '%.2f' % (count / histogram_max * 100 if histogram_max else 0) }}%"></div>
         </div>
-        <span style="width:2.5rem; text-align:right; flex-shrink:0">{{ count }}</span>
+        <span class="histo-count">{{ count }}</span>
       </div>
       {% endfor %}
-      <div style="font-size:.7rem; color:var(--muted); margin-top:.25rem">balance buckets in whole LAPSE</div>
+      </div>
+      <div class="wealth-caption">balance buckets in whole LAPSE, log-scaled</div>
     </div>
+
   </div>
 </div>
+<style>
+  .wealth-grid { display:flex; gap:2rem; flex-wrap:wrap; align-items:stretch; margin-top:.25rem }
+  .wealth-col { flex:1; min-width:280px; display:flex; flex-direction:column }
+  .wealth-col h3 { margin-bottom:.6rem }
+  .wealth-col-head { display:flex; justify-content:space-between; align-items:baseline; margin-bottom:.6rem }
+  .wealth-col-head h3 { margin-bottom:0 }
+  .wealth-caption { font-size:.7rem; color:var(--muted); margin-top:.6rem }
+
+  .gini-badge { font-family:var(--mono); font-size:.95rem; font-weight:700; padding:.15rem .55rem; border-radius:4px; }
+  .gini-low  { color:var(--green); background:#0d2318; }
+  .gini-mid  { color:var(--warn);  background:#251c0d; }
+  .gini-high { color:var(--red);   background:#200f0f; }
+
+  .lorenz-svg { width:100%; height:220px; background:#0a0c11; border-radius:6px; display:block; overflow:visible }
+  .grid-line { stroke:#1a1e29; stroke-width:.5; vector-effect:non-scaling-stroke }
+  .equality-line { stroke:#3a4050; stroke-width:1; stroke-dasharray:2,2; vector-effect:non-scaling-stroke }
+  .lorenz-fill { fill:var(--accent); opacity:.12 }
+  .lorenz-line { fill:none; stroke:var(--accent); stroke-width:2.5; stroke-linejoin:round; stroke-linecap:round; vector-effect:non-scaling-stroke }
+  .lorenz-axis-labels { display:flex; justify-content:space-between; font-size:.7rem; color:var(--muted); margin-top:.5rem }
+  .lorenz-axis-caption { text-align:center; flex:1 }
+
+  .histo { flex:1; display:flex; flex-direction:column; justify-content:space-evenly; gap:.5rem }
+  .histo-row { display:grid; grid-template-columns:6rem 1fr 2.75rem; align-items:center; gap:.6rem; font-size:.8rem }
+  .histo-label { color:var(--muted); font-family:var(--mono); text-align:right }
+  .histo-track { background:#0a0c11; border-radius:5px; overflow:hidden; height:1.15rem }
+  .histo-bar { height:100%; min-width:3px; border-radius:5px; background:linear-gradient(90deg, #2f6690, var(--accent)); }
+  .histo-count { text-align:right; font-family:var(--mono); color:var(--text) }
+
+  @media (max-width: 640px) {
+    .histo-row { grid-template-columns:4.5rem 1fr 2.25rem }
+  }
+</style>
 {% endif %}
 <h2>Address Lookup</h2>
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
