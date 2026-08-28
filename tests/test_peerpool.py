@@ -305,13 +305,14 @@ class TestSnapshot:
         p.add("1.2.3.4:9000")
         rows = p.snapshot()
         assert len(rows) == 1
-        addr, last_seen, active, height, wallet, inferred_wallet = rows[0]
+        addr, last_seen, active, height, wallet, inferred_wallet, version = rows[0]
         assert addr == "1.2.3.4:9000"
         assert last_seen > 0
         assert active is True
         assert height is None
         assert wallet == ""
         assert inferred_wallet == ""
+        assert version == ""
 
     def test_snapshot_reports_cooldown_peer_as_inactive(self):
         p = make_pool()
@@ -352,6 +353,14 @@ class TestSnapshot:
         rows = p.snapshot()
         assert rows[0][4] == "confirmed.addr"
         assert rows[0][5] == "inferred.addr"
+
+    def test_snapshot_includes_version(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.update_info(peer, height=1, wallet="a", version="0.1.1")
+        rows = p.snapshot()
+        assert rows[0][6] == "0.1.1"
 
 
 class TestNoteRelayedBuilder:

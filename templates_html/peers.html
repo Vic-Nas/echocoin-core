@@ -4,17 +4,18 @@
 <div class="card">
   <div class="card-title">{{ rows | length }} known peer{{ "s" if rows | length != 1 }}</div>
   <table>
-    <thead><tr><th>Address</th><th>Wallet</th><th>Height</th><th>Last seen</th><th>Status</th></tr></thead>
+    <thead><tr><th>Address</th><th>Wallet</th><th>Height</th><th>Version</th><th>Last seen</th><th>Status</th></tr></thead>
     <tbody>
       <tr style="font-weight:600">
         <td>(you)</td>
         <td class="hash-short">{{ self_wallet }}</td>
         <td>{{ self_height }}</td>
+        <td>{{ self_version }}</td>
         <td>&mdash;</td>
         <td>&mdash;</td>
       </tr>
     {% if rows %}
-      {% for addr, last_seen, active, height, wallet, inferred_wallet in rows %}
+      {% for addr, last_seen, active, height, wallet, inferred_wallet, version in rows %}
       <tr>
         <td class="hash-short">{{ addr }}</td>
         {% if wallet %}
@@ -28,12 +29,20 @@
         <td class="hash-short" style="color:var(--muted)">unknown</td>
         {% endif %}
         <td>{{ height if height is not none else "?" }}</td>
+        {% if version %}
+        <td>{{ version }}</td>
+        {% else %}
+        <td style="color:var(--accent);font-style:italic"
+            title="Not yet confirmed by this peer; showing our own version as a default">
+          {{ self_version }} (assumed)
+        </td>
+        {% endif %}
         <td data-ts="{{ last_seen | int }}" class="peer-last-seen">{{ last_seen | int }}</td>
         <td style="color:{{ 'var(--green)' if active else 'var(--muted)' }}">{{ "active" if active else "cooldown" }}</td>
       </tr>
       {% endfor %}
     {% else %}
-      <tr><td colspan="5" style="color:var(--muted);text-align:center">No peers yet</td></tr>
+      <tr><td colspan="6" style="color:var(--muted);text-align:center">No peers yet</td></tr>
     {% endif %}
     </tbody>
   </table>

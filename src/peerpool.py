@@ -91,16 +91,17 @@ class PeerPool:
         log.debug("[peer] added  addr=%s", addr)
         return True
 
-    def update_info(self, addr, height=None, wallet=""):
-        """Cache a peer's last-known height/confirmed wallet address, learned
-        directly from a GETINFO/INFO exchange. No-op for an address that
-        isn't a currently tracked peer (mirrors touch()'s same guard)."""
+    def update_info(self, addr, height=None, wallet="", version=""):
+        """Cache a peer's last-known height/confirmed wallet address/version,
+        learned directly from a GETINFO/INFO exchange. No-op for an address
+        that isn't a currently tracked peer (mirrors touch()'s same guard)."""
         with self._lock:
             if addr not in self._peers:
                 return
             rec = self._info.setdefault(addr, {})
-            rec["height"] = height
-            rec["wallet"] = wallet or ""
+            rec["height"]  = height
+            rec["wallet"]  = wallet or ""
+            rec["version"] = version or ""
 
     def note_relayed_builder(self, addr, builder):
         """Record the builder address of the most recent block relayed by
@@ -182,15 +183,15 @@ class PeerPool:
             return list(self._peers.keys())
 
     def snapshot(self):
-        """Return [(addr, last_seen, active, height, wallet, inferred_wallet)]
-        for display. active is False while a peer is in cooldown after
-        repeated failures. height/wallet are the last-known confirmed
-        values from a GETINFO exchange (see update_info), or (None, "") if
-        none has completed yet. inferred_wallet is a best-effort fallback
-        from the builder of the last block relayed by that peer (see
-        note_relayed_builder) -- only meaningful when wallet is empty, and
-        never confirmed, since a peer may just be forwarding someone
-        else's block."""
+        """Return [(addr, last_seen, active, height, wallet, inferred_wallet,
+        version)] for display. active is False while a peer is in cooldown
+        after repeated failures. height/wallet/version are the last-known
+        confirmed values from a GETINFO exchange (see update_info), or
+        (None, "", "") if none has completed yet. inferred_wallet is a
+        best-effort fallback from the builder of the last block relayed by
+        that peer (see note_relayed_builder) -- only meaningful when wallet
+        is empty, and never confirmed, since a peer may just be forwarding
+        someone else's block."""
         now_mono = time.monotonic()
         with self._lock:
             return [
@@ -198,6 +199,7 @@ class PeerPool:
                  now_mono >= self._fails.get(addr, {}).get("cooldown_until", 0.0),
                  self._info.get(addr, {}).get("height"),
                  self._info.get(addr, {}).get("wallet", ""),
-                 self._info.get(addr, {}).get("inferred_wallet", ""))
+                 self._info.get(addr, {}).get("inferred_wallet", ""),
+                 self._info.get(addr, {}).get("version", ""))
                 for addr, last_seen in self._peers.items()
             ]

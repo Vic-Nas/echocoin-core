@@ -62,6 +62,7 @@ import block as block_mod
 import crypto as crypto_mod
 import tx as tx_mod
 from params import TICKS_PER_LAPSE, SUPPLY_CAP
+from version import LOCAL_VERSION
 
 log = logging.getLogger("ec.api")
 
@@ -308,7 +309,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
         rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
         self_height = node.view.chain[-1].get("height", 0)
         return render_template("peers.html", title="Peers", rows=rows,
-                               self_height=self_height, self_wallet=node.addr)
+                               self_height=self_height, self_wallet=node.addr,
+                               self_version=LOCAL_VERSION)
 
     # ---- JSON API (read-only) --------------------------------------------
 

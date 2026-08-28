@@ -539,15 +539,17 @@ class UDPTransport:
 
         elif msg_type == MT_GETINFO:
             # Peer requesting our tip info; respond with height + tip hash
-            # (+ our wallet address, purely informational -- see set_tip_provider).
+            # (+ our wallet address and software version, purely
+            # informational -- see set_tip_provider).
             self._pool.touch(sender_addr)
             if self._get_tip_fn:
-                height, tip_hash, wallet = self._get_tip_fn()
+                height, tip_hash, wallet, version = self._get_tip_fn()
                 self._send_one(MT_INFO, msg_id,
                                {"genesis": self.genesis_hash,
                                 "height":   height,
                                 "tip_hash": tip_hash,
-                                "wallet":   wallet},
+                                "wallet":   wallet,
+                                "version":  version},
                                sender)
 
         elif msg_type == MT_INFO:
@@ -557,10 +559,11 @@ class UDPTransport:
                     self._info_results[msg_id] = {
                         "height":   data.get("height"),
                         "tip_hash": data.get("tip_hash", ""),
-                        # Older peers won't send this field; default keeps
+                        # Older peers won't send these fields; defaults keep
                         # readers (Syncer, PeerPool.update_info) working
                         # unchanged against them.
                         "wallet":   data.get("wallet", ""),
+                        "version":  data.get("version", ""),
                     }
                     self._info_events[msg_id].set()
 
@@ -636,11 +639,12 @@ class UDPTransport:
         self._get_chain_fn = fn
 
     def set_tip_provider(self, fn):
-        """fn() -> (height, tip_hash, wallet). Used for lightweight MT_GETINFO
-        responses. wallet is our own address, shared here purely so peers can
-        display/use it (e.g. for gifting) -- it's already public the moment
-        we build a block, this just makes it available without needing to
-        wait for or find one."""
+        """fn() -> (height, tip_hash, wallet, version). Used for lightweight
+        MT_GETINFO responses. wallet is our own address, shared here purely
+        so peers can display/use it (e.g. for gifting) -- it's already
+        public the moment we build a block, this just makes it available
+        without needing to wait for or find one. version is our own
+        software version, so peers can flag when we're outdated."""
         self._get_tip_fn = fn
 
     def set_punch_go_callback(self, fn):
