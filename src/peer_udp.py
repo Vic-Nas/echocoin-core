@@ -460,7 +460,9 @@ class UDPTransport:
                 self._pool.touch(sender_addr)
                 tx = data.get("tx")
                 if tx:
-                    self._on_tx(tx, sender_addr, msg_id)
+                    remaining_hops = data.get("remaining_hops", 0)
+                    relay_type = data.get("relay_type", "tx_fluff")
+                    self._on_tx(tx, sender_addr, msg_id, remaining_hops, relay_type)
 
         elif msg_type == MT_GETSYNC:
             self._handle_getsync(msg_id, data, sender)

@@ -119,9 +119,9 @@ def main():
     def on_block(block, sender_addr):
         net_in_q.put({"type": "block", "block": block, "sender": sender_addr})
 
-    def on_tx(tx, sender_addr, msg_id):
+    def on_tx(tx, sender_addr, msg_id, remaining_hops=0, relay_type="tx_fluff"):
         net_in_q.put({"type": "tx", "tx": tx,
-                      "relay_type": "tx_fluff", "remaining_hops": 0})
+                      "relay_type": relay_type, "remaining_hops": remaining_hops})
 
     def on_peers(peer_list, sender_addr):
         for p in peer_list:
