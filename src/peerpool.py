@@ -152,6 +152,7 @@ class PeerPool:
             stale = [p for p, t in self._peers.items() if t < cutoff]
             for p in stale:
                 del self._peers[p]
+                self._info.pop(p, None)
         if stale:
             log.debug("[peer] evicted %d stale peer(s)", len(stale))
 

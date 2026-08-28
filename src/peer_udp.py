@@ -65,7 +65,7 @@ MT_ACK       = 0x08
 MT_PUNCH_REQ = 0x09
 MT_PUNCH_GO  = 0x0A
 MT_GETINFO   = 0x0B   # request peer tip info (height + hash)
-MT_INFO      = 0x0C   # response: {"height": N, "tip_hash": "..."}
+MT_INFO      = 0x0C   # response: {"height": N, "tip_hash": "...", "wallet": "..."}
 
 MAX_CHUNK_SIZE   = 1400   # bytes, safe below MTU
 RECV_TIMEOUT     = 2.0    # seconds select/recvfrom timeout

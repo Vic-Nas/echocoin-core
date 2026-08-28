@@ -2,8 +2,9 @@
 
 One cycle:
   1. drain queue          inbound txs and blocks from net_in_q
-  2. sync (every 3)      pull a better chain from a random peer
-  3. vdf.evaluate()      blocks ~120s
+  2. sync                pull a better chain from a random peer
+  3. vdf.evaluate()      blocks ~120s, re-checking sync every
+                         SYNC_POLL_INTERVAL_SECONDS while waiting
   4. assemble + broadcast
   5. drain queue (5s)    collect peer blocks
   6. pick winner         first valid peer block received, else own candidate

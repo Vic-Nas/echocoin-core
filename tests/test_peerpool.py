@@ -202,6 +202,21 @@ class TestEvictStale:
         assert p.count() == 1
         assert "1.2.3.5:9000" in p._peers
 
+    def test_evict_stale_clears_cached_info(self):
+        """Mirrors remove()/the strike-ban path: a peer's cached
+        height/wallet must not survive it leaving the pool, or a later
+        re-add would show stale info before any fresh GETINFO exchange."""
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.update_info(peer, height=1, wallet="x")
+        p._peers[peer] = time.time() - STALE_SECONDS - 1
+        p.evict_stale()
+        p.add(peer)
+        rows = p.snapshot()
+        assert rows[0][3] is None
+        assert rows[0][4] == ""
+
 
 # ---------------------------------------------------------------------------
 # 6. get_all
