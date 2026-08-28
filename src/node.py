@@ -45,6 +45,16 @@ SYNC_EVERY_N_CYCLES = 1   # check every cycle; forks are common at 2-min blocks
 # wait loop is safe where spawning a real background thread would not be.
 SYNC_POLL_INTERVAL_SECONDS = 10
 
+# Timeout for the mid-wait polls' initial GETINFO probe. Deliberately much
+# shorter than UDPTransport.get_info's own 8s default: this probe repeats
+# roughly every SYNC_POLL_INTERVAL_SECONDS for the whole ~120-200s wait, and
+# a peer that's gone unresponsive (but hasn't yet been struck/evicted) would
+# otherwise be able to eat most of that responsive-wait budget, one 8s block
+# at a time, on the single node-loop thread this all runs on. In the common
+# case (peer alive, already in sync) the real round trip is milliseconds, so
+# this only matters for the failure case it's meant to bound.
+SYNC_POLL_INFO_TIMEOUT_SECONDS = 2.0
+
 
 # ---------------------------------------------------------------------------
 # Tail validation (pure, no node state touched)
@@ -268,6 +278,7 @@ class Node:
                     self.syncer.check_and_sync(
                         self.cs.chain,
                         lambda chain: self.apply_better_chain(chain)[0],
+                        info_timeout=SYNC_POLL_INFO_TIMEOUT_SECONDS,
                     )
                     last_sync_check = time.monotonic()
             vdf_out, vdf_proof, vdf_seconds = _fut.result()

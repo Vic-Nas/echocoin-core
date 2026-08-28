@@ -10,11 +10,12 @@ directly with a hand-built message.
 
 import os
 import sys
+import threading
 from unittest.mock import MagicMock
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from peer_udp import MT_TX, UDPTransport
+from peer_udp import MT_GETINFO, MT_INFO, MT_TX, UDPTransport
 
 
 def _make_transport(on_tx):
@@ -53,3 +54,50 @@ def test_dispatch_dedups_by_msg_id():
     udp._dispatch(MT_TX, 333, msg, ("1.2.3.4", 5000))
     udp._dispatch(MT_TX, 333, msg, ("1.2.3.4", 5000))
     assert on_tx.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# MT_GETINFO / MT_INFO wallet field -- must stay wire-compatible with peers
+# not carrying it yet.
+# ---------------------------------------------------------------------------
+
+def test_getinfo_response_includes_wallet():
+    """Responding to MT_GETINFO must include our wallet alongside height/tip."""
+    udp = _make_transport(MagicMock())
+    udp.set_tip_provider(lambda: (42, "deadbeef", "some.wallet.address"))
+    sent = []
+    udp._send_one = lambda msg_type, msg_id, data, target: sent.append((msg_type, data, target))
+
+    udp._dispatch(MT_GETINFO, 1, {"genesis": udp.genesis_hash}, ("1.2.3.4", 5000))
+
+    assert len(sent) == 1
+    msg_type, data, target = sent[0]
+    assert msg_type == MT_INFO
+    assert data == {"genesis": udp.genesis_hash, "height": 42,
+                    "tip_hash": "deadbeef", "wallet": "some.wallet.address"}
+
+
+def test_info_reply_captures_wallet():
+    """A well-formed MT_INFO reply's wallet field lands in the pending result."""
+    udp = _make_transport(MagicMock())
+    ev = threading.Event()
+    with udp._info_lock:
+        udp._info_events[7] = ev
+
+    udp._dispatch(MT_INFO, 7, {"height": 10, "tip_hash": "abc", "wallet": "peer.wallet"},
+                  ("1.2.3.4", 5000))
+
+    assert udp._info_results[7] == {"height": 10, "tip_hash": "abc", "wallet": "peer.wallet"}
+
+
+def test_info_reply_from_older_peer_without_wallet_field():
+    """An old peer's MT_INFO reply (no wallet key at all) must not break --
+    wallet just comes back empty instead of missing/erroring."""
+    udp = _make_transport(MagicMock())
+    ev = threading.Event()
+    with udp._info_lock:
+        udp._info_events[9] = ev
+
+    udp._dispatch(MT_INFO, 9, {"height": 10, "tip_hash": "abc"}, ("1.2.3.4", 5000))
+
+    assert udp._info_results[9] == {"height": 10, "tip_hash": "abc", "wallet": ""}

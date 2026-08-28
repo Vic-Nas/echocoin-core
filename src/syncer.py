@@ -30,18 +30,25 @@ class Syncer:
         self.pool = pool
         self.udp  = udp
 
-    def check_and_sync(self, local_chain, apply_fn):
+    def check_and_sync(self, local_chain, apply_fn, info_timeout=8.0):
         """Pick a random peer and sync if they have a better chain.
 
         Compares by cumulative proven VDF work (tip hash breaks ties).
         Returns True if the chain was updated.
+
+        info_timeout: how long to wait for the initial GETINFO probe.
+        Kept short by callers that poll this repeatedly on a tight interval
+        (e.g. node.py's mid-VDF-wait polling), so an unresponsive peer
+        can't eat a large chunk of that interval every time it's picked --
+        the fork-point/fetch phase below still uses its own longer,
+        unrelated timeouts since it only runs when there's real work to do.
         """
         peer = self.pool.random()
         if not peer:
             log.debug("[sync] no peers available")
             return False
 
-        info = self.udp.get_info(peer)
+        info = self.udp.get_info(peer, timeout=info_timeout)
         if info is None:
             log.debug("[sync] info request failed  peer=%s", peer)
             return False
@@ -49,6 +56,10 @@ class Syncer:
         if not isinstance(info, dict) or "height" not in info:
             log.debug("[sync] unexpected info response  peer=%s", peer)
             return False
+
+        # Cache for display (e.g. the peers page), regardless of whether a
+        # sync ends up happening below.
+        self.pool.update_info(peer, height=info.get("height"), wallet=info.get("wallet", ""))
 
         remote_height = info["height"]
         local_height  = len(local_chain) - 1

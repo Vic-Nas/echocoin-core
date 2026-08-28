@@ -62,6 +62,7 @@ class PeerPool:
         self._max_peers = max_peers if max_peers is not None else MAX_PEERS
         self._peers     = {}          # addr -> last_seen (wall clock)
         self._fails     = {}          # addr -> {"strikes": int, "cooldown_until": monotonic}
+        self._info      = {}          # addr -> {"height": int|None, "wallet": str}
         self._lock      = threading.Lock()
 
     # ---- Core operations ----
@@ -90,6 +91,15 @@ class PeerPool:
         log.debug("[peer] added  addr=%s", addr)
         return True
 
+    def update_info(self, addr, height=None, wallet=""):
+        """Cache a peer's last-known height/wallet address, learned from a
+        GETINFO/INFO exchange. No-op for an address that isn't a currently
+        tracked peer (mirrors touch()'s same guard)."""
+        with self._lock:
+            if addr not in self._peers:
+                return
+            self._info[addr] = {"height": height, "wallet": wallet or ""}
+
     def touch(self, addr):
         """Update last-seen timestamp and clear strikes on successful contact."""
         with self._lock:
@@ -110,11 +120,13 @@ class PeerPool:
                                   "cooldown_until": time.monotonic() + cooldown}
             if banned:
                 self._peers.pop(addr, None)
+                self._info.pop(addr, None)
                 log.warning("[peer] banned  addr=%s  strikes=%d", addr, strikes)
 
     def remove(self, addr):
         with self._lock:
             self._peers.pop(addr, None)
+            self._info.pop(addr, None)
 
     def evict_stale(self):
         """Remove peers not seen within STALE_SECONDS."""
@@ -152,12 +164,17 @@ class PeerPool:
             return list(self._peers.keys())
 
     def snapshot(self):
-        """Return [(addr, last_seen, active)] for display. active is False
-        while a peer is in cooldown after repeated failures."""
+        """Return [(addr, last_seen, active, height, wallet)] for display.
+        active is False while a peer is in cooldown after repeated
+        failures. height/wallet are the last-known values from a GETINFO
+        exchange (see update_info), or (None, "") if none has completed
+        yet for that peer."""
         now_mono = time.monotonic()
         with self._lock:
             return [
                 (addr, last_seen,
-                 now_mono >= self._fails.get(addr, {}).get("cooldown_until", 0.0))
+                 now_mono >= self._fails.get(addr, {}).get("cooldown_until", 0.0),
+                 self._info.get(addr, {}).get("height"),
+                 self._info.get(addr, {}).get("wallet", ""))
                 for addr, last_seen in self._peers.items()
             ]

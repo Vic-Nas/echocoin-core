@@ -304,7 +304,9 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/peers", endpoint=pfx+"peers")
     def peers():
         rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
-        return render_template("peers.html", title="Peers", rows=rows)
+        self_height = node.view.chain[-1].get("height", 0)
+        return render_template("peers.html", title="Peers", rows=rows,
+                               self_height=self_height, self_wallet=node.addr)
 
     # ---- JSON API (read-only) --------------------------------------------
 

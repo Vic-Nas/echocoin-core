@@ -156,7 +156,7 @@ def main():
     def _tip_provider():
         chain = node.view.chain
         tip   = chain[-1]
-        return tip.get("height", 0), tip.get("hash", "")
+        return tip.get("height", 0), tip.get("hash", ""), node.addr
 
     udp.set_chain_provider(_chain_provider)
     udp.set_tip_provider(_tip_provider)

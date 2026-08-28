@@ -11,6 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import api
 import mempool as mempool_mod
+import peerpool as peerpool_mod
 from chainstate import ChainState
 from node import NodeView
 from params import TICKS_PER_LAPSE
@@ -21,9 +22,10 @@ class _FakeNode:
     """Just enough of Node's public surface for fee_estimate: .mempool
     and .view (chain/tip)."""
 
-    def __init__(self, cs):
+    def __init__(self, cs, addr=None):
         self.mempool = mempool_mod.Mempool()
         self.view = NodeView(cs)
+        self.addr = addr or address(0)
 
 
 def fresh():
@@ -92,3 +94,31 @@ class TestFeeEstimate:
         expected = min(t.get("fee", 0) / max(block_mod.tx_mod.tx_size(t), 1)
                         for t in candidate["transactions"])
         assert fees["next_block"] == expected
+
+
+class TestPeersPage:
+    """Smoke test the /peers route end to end: real PeerPool.snapshot()
+    shape, self-row wiring, and the height/wallet columns all render
+    without a template/route mismatch."""
+
+    def _client(self):
+        node, cs = fresh()
+        pool = peerpool_mod.PeerPool(host="0.0.0.0", port=1234)
+        pool.add("1.2.3.4:9000")
+        pool.update_info("1.2.3.4:9000", height=5, wallet="peer.wallet.addr")
+        pool.add("5.6.7.8:9000")  # no update_info -- height/wallet unknown
+        app = api.create_private_app(node, pool)
+        return app.test_client()
+
+    def test_peers_page_renders(self):
+        resp = self._client().get("/peers")
+        assert resp.status_code == 200
+
+    def test_peers_page_shows_self_and_peer_data(self):
+        html = self._client().get("/peers").get_data(as_text=True)
+        assert "(you)" in html
+        assert "1.2.3.4:9000" in html
+        assert "peer.wallet.addr" in html
+        assert "5.6.7.8:9000" in html
+        assert "unknown" in html  # peer with no cached wallet yet
+        assert "?" in html        # peer with no cached height yet

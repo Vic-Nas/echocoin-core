@@ -712,7 +712,16 @@ class TestRunCycleSyncPolling:
         node._run_cycle()
 
         # Once at cycle start plus at least one mid-wait poll.
-        assert node.syncer.check_and_sync.call_count >= 2
+        calls = node.syncer.check_and_sync.call_args_list
+        assert len(calls) >= 2
+        # Cycle-start call keeps the syncer's own default GETINFO timeout --
+        # it isn't repeated, so there's no budget it could eat into.
+        assert "info_timeout" not in calls[0].kwargs
+        # Every mid-wait call uses the short timeout so an unresponsive peer
+        # can't repeatedly consume most of the polling interval on this
+        # single-threaded loop.
+        for call in calls[1:]:
+            assert call.kwargs.get("info_timeout") == node_mod.SYNC_POLL_INFO_TIMEOUT_SECONDS
 
     def test_mid_wait_reorg_discards_stale_candidate(self, node_env, monkeypatch):
         node, *_ = node_env
@@ -720,7 +729,7 @@ class TestRunCycleSyncPolling:
         replacement_cs = ChainState.from_genesis()  # a distinct chain-state object
         calls = {"n": 0}
 
-        def fake_check_and_sync(chain, apply_fn):
+        def fake_check_and_sync(chain, apply_fn, **kwargs):
             # First call is the existing top-of-cycle check (before this
             # cycle's tip is even locked in); only the *second* call, from
             # inside the wait loop, should simulate a genuine mid-wait

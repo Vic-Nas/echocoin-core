@@ -290,10 +290,12 @@ class TestSnapshot:
         p.add("1.2.3.4:9000")
         rows = p.snapshot()
         assert len(rows) == 1
-        addr, last_seen, active = rows[0]
+        addr, last_seen, active, height, wallet = rows[0]
         assert addr == "1.2.3.4:9000"
         assert last_seen > 0
         assert active is True
+        assert height is None
+        assert wallet == ""
 
     def test_snapshot_reports_cooldown_peer_as_inactive(self):
         p = make_pool()
@@ -304,3 +306,30 @@ class TestSnapshot:
         assert len(rows) == 1
         assert rows[0][0] == peer
         assert rows[0][2] is False
+
+    def test_snapshot_includes_cached_info(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.update_info(peer, height=42, wallet="a.b.c")
+        rows = p.snapshot()
+        assert rows[0][3] == 42
+        assert rows[0][4] == "a.b.c"
+
+
+class TestUpdateInfo:
+    def test_update_info_noop_for_unknown_peer(self):
+        p = make_pool()
+        p.update_info("1.2.3.4:9000", height=1, wallet="x")
+        assert p.snapshot() == []
+
+    def test_update_info_cleared_on_remove(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.update_info(peer, height=1, wallet="x")
+        p.remove(peer)
+        p.add(peer)
+        rows = p.snapshot()
+        assert rows[0][3] is None
+        assert rows[0][4] == ""
