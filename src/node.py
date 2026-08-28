@@ -167,10 +167,17 @@ class Node:
     def stop(self):
         self.running = False
 
+    def _validate_for_mempool(self, tx_dict):
+        """Validate tx_dict against confirmed state plus this sender's
+        already-pending mempool txs. Shared by submit_tx and
+        _handle_inbound_tx so both acceptance paths agree."""
+        probe = self.mempool.probe_state_for(tx_dict.get("from"), self.cs.state)
+        return tx_mod.validate(tx_dict, probe)
+
     def submit_tx(self, tx_dict):
         """Validate and add a tx. Node loop thread only."""
         assert threading.current_thread() is self._loop_thread
-        ok, err = tx_mod.validate(tx_dict, self.cs.state)
+        ok, err = self._validate_for_mempool(tx_dict)
         if not ok:
             log.debug("[tx] rejected  reason=%s  from=%s",
                       err, tx_dict.get("from", "?")[:24])
@@ -295,8 +302,11 @@ class Node:
             log.warning("[vdf] candidate stale (tip advanced during drain), skipping cycle")
             return None, False
 
-        # First valid peer block received wins; fall back to own candidate.
-        winner   = valid_peers[0] if valid_peers else candidate
+        # Among all equally-valid same-height candidates (all proving the
+        # same required iterations), the lowest vdf_output wins -- the same
+        # rule ChainState.is_better_than uses, so a node's own immediate
+        # pick can't diverge from what syncer would settle on anyway.
+        winner   = min([candidate] + valid_peers, key=block_mod.tie_break_key)
         is_peer  = winner is not candidate
         log.info("[vdf] winner  hash=%s  peer=%s  candidates=%d  peer_candidates=%d",
                  winner["hash"][:12], is_peer, len(valid_peers) + 1, len(valid_peers))
@@ -366,7 +376,7 @@ class Node:
             log.debug("[tx] stem relay  hops_remaining=%d  from=%s", remaining, sender)
             self.gossip.dandelion_send(tx_dict, remaining)
             return
-        ok, err = tx_mod.validate(tx_dict, self.cs.state)
+        ok, err = self._validate_for_mempool(tx_dict)
         if not ok:
             log.debug("[tx] inbound rejected  reason=%s  from=%s", err, sender)
             return

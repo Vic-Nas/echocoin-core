@@ -177,6 +177,4 @@ class ChainState:
         """
         if self.cumulative_iterations != other.cumulative_iterations:
             return self.cumulative_iterations > other.cumulative_iterations
-        self_key  = self.tip.get("vdf_output") or self.tip["hash"]
-        other_key = other.tip.get("vdf_output") or other.tip["hash"]
-        return self_key < other_key
+        return block_mod.tie_break_key(self.tip) < block_mod.tie_break_key(other.tip)

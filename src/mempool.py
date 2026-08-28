@@ -53,6 +53,21 @@ class Mempool:
                   if t.get("from") == addr]
         return max(nonces) if nonces else 0
 
+    def probe_state_for(self, addr, state):
+        """State snapshot with addr's already-pending mempool txs applied,
+        in nonce order. Validating a newly submitted tx against this
+        (instead of the raw confirmed state) is what lets a wallet queue a
+        second send before the first confirms: both the nonce and the
+        balance it's checked against already account for the first one."""
+        probe = state.snapshot()
+        pending = sorted(
+            (t for t, _ in self._pool.values() if t.get("from") == addr),
+            key=lambda t: t["nonce"],
+        )
+        for t in pending:
+            probe.apply_tx(t)
+        return probe
+
     def pending_hashes(self):
         return frozenset(self._pool.keys())
 

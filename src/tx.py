@@ -28,8 +28,15 @@ def create(from_addr, pubkey_hex, outputs, nonce, fee, secret_key_bytes):
 
 
 def tx_hash(tx_dict):
-    """Deterministic hash of the full tx including signature."""
-    return crypto.sha256_hex(canonical_json(tx_dict))
+    """Deterministic hash of the tx's signed content, excluding the
+    signature itself. Falcon-512 signing draws fresh randomness each time,
+    so re-signing an identical tx (e.g. a wallet retry) produces a
+    different valid signature -- hashing it in would give the same logical
+    tx a different id every time it's (re)signed, breaking hash-based
+    lookups even though the nonce still prevents any double-spend. This
+    mirrors Bitcoin's segwit txid fix for the same malleability class."""
+    fields = {k: v for k, v in tx_dict.items() if k != "signature"}
+    return crypto.sha256_hex(canonical_json(fields))
 
 
 def tx_size(tx_dict):
@@ -87,7 +94,7 @@ def _check_signature(tx_dict):
             return False, "pubkey does not match from address"
         if not crypto.verify(crypto.serialize_for_signing(tx_dict), sig_bytes, pubkey_bytes):
             return False, "invalid signature"
-    except (ValueError, Exception):
+    except Exception:
         return False, "malformed pubkey or signature"
     return True, None
 

@@ -332,15 +332,25 @@ class TestPickWinner:
         winner, relay = node._pick_winner(node.cs, candidate, [bad_peer])
         assert winner is candidate
 
-    def test_first_valid_peer_block_wins(self, node_env):
+    def test_lowest_vdf_output_peer_block_wins(self, node_env):
         node, *_ = node_env
         g = node.cs.tip
-        peer_blk  = make_block(1, g["hash"], [], builder_index=1)
-        candidate = make_block(1, g["hash"], [], builder_index=0)
+        peer_blk  = make_block(1, g["hash"], [], builder_index=1, vdf_output="aa")
+        candidate = make_block(1, g["hash"], [], builder_index=0, vdf_output="bb")
         winner, relay = node._pick_winner(node.cs, candidate, [peer_blk])
-        # First valid peer block takes priority over own candidate
+        # Same rule as ChainState.is_better_than: lowest vdf_output wins,
+        # not whichever arrived first.
         assert winner is peer_blk
         assert relay is True
+
+    def test_own_candidate_wins_tie_break_over_peer(self, node_env):
+        node, *_ = node_env
+        g = node.cs.tip
+        peer_blk  = make_block(1, g["hash"], [], builder_index=1, vdf_output="zz")
+        candidate = make_block(1, g["hash"], [], builder_index=0, vdf_output="aa")
+        winner, relay = node._pick_winner(node.cs, candidate, [peer_blk])
+        assert winner is candidate
+        assert relay is False
 
 
 # ---------------------------------------------------------------------------

@@ -93,8 +93,11 @@ class TestTxHash:
         t2 = make_tx(0, 1, TICKS_PER_LAPSE, s)
         assert tx_mod.tx_hash(t1) != tx_mod.tx_hash(t2)
 
-    def test_hash_includes_signature(self):
-        """tx_hash covers the entire tx dict including signature."""
+    def test_hash_excludes_signature(self):
+        """tx_hash covers the signed content only, not the signature itself:
+        Falcon signing draws fresh randomness each time, so a re-signed
+        identical tx must still hash identically (same logical tx, same
+        id) even though its signature bytes differ."""
         s = fresh_state()
         seed_balance(s, 0)
         t = make_tx(0, 1, TICKS_PER_LAPSE, s)
@@ -102,7 +105,7 @@ class TestTxHash:
         t2 = dict(t)
         t2["signature"] = "00" * 100
         h2 = tx_mod.tx_hash(t2)
-        assert h1 != h2
+        assert h1 == h2
 
 
 # ---------------------------------------------------------------------------

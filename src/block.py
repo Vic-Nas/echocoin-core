@@ -75,6 +75,14 @@ def vdf_challenge(previous_hash: str, builder: str) -> bytes:
     return crypto.sha256(bytes.fromhex(previous_hash) + builder.encode())
 
 
+def tie_break_key(blk):
+    """Sort key for choosing among equally-valid, same-height blocks: the
+    lowest key wins. Must be vdf_output, not block_hash or arrival order --
+    see ChainState.is_better_than for why. Falls back to hash only for
+    genesis, which never actually ties against anything."""
+    return blk.get("vdf_output") or blk["hash"]
+
+
 def create_genesis():
     """
     Create the genesis block (block 0). Hardcoded and deterministic.
@@ -167,6 +175,10 @@ def _check_timestamp(blk, chain):
         return False, "block missing timestamp"
     if ts > _time.time() + 30:
         return False, f"block timestamp {ts} is too far in the future"
+    if chain:
+        parent_ts = chain[-1]["timestamp"]
+        if ts <= parent_ts:
+            return False, f"block timestamp {ts} does not exceed parent timestamp {parent_ts}"
     return True, None
 
 
