@@ -13,6 +13,16 @@ log = logging.getLogger("ec.syncer")
 
 FETCH_CHUNK = 20    # blocks per GETSYNC request (keep UDP responses small)
 
+# Extra attempts before treating an outright timeout/decode-failure (resp is
+# None) as authoritative. The UDP transport has no chunk-level retransmission
+# (see peer_udp.py), so a single dropped datagram during the binary-search
+# fork-point probe previously looked identical to "peer's chain doesn't
+# reach this height", and one during a fetch page looked identical to "fetch
+# failed" -- either way narrowing the search or aborting the sync on nothing
+# more than packet loss. This does not apply to a real response with an
+# empty/missing chain field, which is a legitimate answer, not a timeout.
+SYNC_REQUEST_RETRIES = 2
+
 
 class Syncer:
 
@@ -68,6 +78,15 @@ class Syncer:
         full_chain = local_chain[:fork_from] + tail
         return apply_fn(full_chain)
 
+    def _request_sync_with_retry(self, peer, from_h, to_h, timeout):
+        """request_sync, retrying a bare timeout/decode-failure a few times
+        before giving up. See SYNC_REQUEST_RETRIES for why."""
+        for _attempt in range(SYNC_REQUEST_RETRIES + 1):
+            resp = self.udp.request_sync(peer, from_h=from_h, to_h=to_h, timeout=timeout)
+            if resp is not None:
+                return resp
+        return None
+
     def _find_fork_point(self, peer, local_chain):
         """Binary search for common ancestor. O(log n) round trips."""
         lo, hi = 0, len(local_chain) - 1
@@ -77,7 +96,7 @@ class Syncer:
             mid = (lo + hi) // 2
             local_hash = local_chain[mid]["hash"]
 
-            resp = self.udp.request_sync(peer, from_h=mid, to_h=mid, timeout=10)
+            resp = self._request_sync_with_retry(peer, from_h=mid, to_h=mid, timeout=10)
             page = resp.get("chain") if isinstance(resp, dict) else None
             if not isinstance(page, list) or not page:
                 # Peer doesn't have this height; their chain is shorter, search lower.
@@ -98,7 +117,7 @@ class Syncer:
         h = from_h
         while h <= remote_height:
             to_h = min(h + FETCH_CHUNK - 1, remote_height)
-            resp = self.udp.request_sync(peer, from_h=h, to_h=to_h, timeout=30)
+            resp = self._request_sync_with_retry(peer, from_h=h, to_h=to_h, timeout=30)
             if resp is None:
                 log.warning("[sync] fetch page empty  peer=%s  from_h=%d", peer, h)
                 break

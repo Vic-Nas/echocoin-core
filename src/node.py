@@ -34,6 +34,17 @@ _rng = _secrets.SystemRandom()
 
 SYNC_EVERY_N_CYCLES = 1   # check every cycle; forks are common at 2-min blocks
 
+# How often to re-check for a better peer chain *during* the ~120-200s VDF
+# wait, not just once at cycle start. Without this, a node that's badly
+# behind can only close its gap once per full mining cycle -- a lagging
+# peer would need many multi-minute cycles to catch up even though the
+# actual data transfer takes a couple of seconds. This is still called
+# from the single node-loop thread (never a separate thread): _drain_queue
+# and friends assert they run on that thread, and mempool/state are
+# documented single-writer, so interleaving more checks into the existing
+# wait loop is safe where spawning a real background thread would not be.
+SYNC_POLL_INTERVAL_SECONDS = 10
+
 
 # ---------------------------------------------------------------------------
 # Tail validation (pure, no node state touched)
@@ -245,11 +256,36 @@ class Node:
             _fut = _pool.submit(
                 vdf_mod.evaluate,
                 block_mod.vdf_challenge(cs.tip["hash"], self.addr), iterations)
+            last_sync_check = time.monotonic()
             while not _fut.done():
                 accumulated_blocks += self._drain_queue(timeout=1)
+                # Re-check for a better peer chain periodically instead of only
+                # once at cycle start, so a lagging node converges in roughly
+                # this interval rather than waiting a full mining cycle per
+                # attempt. Still runs on this same thread -- see
+                # SYNC_POLL_INTERVAL_SECONDS's comment for why that matters.
+                if time.monotonic() - last_sync_check >= SYNC_POLL_INTERVAL_SECONDS:
+                    self.syncer.check_and_sync(
+                        self.cs.chain,
+                        lambda chain: self.apply_better_chain(chain)[0],
+                    )
+                    last_sync_check = time.monotonic()
             vdf_out, vdf_proof, vdf_seconds = _fut.result()
         log.info("[vdf] proof ready  height=%d  seconds=%.1f  iterations=%d",
                  cs.height + 1, vdf_seconds, iterations)
+
+        if self.cs is not cs:
+            # A mid-wait sync check adopted a better chain out from under us.
+            # The VDF we just computed was for cs.tip, which is no longer our
+            # tip -- apply_block() trusts previous_hash without re-checking
+            # it, so committing this candidate would silently splice a block
+            # onto the wrong parent. Discard it; the next cycle starts fresh
+            # against the new tip. The sunk VDF time isn't recoverable (the
+            # computation itself can't be cancelled or reused), same as any
+            # other lost fork race.
+            log.info("[vdf] tip changed during VDF computation (adopted a "
+                     "better chain mid-cycle); discarding in-flight candidate")
+            return
 
         candidate = block_mod.assemble(cs.tip, self.mempool.all_txs(), self.addr, iterations)
         candidate["vdf_output"]    = vdf_out

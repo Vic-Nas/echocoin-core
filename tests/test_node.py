@@ -16,6 +16,7 @@ import os
 import sys
 import queue
 import threading
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -24,6 +25,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import block as block_mod
 import crypto
+import node as node_mod
 import state as state_mod
 import tx as tx_mod
 from chainstate import ChainState
@@ -679,3 +681,75 @@ class TestReorgMempool:
                            new_chain=[g, b1_new], new_state=new_state)
 
         assert node.mempool.get(tx_mod.tx_hash(t_old)) is None
+
+
+# ---------------------------------------------------------------------------
+# 15. _run_cycle: mid-VDF sync polling and the staleness guard
+# ---------------------------------------------------------------------------
+
+class TestRunCycleSyncPolling:
+    """_run_cycle re-checks for a better peer chain periodically during the
+    VDF wait (not just once at cycle start), so a lagging node can converge
+    in roughly SYNC_POLL_INTERVAL_SECONDS instead of a full mining cycle.
+    If that mid-wait check adopts a better chain, the in-flight VDF result
+    (computed for the now-stale tip) must be discarded rather than committed,
+    since ChainState.apply_block trusts previous_hash without re-checking it.
+    """
+
+    def _slow_fake_evaluate(self, sleep_seconds):
+        def _evaluate(challenge, iterations):
+            time.sleep(sleep_seconds)
+            return "aa" * 100, "bb" * 100, sleep_seconds
+        return _evaluate
+
+    def test_check_and_sync_runs_more_than_once_during_a_slow_vdf(
+        self, node_env, monkeypatch
+    ):
+        node, *_ = node_env
+        monkeypatch.setattr(node_mod, "SYNC_POLL_INTERVAL_SECONDS", 0.05)
+        monkeypatch.setattr(node_mod.vdf_mod, "evaluate", self._slow_fake_evaluate(0.3))
+
+        node._run_cycle()
+
+        # Once at cycle start plus at least one mid-wait poll.
+        assert node.syncer.check_and_sync.call_count >= 2
+
+    def test_mid_wait_reorg_discards_stale_candidate(self, node_env, monkeypatch):
+        node, *_ = node_env
+        original_cs = node.cs
+        replacement_cs = ChainState.from_genesis()  # a distinct chain-state object
+        calls = {"n": 0}
+
+        def fake_check_and_sync(chain, apply_fn):
+            # First call is the existing top-of-cycle check (before this
+            # cycle's tip is even locked in); only the *second* call, from
+            # inside the wait loop, should simulate a genuine mid-wait
+            # reorg landing out from under the in-flight VDF computation.
+            calls["n"] += 1
+            if calls["n"] >= 2:
+                node.cs = replacement_cs
+            return True
+
+        monkeypatch.setattr(node_mod, "SYNC_POLL_INTERVAL_SECONDS", 0.05)
+        monkeypatch.setattr(node_mod.vdf_mod, "evaluate", self._slow_fake_evaluate(0.3))
+        node.syncer.check_and_sync.side_effect = fake_check_and_sync
+        commit_spy = MagicMock()
+        monkeypatch.setattr(node, "_commit", commit_spy)
+
+        node._run_cycle()
+
+        assert node.cs is replacement_cs
+        commit_spy.assert_not_called()
+
+    def test_no_stale_reorg_commits_normally(self, node_env, monkeypatch):
+        """Sanity check: when self.cs never changes mid-wait, the candidate
+        still gets built and committed as before."""
+        node, *_ = node_env
+        monkeypatch.setattr(node_mod, "SYNC_POLL_INTERVAL_SECONDS", 0.05)
+        monkeypatch.setattr(node_mod.vdf_mod, "evaluate", self._slow_fake_evaluate(0.15))
+        commit_spy = MagicMock()
+        monkeypatch.setattr(node, "_commit", commit_spy)
+
+        node._run_cycle()
+
+        commit_spy.assert_called_once()
