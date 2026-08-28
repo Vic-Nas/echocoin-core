@@ -82,6 +82,11 @@ def fmt_balance(ticks):
     return f"{lapse} LAPSE {rem:,} ticks"
 
 
+def fmt_lapse(ticks):
+    """Whole-LAPSE amount only, comma-grouped -- for compact display."""
+    return f"{ticks // TICKS_PER_LAPSE:,} LAPSE"
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -264,13 +269,16 @@ def _shared_read_only_routes(app, node, pool, limiter,
     def address_lookup():
         addr = request.args.get("addr", "").strip()
         page = max(request.args.get("page", 1, type=int) or 1, 1)
-        ctx = dict(title="Address", addr=addr, alert_err="", page=page,
-                   history=None, balance=0, tx_count=0, has_prev=False, has_next=False)
+        v = node.view
+        top_balances = v.state.get_top_balances(10)
+        circulating  = v.state.get_circulating_supply()
+        ctx = dict(title="Balance", addr=addr, alert_err="", page=page,
+                   history=None, balance=0, tx_count=0, has_prev=False, has_next=False,
+                   top_balances=top_balances, circulating=circulating)
         if addr and not crypto_mod.is_valid_address(addr):
             ctx["alert_err"] = "Invalid address format."
             ctx["addr"] = ""
         elif addr:
-            v = node.view
             ctx["balance"]  = v.state.get_balance(addr)
             ctx["tx_count"] = v.state.get_nonce(addr)
             newest_first = _get_address_history(addr, node)[::-1]
@@ -397,7 +405,7 @@ def _base_dir():
 def create_app(node, pool, private_port=8334, public_port=8333, update_checker=None):
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
-    app.jinja_env.globals.update(fmt_balance=fmt_balance)
+    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse)
     app.logger.setLevel(logging.WARNING)
     logging.getLogger("werkzeug").setLevel(logging.INFO)
 
@@ -429,7 +437,7 @@ def create_private_app(node, pool, private_port=8334, public_port=8333, update_c
     """Full-featured app for local use. Never expose via Funnel or public port."""
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
-    app.jinja_env.globals.update(fmt_balance=fmt_balance)
+    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse)
     app.logger.setLevel(logging.WARNING)
 
     limiter = Limiter(get_remote_address, app=app, default_limits=[],

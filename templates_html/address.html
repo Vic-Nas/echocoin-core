@@ -1,5 +1,26 @@
 {% extends "base.html" %}
 {% block content %}
+<h2>Balance</h2>
+{% if top_balances %}
+<div class="card">
+  <div class="card-title">Wealth distribution &mdash; top {{ top_balances | length }} holders</div>
+  <div style="overflow-x:auto">
+  <div style="min-width:520px">
+  {% for addr_row, bal in top_balances %}
+  {% set pct = (bal / circulating * 100) if circulating else 0 %}
+  <div style="display:flex; align-items:center; gap:.6rem; margin-bottom:.4rem; font-size:.8rem">
+    <a href="/address?addr={{ addr_row }}" title="{{ addr_row }}" class="hash-short" style="width:8rem; flex-shrink:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ addr_row }}</a>
+    <div style="flex:1; background:#0a0c11; border-radius:3px; overflow:hidden; height:1.1rem">
+      <div style="height:100%; width:{{ '%.2f' % pct }}%; min-width:2px; background:var(--accent)"></div>
+    </div>
+    <span style="width:3.5rem; text-align:right; color:var(--muted); flex-shrink:0">{{ '%.1f' % pct }}%</span>
+    <span style="width:8rem; text-align:right; font-family:var(--mono); white-space:nowrap; flex-shrink:0">{{ fmt_lapse(bal) }}</span>
+  </div>
+  {% endfor %}
+  </div>
+  </div>
+</div>
+{% endif %}
 <h2>Address Lookup</h2>
 {% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
 <div class="card">
