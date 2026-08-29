@@ -4,16 +4,17 @@
 {% if b.message %}<div class="alert alert-ok">{{ b.message }}</div>{% endif %}
 <div class="card">
   <div class="card-title">Block details</div>
-  <table>
-    <tr><td style="color:var(--muted);width:140px">Hash</td><td class="hash">{{ b.hash }}</td></tr>
-    <tr><td style="color:var(--muted)">Previous</td><td class="hash">{{ b.previous_hash }}</td></tr>
-    <tr><td style="color:var(--muted)">Height</td><td>{{ b.height }}</td></tr>
-    <tr><td style="color:var(--muted)">Transactions</td><td>{{ b.transactions | length }}</td></tr>
-    <tr><td style="color:var(--muted)">Builder</td><td class="hash-short">{{ b.builder or "(none)" }}</td></tr>
+  <table class="kv-table">
+    <tr><td>Hash</td><td class="hash">{{ b.hash }}</td></tr>
+    <tr><td>Previous</td><td class="hash">{{ b.previous_hash }}</td></tr>
+    <tr><td>Height</td><td>{{ b.height }}</td></tr>
+    <tr><td>Transactions</td><td>{{ b.transactions | length }}</td></tr>
+    <tr><td>Builder</td><td class="hash-short" style="word-break:break-all">{{ b.builder or "(none)" }}</td></tr>
   </table>
 </div>
 <div class="card">
   <div class="card-title">Transactions</div>
+  <div class="table-wrap">
   <table>
     <thead><tr><th>Hash</th><th>From</th><th>Total sent</th><th>Fee</th></tr></thead>
     <tbody>
@@ -32,6 +33,8 @@
     </tbody>
   </table>
 </div>
-{% if b.height > 0 %}<a href="/explorer/block/{{ b.height - 1 }}" style="margin-right:1rem">&larr; prev</a>{% endif %}
+<div class="pager">
+{% if b.height > 0 %}<a href="/explorer/block/{{ b.height - 1 }}">&larr; prev</a>{% endif %}
 {% if has_next %}<a href="/explorer/block/{{ b.height + 1 }}">&rarr; next</a>{% endif %}
+</div>
 {% endblock %}

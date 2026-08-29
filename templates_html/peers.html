@@ -3,6 +3,7 @@
 <h2>Peers</h2>
 <div class="card">
   <div class="card-title">{{ rows | length }} known peer{{ "s" if rows | length != 1 }}</div>
+  <div class="table-wrap">
   <table>
     <thead><tr><th>Address</th><th>Wallet</th><th>Height</th><th>Version</th><th>Last seen</th><th>Status</th></tr></thead>
     <tbody>
@@ -39,6 +40,7 @@
     {% endif %}
     </tbody>
   </table>
+  </div>
 </div>
 <script>
   document.querySelectorAll(".peer-last-seen").forEach(td => {

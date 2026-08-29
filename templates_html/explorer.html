@@ -2,6 +2,7 @@
 {% block content %}
 <h2>Block Explorer</h2>
 <div class="card">
+  <div class="table-wrap">
   <table>
     <thead><tr><th>Height</th><th>Hash</th><th>Txs</th><th>Builder</th></tr></thead>
     <tbody>
@@ -19,7 +20,10 @@
     {% endif %}
     </tbody>
   </table>
+  </div>
 </div>
-{% if has_prev %}<a href="/explorer?page={{ page - 1 }}" style="margin-right:1rem">&larr; newer</a>{% endif %}
+<div class="pager">
+{% if has_prev %}<a href="/explorer?page={{ page - 1 }}">&larr; newer</a>{% endif %}
 {% if has_next %}<a href="/explorer?page={{ page + 1 }}">older &rarr;</a>{% endif %}
+</div>
 {% endblock %}
