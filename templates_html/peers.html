@@ -23,7 +23,7 @@
       {% for addr, last_seen, active, height, wallet, inferred_wallet, version, http_reachable in rows %}
       <tr>
         {% if http_reachable %}
-        <td data-label="Address" class="hash-short"><a href="http://{{ addr }}" target="_blank" rel="noopener"
+        <td data-label="Address" class="hash-short"><a class="peer-link" href="http://{{ addr }}" target="_blank" rel="noopener"
             title="This peer's web UI answered an HTTP check within the last 10 minutes">{{ addr }}</a></td>
         {% else %}
         <td data-label="Address" class="hash-short">{{ addr }}</td>
@@ -86,6 +86,7 @@
     td.className = "hash-short";
     if (p.http_reachable === true) {
       const a = document.createElement("a");
+      a.className = "peer-link";
       a.href = "http://" + p.address;
       a.target = "_blank";
       a.rel = "noopener";
