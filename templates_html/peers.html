@@ -22,7 +22,12 @@
     {% if rows %}
       {% for addr, last_seen, active, height, wallet, inferred_wallet, version in rows %}
       <tr>
+        {% if version and active %}
+        <td data-label="Address" class="hash-short"><a href="http://{{ addr }}" target="_blank" rel="noopener"
+            title="Best-effort guess: this peer answered a recent handshake over its P2P port, which doesn't guarantee its web UI on the same port is actually reachable">{{ addr }}</a></td>
+        {% else %}
         <td data-label="Address" class="hash-short">{{ addr }}</td>
+        {% endif %}
         {% if wallet %}
         <td data-label="Wallet" class="hash-short" title="{{ wallet }}">{{ wallet[:14] }}&hellip;</td>
         {% elif inferred_wallet %}
@@ -72,9 +77,29 @@
     return td;
   }
 
+  function addressCell(p) {
+    const td = document.createElement("td");
+    td.dataset.label = "Address";
+    td.className = "hash-short";
+    if (p.version && p.active) {
+      const a = document.createElement("a");
+      a.href = "http://" + p.address;
+      a.target = "_blank";
+      a.rel = "noopener";
+      a.title = "Best-effort guess: this peer answered a recent handshake over "
+        + "its P2P port, which doesn't guarantee its web UI on the same port "
+        + "is actually reachable";
+      a.textContent = p.address;
+      td.appendChild(a);
+    } else {
+      td.textContent = p.address;
+    }
+    return td;
+  }
+
   function buildRow(p) {
     const tr = document.createElement("tr");
-    tr.appendChild(cell("Address", p.address, {cls: "hash-short"}));
+    tr.appendChild(addressCell(p));
 
     if (p.wallet) {
       tr.appendChild(cell("Wallet", p.wallet.slice(0, 14) + "…", {cls: "hash-short", title: p.wallet}));
