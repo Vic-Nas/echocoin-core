@@ -110,6 +110,13 @@
   td { padding: .5rem .6rem; border-bottom: 1px solid var(--rule-lt); font-family: var(--mono); white-space: nowrap; }
   tr:last-child td { border-bottom: none; }
 
+  /* Fixed layout plus an explicit colgroup (in peers.html) stops the
+     browser's default column-width algorithm from dumping all of a
+     table's leftover width into whichever column it picks, which on
+     the peers table left a large empty gap in one column instead of
+     the table simply being however wide its content needs. */
+  table.stacked-wide { table-layout: fixed; }
+
   table.kv-table { min-width: 0; }
   table.kv-table td { white-space: normal; font-size: .92rem; font-family: var(--serif); }
   table.kv-table td.hash, table.kv-table td .hash { font-family: var(--mono); }

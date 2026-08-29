@@ -5,6 +5,10 @@
   <div class="card-title" id="peers-count">{{ rows | length }} known peer{{ "s" if rows | length != 1 }}</div>
   <div class="table-wrap">
   <table class="stacked-wide">
+    <colgroup>
+      <col style="width:22%"><col style="width:19%"><col style="width:11%">
+      <col style="width:11%"><col style="width:19%"><col style="width:18%">
+    </colgroup>
     <thead><tr><th>Address</th><th>Wallet</th><th>Height</th><th>Version</th><th>Last seen</th><th>Status</th></tr></thead>
     <tbody id="peers-tbody">
       <tr style="font-weight:600">
@@ -24,7 +28,7 @@
         {% elif inferred_wallet %}
         <td data-label="Wallet" class="hash-short" style="color:var(--accent);font-style:italic"
             title="Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly. Full address: {{ inferred_wallet }}">
-          {{ inferred_wallet[:14] }}&hellip; (unconfirmed)
+          {{ inferred_wallet[:14] }}&hellip;
         </td>
         {% else %}
         <td data-label="Wallet" class="hash-short" style="color:var(--muted)">unknown</td>
@@ -75,7 +79,7 @@
     if (p.wallet) {
       tr.appendChild(cell("Wallet", p.wallet.slice(0, 14) + "…", {cls: "hash-short", title: p.wallet}));
     } else if (p.inferred_wallet) {
-      tr.appendChild(cell("Wallet", p.inferred_wallet.slice(0, 14) + "… (unconfirmed)", {
+      tr.appendChild(cell("Wallet", p.inferred_wallet.slice(0, 14) + "…", {
         cls: "hash-short", color: "var(--accent)", italic: true,
         title: "Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly. Full address: " + p.inferred_wallet,
       }));

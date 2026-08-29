@@ -35,8 +35,8 @@
   <form method="POST" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="form-group">
-      <label>CSV outputs (one per line: address,amount)</label>
-      <textarea name="outputs" rows="6" placeholder="word1.word2...word12,1000&#10;word1.word2...word12,500"></textarea>
+      <label>CSV outputs (one per line: address,amount). Prefilled with known peers at 0; only the lines you change to a nonzero amount get sent, the rest are ignored.</label>
+      <textarea name="outputs" rows="6" placeholder="word1.word2...word12,1000&#10;word1.word2...word12,500">{{ outputs_value }}</textarea>
     </div>
     <div class="form-group">
       <label>Or upload CSV file</label>

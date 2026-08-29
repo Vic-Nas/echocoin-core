@@ -186,10 +186,16 @@ def _parse_csv_outputs(outputs_raw):
             continue
         try:
             amt = int(amt_str)
-            if amt <= 0:
-                raise ValueError("must be positive")
         except ValueError:
             errors.append(f"Line {i}: invalid amount '{amt_str}'")
+            continue
+        if amt < 0:
+            errors.append(f"Line {i}: amount must not be negative")
+            continue
+        if amt == 0:
+            # A zero-amount output is never valid on the wire (tx_mod.validate
+            # rejects it), so this isn't a real output -- it's the untouched
+            # half of a prefilled "address,0" line the sender left as-is.
             continue
         outputs.append({"to": addr, "amount": amt})
     return outputs, errors
@@ -226,6 +232,19 @@ def fee_estimate(node):
 
     return {"pending": n, "min": rates[0], "median": median, "max": rates[-1],
             "next_block": next_block}
+
+
+def _default_send_outputs(pool):
+    """One 'wallet,0' line per known peer with a confirmed wallet address,
+    so the sender can just change the one 0 they actually want to send
+    and leave the rest -- _parse_csv_outputs drops any line still at 0."""
+    seen, lines = set(), []
+    for row in sorted(pool.snapshot(), key=lambda r: r[1], reverse=True):
+        wallet = row[4]
+        if wallet and wallet not in seen:
+            seen.add(wallet)
+            lines.append(f"{wallet},0")
+    return "\n".join(lines)
 
 
 def _submit_and_alert(node, outputs, fee, passphrase, ctx):
@@ -548,6 +567,7 @@ def create_private_app(node, pool, private_port=8334, public_port=8333, update_c
         ctx = dict(title="Send", from_addr=node.addr,
                    balance=v.state.get_balance(node.addr),
                    fees=fee_estimate(node), csrf_token=csrf_token,
+                   outputs_value=_default_send_outputs(pool),
                    alert_ok_tx="", alert_ok_verb="", alert_err="", alert_err_lines=[])
         if request.method == "POST":
             if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
@@ -559,6 +579,7 @@ def create_private_app(node, pool, private_port=8334, public_port=8333, update_c
             csv_file    = request.files.get("csv_file")
             if csv_file and csv_file.filename:
                 outputs_raw = csv_file.read().decode()
+            ctx["outputs_value"] = outputs_raw
             outputs, errors = _parse_csv_outputs(outputs_raw)
             try:
                 fee = int(fee_raw or "0")
@@ -575,6 +596,7 @@ def create_private_app(node, pool, private_port=8334, public_port=8333, update_c
                 _submit_and_alert(node, outputs, fee, passphrase, ctx)
                 if ctx["alert_ok_tx"]:
                     ctx["alert_ok_verb"] = "Sent."
+                    ctx["outputs_value"] = ""
         return render_template("send.html", **ctx)
 
     @app.route("/api/peers/add", methods=["POST"])
