@@ -3,7 +3,7 @@
 <h2>Balance</h2>
 {% if holder_count %}
 <div class="card wealth">
-  <div class="card-title">Wealth distribution &mdash; {{ holder_count }} holder{{ 's' if holder_count != 1 }}</div>
+  <div class="card-title">Wealth distribution ({{ holder_count }} holder{{ 's' if holder_count != 1 }})</div>
   <h3>Holders by balance</h3>
   <div class="histo">
   {% for label, count in histogram %}
