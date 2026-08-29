@@ -54,7 +54,7 @@ import secrets
 import sys
 
 import markdown
-from flask import Flask, jsonify, render_template, request
+from flask import Flask, jsonify, render_template, request, send_file
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 
@@ -238,6 +238,14 @@ def _shared_read_only_routes(app, node, pool, limiter,
                 "private_port": private_port,
                 "public_port": public_port,
                 "update_checker": update_checker}
+
+    @app.route("/favicon.svg", endpoint=pfx+"favicon")
+    def favicon():
+        # Served straight from the repo's actual lapsecoin.svg (rather than a
+        # copy baked into the HTML) so the browser tab icon always matches
+        # whatever the file on disk currently looks like.
+        return send_file(os.path.join(_base_dir(), "lapsecoin.svg"),
+                         mimetype="image/svg+xml", max_age=3600)
 
     # ---- UI pages --------------------------------------------------------
 
