@@ -71,9 +71,11 @@
   nav.mainnav a.nav-disabled { color: var(--rule-lt); pointer-events: none; }
   nav.mainnav .sep { color: var(--rule-lt); }
   .version-alert {
-    display: block; text-align: center; font-size: .82rem; font-weight: bold;
-    margin-top: .5rem;
+    display: table; margin: .6rem auto 0; padding: .25rem .75rem;
+    border: 1px solid currentcolor; font-size: .78rem; font-weight: bold;
+    text-decoration: none;
   }
+  .version-alert:hover { text-decoration: none; background: var(--paper-2); }
 
   /* ===================================================== layout ========= */
   .page { flex: 1; width: 100%; max-width: var(--container); margin: 0 auto; padding: 1.5rem 1.25rem 2.5rem; }
@@ -166,7 +168,9 @@
   .hash { font-family: var(--mono); font-size: .85rem; color: var(--ink-dim); word-break: break-all; white-space: normal; }
   .hash-short { font-family: var(--mono); font-size: .9rem; }
 
-  .pager { display: flex; gap: 1.5rem; margin-top: .25rem; font-size: .9rem; }
+  .pager { display: flex; flex-wrap: wrap; gap: .8rem; align-items: baseline; margin-top: .25rem; font-size: .9rem; }
+  .pager-current { font-weight: bold; text-decoration: underline; }
+  .pager-ellipsis { color: var(--rule-lt); }
 
   .wp { max-width: 100%; line-height: 1.65; }
   .wp h1 { font-size: 1.9rem; font-weight: bold; margin: 0 0 .5rem; text-align: center; }

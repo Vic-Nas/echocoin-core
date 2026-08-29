@@ -22,8 +22,16 @@
   </table>
   </div>
 </div>
-<div class="pager">
-{% if has_prev %}<a href="/explorer?page={{ page - 1 }}">&larr; newer</a>{% endif %}
-{% if has_next %}<a href="/explorer?page={{ page + 1 }}">older &rarr;</a>{% endif %}
-</div>
+{% if total_pages > 1 %}
+<nav class="pager" aria-label="Pagination">
+  {% if has_prev %}<a href="/explorer?page={{ page - 1 }}">Prev</a>{% endif %}
+  {% for p in page_window %}
+    {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
+    {% elif p == page %}<span class="pager-current">{{ p }}</span>
+    {% else %}<a href="/explorer?page={{ p }}">{{ p }}</a>
+    {% endif %}
+  {% endfor %}
+  {% if has_next %}<a href="/explorer?page={{ page + 1 }}">Next</a>{% endif %}
+</nav>
+{% endif %}
 {% endblock %}

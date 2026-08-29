@@ -123,6 +123,26 @@ def _tx_amount(t):
     return sum(o["amount"] for o in t.get("outputs", []))
 
 
+def _pagination_window(page, total_pages, radius=2):
+    """Page numbers to render as links: always the first and last page,
+    the current page and `radius` neighbors on each side, and None where
+    a gap between those is skipped (rendered as an ellipsis)."""
+    if total_pages <= 1:
+        return [1]
+    keep = {1, total_pages}
+    for p in range(page - radius, page + radius + 1):
+        if 1 <= p <= total_pages:
+            keep.add(p)
+    window = []
+    prev = None
+    for p in sorted(keep):
+        if prev is not None and p - prev > 1:
+            window.append(None)
+        window.append(p)
+        prev = p
+    return window
+
+
 def _recent_committed_txs(chain, limit):
     """Most recently committed transactions across the chain, tip first.
     Walks blocks backward from the tip so this stays cheap even on a long
@@ -260,12 +280,14 @@ def _shared_read_only_routes(app, node, pool, limiter,
     @app.route("/explorer", endpoint=pfx+"explorer")
     def explorer():
         chain = node.view.chain
-        page  = max(request.args.get("page", 1, type=int) or 1, 1)
         total = len(chain)
+        total_pages = max(-(-total // BLOCKS_PER_PAGE), 1)
+        page  = min(max(request.args.get("page", 1, type=int) or 1, 1), total_pages)
         end   = max(total - (page - 1) * BLOCKS_PER_PAGE, 0)
         start = max(end - BLOCKS_PER_PAGE, 0)
         return render_template("explorer.html", title="Explorer",
-            recent=chain[start:end][::-1], page=page,
+            recent=chain[start:end][::-1], page=page, total_pages=total_pages,
+            page_window=_pagination_window(page, total_pages),
             has_prev=page > 1, has_next=start > 0)
 
     @app.route("/explorer/block/<int:height>", endpoint=pfx+"block_detail")
@@ -324,8 +346,13 @@ def _shared_read_only_routes(app, node, pool, limiter,
             ctx["balance"]  = v.state.get_balance(addr)
             ctx["tx_count"] = v.state.get_nonce(addr)
             newest_first = _get_address_history(addr, node)[::-1]
+            total_pages = max(-(-len(newest_first) // HISTORY_PER_PAGE), 1)
+            page = min(page, total_pages)
             start = (page - 1) * HISTORY_PER_PAGE
             end   = start + HISTORY_PER_PAGE
+            ctx["page"] = page
+            ctx["total_pages"] = total_pages
+            ctx["page_window"] = _pagination_window(page, total_pages)
             ctx["history"]  = newest_first[start:end]
             ctx["has_prev"] = page > 1
             ctx["has_next"] = end < len(newest_first)
