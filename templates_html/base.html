@@ -144,6 +144,33 @@
     table.stacked td[colspan]::before { content: none; }
   }
 
+  /* The peers table has six columns (wider than any other table on the
+     site) and stops fitting the page's own 900px content width before
+     640px, so it needs to switch to the stacked layout earlier than
+     everything else does. Same rules as above, just a wider trigger,
+     so this table never gets a horizontal scrollbar at any width where
+     the general 640px breakpoint would otherwise leave it in table
+     mode. */
+  @media (max-width: 900px) {
+    table.stacked-wide { min-width: 0; }
+    table.stacked-wide thead { display: none; }
+    table.stacked-wide, table.stacked-wide tbody, table.stacked-wide tr, table.stacked-wide td { display: block; width: 100%; }
+    table.stacked-wide tr {
+      border: 1px solid var(--rule-lt); margin-bottom: .75rem; padding: .6rem .75rem;
+    }
+    table.stacked-wide tr:last-child { margin-bottom: 0; }
+    table.stacked-wide td {
+      border-bottom: 1px dotted var(--rule-lt); padding: .4rem 0; white-space: normal; word-break: break-all;
+    }
+    table.stacked-wide td:last-child { border-bottom: none; }
+    table.stacked-wide td[colspan] { text-align: center; border-bottom: none; }
+    table.stacked-wide td::before {
+      content: attr(data-label); display: block; font-family: var(--serif); font-style: italic;
+      font-size: .78rem; color: var(--ink-dim); margin-bottom: .15rem;
+    }
+    table.stacked-wide td[colspan]::before { content: none; }
+  }
+
   .form-group { margin-bottom: 1rem; }
   label { display: block; font-size: .85rem; margin-bottom: .35rem; }
   input, textarea {

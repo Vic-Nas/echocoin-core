@@ -4,12 +4,12 @@
 <div class="card">
   <div class="card-title" id="peers-count">{{ rows | length }} known peer{{ "s" if rows | length != 1 }}</div>
   <div class="table-wrap">
-  <table class="stacked">
+  <table class="stacked-wide">
     <thead><tr><th>Address</th><th>Wallet</th><th>Height</th><th>Version</th><th>Last seen</th><th>Status</th></tr></thead>
     <tbody id="peers-tbody">
       <tr style="font-weight:600">
         <td data-label="Address">(you)</td>
-        <td data-label="Wallet" class="hash-short" title="{{ self_wallet }}">{{ self_wallet[:18] }}&hellip;</td>
+        <td data-label="Wallet" class="hash-short" title="{{ self_wallet }}">{{ self_wallet[:14] }}&hellip;</td>
         <td data-label="Height">{{ self_height }}</td>
         <td data-label="Version">{{ self_version }}</td>
         <td data-label="Last seen">n/a</td>
@@ -20,11 +20,11 @@
       <tr>
         <td data-label="Address" class="hash-short">{{ addr }}</td>
         {% if wallet %}
-        <td data-label="Wallet" class="hash-short" title="{{ wallet }}">{{ wallet[:18] }}&hellip;</td>
+        <td data-label="Wallet" class="hash-short" title="{{ wallet }}">{{ wallet[:14] }}&hellip;</td>
         {% elif inferred_wallet %}
         <td data-label="Wallet" class="hash-short" style="color:var(--accent);font-style:italic"
             title="Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly. Full address: {{ inferred_wallet }}">
-          {{ inferred_wallet[:18] }}&hellip; (unconfirmed)
+          {{ inferred_wallet[:14] }}&hellip; (unconfirmed)
         </td>
         {% else %}
         <td data-label="Wallet" class="hash-short" style="color:var(--muted)">unknown</td>
@@ -46,7 +46,14 @@
 <script>
 (function () {
   function fmtTs(ts) {
-    return ts ? new Date(ts * 1000).toLocaleString() : "n/a";
+    if (!ts) return "n/a";
+    const diff = Math.floor(Date.now() / 1000) - ts;
+    if (diff < 5) return "just now";
+    if (diff < 60) return diff + "s ago";
+    if (diff < 3600) return Math.floor(diff / 60) + "m ago";
+    if (diff < 86400) return Math.floor(diff / 3600) + "h ago";
+    if (diff < 2592000) return Math.floor(diff / 86400) + "d ago";
+    return new Date(ts * 1000).toLocaleDateString();
   }
 
   function cell(label, text, opts) {
@@ -66,9 +73,9 @@
     tr.appendChild(cell("Address", p.address, {cls: "hash-short"}));
 
     if (p.wallet) {
-      tr.appendChild(cell("Wallet", p.wallet.slice(0, 18) + "…", {cls: "hash-short", title: p.wallet}));
+      tr.appendChild(cell("Wallet", p.wallet.slice(0, 14) + "…", {cls: "hash-short", title: p.wallet}));
     } else if (p.inferred_wallet) {
-      tr.appendChild(cell("Wallet", p.inferred_wallet.slice(0, 18) + "… (unconfirmed)", {
+      tr.appendChild(cell("Wallet", p.inferred_wallet.slice(0, 14) + "… (unconfirmed)", {
         cls: "hash-short", color: "var(--accent)", italic: true,
         title: "Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly. Full address: " + p.inferred_wallet,
       }));
@@ -78,7 +85,9 @@
 
     tr.appendChild(cell("Height", p.height === null || p.height === undefined ? "?" : p.height));
     tr.appendChild(cell("Version", p.version || "unknown", {color: p.version ? null : "var(--muted)"}));
-    tr.appendChild(cell("Last seen", fmtTs(p.last_seen)));
+    tr.appendChild(cell("Last seen", fmtTs(p.last_seen), {
+      title: p.last_seen ? new Date(p.last_seen * 1000).toLocaleString() : null,
+    }));
     tr.appendChild(cell("Status", p.active ? "active" : "cooldown", {color: p.active ? "var(--green)" : "var(--muted)"}));
     return tr;
   }
@@ -87,7 +96,7 @@
     const tr = document.createElement("tr");
     tr.style.fontWeight = "600";
     tr.appendChild(cell("Address", "(you)"));
-    tr.appendChild(cell("Wallet", self.wallet.slice(0, 18) + "…", {cls: "hash-short", title: self.wallet}));
+    tr.appendChild(cell("Wallet", self.wallet.slice(0, 14) + "…", {cls: "hash-short", title: self.wallet}));
     tr.appendChild(cell("Height", self.height));
     tr.appendChild(cell("Version", self.version));
     tr.appendChild(cell("Last seen", "n/a"));
