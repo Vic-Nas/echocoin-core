@@ -4,35 +4,35 @@
 <div class="card">
   <div class="card-title" id="peers-count">{{ rows | length }} known peer{{ "s" if rows | length != 1 }}</div>
   <div class="table-wrap">
-  <table>
+  <table class="stacked">
     <thead><tr><th>Address</th><th>Wallet</th><th>Height</th><th>Version</th><th>Last seen</th><th>Status</th></tr></thead>
     <tbody id="peers-tbody">
       <tr style="font-weight:600">
-        <td>(you)</td>
-        <td class="hash-short" title="{{ self_wallet }}">{{ self_wallet[:18] }}&hellip;</td>
-        <td>{{ self_height }}</td>
-        <td>{{ self_version }}</td>
-        <td>n/a</td>
-        <td>n/a</td>
+        <td data-label="Address">(you)</td>
+        <td data-label="Wallet" class="hash-short" title="{{ self_wallet }}">{{ self_wallet[:18] }}&hellip;</td>
+        <td data-label="Height">{{ self_height }}</td>
+        <td data-label="Version">{{ self_version }}</td>
+        <td data-label="Last seen">n/a</td>
+        <td data-label="Status">n/a</td>
       </tr>
     {% if rows %}
       {% for addr, last_seen, active, height, wallet, inferred_wallet, version in rows %}
       <tr>
-        <td class="hash-short">{{ addr }}</td>
+        <td data-label="Address" class="hash-short">{{ addr }}</td>
         {% if wallet %}
-        <td class="hash-short" title="{{ wallet }}">{{ wallet[:18] }}&hellip;</td>
+        <td data-label="Wallet" class="hash-short" title="{{ wallet }}">{{ wallet[:18] }}&hellip;</td>
         {% elif inferred_wallet %}
-        <td class="hash-short" style="color:var(--accent);font-style:italic"
+        <td data-label="Wallet" class="hash-short" style="color:var(--accent);font-style:italic"
             title="Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly. Full address: {{ inferred_wallet }}">
           {{ inferred_wallet[:18] }}&hellip; (unconfirmed)
         </td>
         {% else %}
-        <td class="hash-short" style="color:var(--muted)">unknown</td>
+        <td data-label="Wallet" class="hash-short" style="color:var(--muted)">unknown</td>
         {% endif %}
-        <td>{{ height if height is not none else "?" }}</td>
-        <td style="color:{{ 'var(--muted)' if not version }}">{{ version if version else "unknown" }}</td>
-        <td data-ts="{{ last_seen | int }}" class="peer-last-seen">{{ last_seen | int }}</td>
-        <td style="color:{{ 'var(--green)' if active else 'var(--muted)' }}">{{ "active" if active else "cooldown" }}</td>
+        <td data-label="Height">{{ height if height is not none else "?" }}</td>
+        <td data-label="Version" style="color:{{ 'var(--muted)' if not version }}">{{ version if version else "unknown" }}</td>
+        <td data-label="Last seen" data-ts="{{ last_seen | int }}" class="peer-last-seen">{{ last_seen | int }}</td>
+        <td data-label="Status" style="color:{{ 'var(--green)' if active else 'var(--muted)' }}">{{ "active" if active else "cooldown" }}</td>
       </tr>
       {% endfor %}
     {% else %}
@@ -49,10 +49,11 @@
     return ts ? new Date(ts * 1000).toLocaleString() : "n/a";
   }
 
-  function cell(text, opts) {
+  function cell(label, text, opts) {
     opts = opts || {};
     const td = document.createElement("td");
     td.textContent = text;
+    td.dataset.label = label;
     if (opts.cls) td.className = opts.cls;
     if (opts.color) td.style.color = opts.color;
     if (opts.italic) td.style.fontStyle = "italic";
@@ -62,35 +63,35 @@
 
   function buildRow(p) {
     const tr = document.createElement("tr");
-    tr.appendChild(cell(p.address, {cls: "hash-short"}));
+    tr.appendChild(cell("Address", p.address, {cls: "hash-short"}));
 
     if (p.wallet) {
-      tr.appendChild(cell(p.wallet.slice(0, 18) + "…", {cls: "hash-short", title: p.wallet}));
+      tr.appendChild(cell("Wallet", p.wallet.slice(0, 18) + "…", {cls: "hash-short", title: p.wallet}));
     } else if (p.inferred_wallet) {
-      tr.appendChild(cell(p.inferred_wallet.slice(0, 18) + "… (unconfirmed)", {
+      tr.appendChild(cell("Wallet", p.inferred_wallet.slice(0, 18) + "… (unconfirmed)", {
         cls: "hash-short", color: "var(--accent)", italic: true,
         title: "Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly. Full address: " + p.inferred_wallet,
       }));
     } else {
-      tr.appendChild(cell("unknown", {cls: "hash-short", color: "var(--muted)"}));
+      tr.appendChild(cell("Wallet", "unknown", {cls: "hash-short", color: "var(--muted)"}));
     }
 
-    tr.appendChild(cell(p.height === null || p.height === undefined ? "?" : p.height));
-    tr.appendChild(cell(p.version || "unknown", {color: p.version ? null : "var(--muted)"}));
-    tr.appendChild(cell(fmtTs(p.last_seen)));
-    tr.appendChild(cell(p.active ? "active" : "cooldown", {color: p.active ? "var(--green)" : "var(--muted)"}));
+    tr.appendChild(cell("Height", p.height === null || p.height === undefined ? "?" : p.height));
+    tr.appendChild(cell("Version", p.version || "unknown", {color: p.version ? null : "var(--muted)"}));
+    tr.appendChild(cell("Last seen", fmtTs(p.last_seen)));
+    tr.appendChild(cell("Status", p.active ? "active" : "cooldown", {color: p.active ? "var(--green)" : "var(--muted)"}));
     return tr;
   }
 
   function buildSelfRow(self) {
     const tr = document.createElement("tr");
     tr.style.fontWeight = "600";
-    tr.appendChild(cell("(you)"));
-    tr.appendChild(cell(self.wallet.slice(0, 18) + "…", {cls: "hash-short", title: self.wallet}));
-    tr.appendChild(cell(self.height));
-    tr.appendChild(cell(self.version));
-    tr.appendChild(cell("n/a"));
-    tr.appendChild(cell("n/a"));
+    tr.appendChild(cell("Address", "(you)"));
+    tr.appendChild(cell("Wallet", self.wallet.slice(0, 18) + "…", {cls: "hash-short", title: self.wallet}));
+    tr.appendChild(cell("Height", self.height));
+    tr.appendChild(cell("Version", self.version));
+    tr.appendChild(cell("Last seen", "n/a"));
+    tr.appendChild(cell("Status", "n/a"));
     return tr;
   }
 
@@ -110,8 +111,9 @@
         data.peers.forEach(p => tbody.appendChild(buildRow(p)));
       } else {
         const tr = document.createElement("tr");
-        const td = cell("No peers yet", {color: "var(--muted)"});
+        const td = cell("", "No peers yet", {color: "var(--muted)"});
         td.colSpan = 6;
+        delete td.dataset.label;
         td.style.textAlign = "center";
         tr.appendChild(td);
         tbody.appendChild(tr);
@@ -125,6 +127,7 @@
     }
   }
 
+  refresh();
   setInterval(refresh, 8000);
 })();
 </script>

@@ -22,16 +22,16 @@
 <div class="card">
   <div class="card-title">Recent transactions</div>
   <div class="table-wrap">
-  <table>
+  <table class="stacked">
     <thead><tr><th>Height</th><th>Hash</th><th>From</th><th>Amount</th></tr></thead>
     <tbody>
     {% if recent_txs %}
       {% for height, h, t, amount in recent_txs %}
       <tr>
-        <td><a href="/explorer/block/{{ height }}">{{ height }}</a></td>
-        <td class="hash-short"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
-        <td class="hash-short">{{ t.from[:24] }}…</td>
-        <td>{{ fmt_balance(amount) }}</td>
+        <td data-label="Height"><a href="/explorer/block/{{ height }}">{{ height }}</a></td>
+        <td data-label="Hash" class="hash-short"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
+        <td data-label="From" class="hash-short">{{ t.from[:24] }}…</td>
+        <td data-label="Amount">{{ fmt_balance(amount) }}</td>
       </tr>
       {% endfor %}
     {% else %}
@@ -76,6 +76,7 @@
     }
   }
 
+  refresh();
   setInterval(refresh, 6000);
 })();
 </script>

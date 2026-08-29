@@ -121,6 +121,33 @@
     color: var(--ink-dim); white-space: nowrap; width: 1%; padding-right: 1.5rem; font-style: italic;
   }
 
+  /* Below this width a multi-column data table no longer fits without
+     scrolling, so it's presented as a stack of labelled rows (one card
+     per record) instead of asking the reader to scroll sideways. Label
+     sits above its value (rather than side by side) so a long hash or
+     address can still wrap across multiple lines without the layout
+     fighting it. */
+  @media (max-width: 640px) {
+    .table-wrap { overflow-x: visible; margin: 0; padding: 0; }
+    table.stacked { min-width: 0; }
+    table.stacked thead { display: none; }
+    table.stacked, table.stacked tbody, table.stacked tr, table.stacked td { display: block; width: 100%; }
+    table.stacked tr {
+      border: 1px solid var(--rule-lt); margin-bottom: .75rem; padding: .6rem .75rem;
+    }
+    table.stacked tr:last-child { margin-bottom: 0; }
+    table.stacked td {
+      border-bottom: 1px dotted var(--rule-lt); padding: .4rem 0; white-space: normal; word-break: break-all;
+    }
+    table.stacked td:last-child { border-bottom: none; }
+    table.stacked td[colspan] { text-align: center; border-bottom: none; }
+    table.stacked td::before {
+      content: attr(data-label); display: block; font-family: var(--serif); font-style: italic;
+      font-size: .78rem; color: var(--ink-dim); margin-bottom: .15rem;
+    }
+    table.stacked td[colspan]::before { content: none; }
+  }
+
   .form-group { margin-bottom: 1rem; }
   label { display: block; font-size: .85rem; margin-bottom: .35rem; }
   input, textarea {

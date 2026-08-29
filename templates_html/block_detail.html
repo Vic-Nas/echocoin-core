@@ -15,16 +15,16 @@
 <div class="card">
   <div class="card-title">Transactions</div>
   <div class="table-wrap">
-  <table>
+  <table class="stacked">
     <thead><tr><th>Hash</th><th>From</th><th>Total sent</th><th>Fee</th></tr></thead>
     <tbody>
     {% if tx_rows %}
       {% for h, t, total in tx_rows %}
       <tr>
-        <td class="hash-short"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
-        <td class="hash-short">{{ t.from[:24] }}…</td>
-        <td>{{ total }}</td>
-        <td>{{ t.fee }}</td>
+        <td data-label="Hash" class="hash-short"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
+        <td data-label="From" class="hash-short">{{ t.from[:24] }}…</td>
+        <td data-label="Total sent">{{ total }}</td>
+        <td data-label="Fee">{{ t.fee }}</td>
       </tr>
       {% endfor %}
     {% else %}
@@ -32,6 +32,7 @@
     {% endif %}
     </tbody>
   </table>
+  </div>
 </div>
 <div class="pager">
 {% if b.height > 0 %}<a href="/explorer/block/{{ b.height - 1 }}">&larr; prev</a>{% endif %}

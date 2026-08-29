@@ -13,11 +13,11 @@
 <div class="card">
   <div class="card-title">Outputs</div>
   <div class="table-wrap">
-  <table>
+  <table class="stacked">
     <thead><tr><th>To</th><th>Amount</th></tr></thead>
     <tbody>
     {% for o in tx.outputs %}
-    <tr><td class="hash-short">{{ o.to }}</td><td>{{ o.amount }}</td></tr>
+    <tr><td data-label="To" class="hash-short">{{ o.to }}</td><td data-label="Amount">{{ o.amount }}</td></tr>
     {% endfor %}
     </tbody>
   </table>

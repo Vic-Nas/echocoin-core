@@ -54,16 +54,16 @@
 <div class="card">
   <div class="card-title">History</div>
   <div class="table-wrap">
-  <table>
+  <table class="stacked">
     <thead><tr><th>Height</th><th>Tx hash</th><th>Direction</th><th>Amount</th></tr></thead>
     <tbody>
     {% if history %}
       {% for height, h, direction, t in history %}
       <tr>
-        <td>{{ height }}</td>
-        <td><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
-        <td style="color:{{ 'var(--red)' if direction == 'sent' else 'var(--green)' }}">{{ direction }}</td>
-        <td>{{ t.outputs | sum(attribute='amount') }}</td>
+        <td data-label="Height">{{ height }}</td>
+        <td data-label="Tx hash"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
+        <td data-label="Direction" style="color:{{ 'var(--red)' if direction == 'sent' else 'var(--green)' }}">{{ direction }}</td>
+        <td data-label="Amount">{{ t.outputs | sum(attribute='amount') }}</td>
       </tr>
       {% endfor %}
     {% else %}
