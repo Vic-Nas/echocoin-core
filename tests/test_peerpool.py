@@ -15,7 +15,7 @@ import time
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from peerpool import (
-    PeerPool, COOLDOWN_MAX_SECONDS, MAX_STRIKES, STALE_SECONDS
+    PeerPool, COOLDOWN_MAX_SECONDS, MAX_STRIKES, STALE_SECONDS, HTTP_REACHABLE_TTL
 )
 
 
@@ -305,7 +305,7 @@ class TestSnapshot:
         p.add("1.2.3.4:9000")
         rows = p.snapshot()
         assert len(rows) == 1
-        addr, last_seen, active, height, wallet, inferred_wallet, version = rows[0]
+        addr, last_seen, active, height, wallet, inferred_wallet, version, http_reachable = rows[0]
         assert addr == "1.2.3.4:9000"
         assert last_seen > 0
         assert active is True
@@ -313,6 +313,7 @@ class TestSnapshot:
         assert wallet == ""
         assert inferred_wallet == ""
         assert version == ""
+        assert http_reachable is None
 
     def test_snapshot_reports_cooldown_peer_as_inactive(self):
         p = make_pool()
@@ -361,6 +362,49 @@ class TestSnapshot:
         p.update_info(peer, height=1, wallet="a", version="0.1.1")
         rows = p.snapshot()
         assert rows[0][6] == "0.1.1"
+
+    def test_http_reachable_defaults_to_none(self):
+        p = make_pool()
+        p.add("1.2.3.4:9000")
+        assert p.snapshot()[0][7] is None
+
+    def test_http_reachable_true(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.set_http_reachable(peer, True)
+        assert p.snapshot()[0][7] is True
+
+    def test_http_reachable_false(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.set_http_reachable(peer, False)
+        assert p.snapshot()[0][7] is False
+
+    def test_http_reachable_stale_result_reads_as_none(self):
+        """A probe result older than HTTP_REACHABLE_TTL is treated as
+        unknown rather than trusted indefinitely -- a peer that went
+        offline shouldn't stay marked reachable forever."""
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.set_http_reachable(peer, True, checked_at=time.time() - HTTP_REACHABLE_TTL - 1)
+        assert p.snapshot()[0][7] is None
+
+    def test_http_reachable_noop_for_unknown_peer(self):
+        p = make_pool()
+        p.set_http_reachable("1.2.3.4:9000", True)
+        assert p.snapshot() == []
+
+    def test_http_reachable_cleared_on_remove(self):
+        p = make_pool()
+        peer = "1.2.3.4:9000"
+        p.add(peer)
+        p.set_http_reachable(peer, True)
+        p.remove(peer)
+        p.add(peer)
+        assert p.snapshot()[0][7] is None
 
 
 class TestNoteRelayedBuilder:

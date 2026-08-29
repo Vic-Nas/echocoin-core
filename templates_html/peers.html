@@ -20,11 +20,11 @@
         <td data-label="Status">n/a</td>
       </tr>
     {% if rows %}
-      {% for addr, last_seen, active, height, wallet, inferred_wallet, version in rows %}
+      {% for addr, last_seen, active, height, wallet, inferred_wallet, version, http_reachable in rows %}
       <tr>
-        {% if version and active %}
+        {% if http_reachable %}
         <td data-label="Address" class="hash-short"><a href="http://{{ addr }}" target="_blank" rel="noopener"
-            title="Best-effort guess: this peer answered a recent handshake over its P2P port, which doesn't guarantee its web UI on the same port is actually reachable">{{ addr }}</a></td>
+            title="This peer's web UI answered an HTTP check within the last 10 minutes">{{ addr }}</a></td>
         {% else %}
         <td data-label="Address" class="hash-short">{{ addr }}</td>
         {% endif %}
@@ -56,7 +56,10 @@
 (function () {
   function fmtTs(ts) {
     if (!ts) return "n/a";
-    const diff = Math.floor(Date.now() / 1000) - ts;
+    // last_seen can arrive as a float (time.time() on the server); floor
+    // the whole difference, not just the later division results, or a
+    // sub-minute "Xs ago" ends up as a long unrounded decimal string.
+    const diff = Math.floor(Date.now() / 1000 - ts);
     if (diff < 5) return "just now";
     if (diff < 60) return diff + "s ago";
     if (diff < 3600) return Math.floor(diff / 60) + "m ago";
@@ -81,14 +84,12 @@
     const td = document.createElement("td");
     td.dataset.label = "Address";
     td.className = "hash-short";
-    if (p.version && p.active) {
+    if (p.http_reachable === true) {
       const a = document.createElement("a");
       a.href = "http://" + p.address;
       a.target = "_blank";
       a.rel = "noopener";
-      a.title = "Best-effort guess: this peer answered a recent handshake over "
-        + "its P2P port, which doesn't guarantee its web UI on the same port "
-        + "is actually reachable";
+      a.title = "This peer's web UI answered an HTTP check within the last 10 minutes";
       a.textContent = p.address;
       td.appendChild(a);
     } else {

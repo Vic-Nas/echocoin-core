@@ -17,6 +17,7 @@ from argcomplete.completers import FilesCompleter
 
 import block as block_mod
 import crypto
+import http_probe
 import params
 from api import create_app, create_private_app
 from discovery import Discovery
@@ -186,6 +187,7 @@ def main():
             discovery.add_bootstrap_peer(f"{parts[0]}:{parts[1]}")
 
     threading.Thread(target=discovery.run, daemon=True).start()
+    threading.Thread(target=http_probe.run, args=(pool,), daemon=True).start()
 
     update_checker = UpdateChecker(
         local_version=LOCAL_VERSION,

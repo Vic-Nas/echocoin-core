@@ -19,6 +19,7 @@ COOLDOWN_SECONDS     = 60
 COOLDOWN_MAX_SECONDS = 300
 MAX_STRIKES          = 3
 STALE_SECONDS        = 300
+HTTP_REACHABLE_TTL   = 600  # how long a cached HTTP-probe result stays trusted
 
 # Diversity cap: reject a new peer once this many already-held peers share
 # its /24 (IPv4) or /64 (IPv6). Renting many distinct addresses from one
@@ -103,6 +104,18 @@ class PeerPool:
             rec["wallet"]  = wallet or ""
             rec["version"] = version or ""
 
+    def set_http_reachable(self, addr, ok, checked_at=None):
+        """Record the outcome of an out-of-band HTTP reachability probe
+        against addr's web UI (the actual probing happens elsewhere -- see
+        the module docstring). No-op for an address that isn't currently
+        tracked, same guard as update_info/note_relayed_builder."""
+        with self._lock:
+            if addr not in self._peers:
+                return
+            self._info.setdefault(addr, {})["http_reachable"] = bool(ok)
+            self._info[addr]["http_checked_at"] = (
+                checked_at if checked_at is not None else time.time())
+
     def note_relayed_builder(self, addr, builder):
         """Record the builder address of the most recent block relayed by
         addr, as a placeholder for peers we don't have a confirmed wallet
@@ -184,22 +197,38 @@ class PeerPool:
 
     def snapshot(self):
         """Return [(addr, last_seen, active, height, wallet, inferred_wallet,
-        version)] for display. active is False while a peer is in cooldown
-        after repeated failures. height/wallet/version are the last-known
-        confirmed values from a GETINFO exchange (see update_info), or
-        (None, "", "") if none has completed yet. inferred_wallet is a
-        best-effort fallback from the builder of the last block relayed by
-        that peer (see note_relayed_builder) -- only meaningful when wallet
-        is empty, and never confirmed, since a peer may just be forwarding
-        someone else's block."""
+        version, http_reachable)] for display. active is False while a peer
+        is in cooldown after repeated failures. height/wallet/version are the
+        last-known confirmed values from a GETINFO exchange (see
+        update_info), or (None, "", "") if none has completed yet.
+        inferred_wallet is a best-effort fallback from the builder of the
+        last block relayed by that peer (see note_relayed_builder) -- only
+        meaningful when wallet is empty, and never confirmed, since a peer
+        may just be forwarding someone else's block. http_reachable is
+        True/False from the most recent HTTP probe (see set_http_reachable)
+        if one completed within the last HTTP_REACHABLE_TTL seconds,
+        otherwise None -- stale or never-checked, treated the same as
+        "don't know" rather than assumed reachable."""
         now_mono = time.monotonic()
+        now_wall = time.time()
         with self._lock:
-            return [
-                (addr, last_seen,
-                 now_mono >= self._fails.get(addr, {}).get("cooldown_until", 0.0),
-                 self._info.get(addr, {}).get("height"),
-                 self._info.get(addr, {}).get("wallet", ""),
-                 self._info.get(addr, {}).get("inferred_wallet", ""),
-                 self._info.get(addr, {}).get("version", ""))
-                for addr, last_seen in self._peers.items()
-            ]
+            result = []
+            for addr, last_seen in self._peers.items():
+                info = self._info.get(addr, {})
+                checked_at = info.get("http_checked_at")
+                http_reachable = (
+                    info.get("http_reachable")
+                    if checked_at is not None
+                    and now_wall - checked_at <= HTTP_REACHABLE_TTL
+                    else None
+                )
+                result.append((
+                    addr, last_seen,
+                    now_mono >= self._fails.get(addr, {}).get("cooldown_until", 0.0),
+                    info.get("height"),
+                    info.get("wallet", ""),
+                    info.get("inferred_wallet", ""),
+                    info.get("version", ""),
+                    http_reachable,
+                ))
+            return result

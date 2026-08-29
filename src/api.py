@@ -418,10 +418,11 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "self": {"wallet": node.addr, "height": self_height,
                      "version": LOCAL_VERSION},
             "peers": [
-                {"address": addr, "last_seen": last_seen, "active": active,
+                {"address": addr, "last_seen": int(last_seen), "active": active,
                  "height": height, "wallet": wallet,
-                 "inferred_wallet": inferred_wallet, "version": version}
-                for addr, last_seen, active, height, wallet, inferred_wallet, version in rows
+                 "inferred_wallet": inferred_wallet, "version": version,
+                 "http_reachable": http_reachable}
+                for addr, last_seen, active, height, wallet, inferred_wallet, version, http_reachable in rows
             ],
         })
 
