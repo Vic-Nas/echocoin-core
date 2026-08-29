@@ -9,7 +9,7 @@
     <tbody id="peers-tbody">
       <tr style="font-weight:600">
         <td>(you)</td>
-        <td class="hash-short">{{ self_wallet }}</td>
+        <td class="hash-short" title="{{ self_wallet }}">{{ self_wallet[:18] }}&hellip;</td>
         <td>{{ self_height }}</td>
         <td>{{ self_version }}</td>
         <td>n/a</td>
@@ -20,11 +20,11 @@
       <tr>
         <td class="hash-short">{{ addr }}</td>
         {% if wallet %}
-        <td class="hash-short">{{ wallet }}</td>
+        <td class="hash-short" title="{{ wallet }}">{{ wallet[:18] }}&hellip;</td>
         {% elif inferred_wallet %}
         <td class="hash-short" style="color:var(--accent);font-style:italic"
-            title="Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly">
-          {{ inferred_wallet }} (unconfirmed)
+            title="Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly. Full address: {{ inferred_wallet }}">
+          {{ inferred_wallet[:18] }}&hellip; (unconfirmed)
         </td>
         {% else %}
         <td class="hash-short" style="color:var(--muted)">unknown</td>
@@ -65,11 +65,11 @@
     tr.appendChild(cell(p.address, {cls: "hash-short"}));
 
     if (p.wallet) {
-      tr.appendChild(cell(p.wallet, {cls: "hash-short"}));
+      tr.appendChild(cell(p.wallet.slice(0, 18) + "…", {cls: "hash-short", title: p.wallet}));
     } else if (p.inferred_wallet) {
-      tr.appendChild(cell(p.inferred_wallet + " (unconfirmed)", {
+      tr.appendChild(cell(p.inferred_wallet.slice(0, 18) + "… (unconfirmed)", {
         cls: "hash-short", color: "var(--accent)", italic: true,
-        title: "Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly",
+        title: "Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly. Full address: " + p.inferred_wallet,
       }));
     } else {
       tr.appendChild(cell("unknown", {cls: "hash-short", color: "var(--muted)"}));
@@ -86,7 +86,7 @@
     const tr = document.createElement("tr");
     tr.style.fontWeight = "600";
     tr.appendChild(cell("(you)"));
-    tr.appendChild(cell(self.wallet, {cls: "hash-short"}));
+    tr.appendChild(cell(self.wallet.slice(0, 18) + "…", {cls: "hash-short", title: self.wallet}));
     tr.appendChild(cell(self.height));
     tr.appendChild(cell(self.version));
     tr.appendChild(cell("n/a"));

@@ -41,8 +41,16 @@
 
   /* ===================================================== masthead ======= */
   .masthead {
+    position: sticky; top: 0; z-index: 100;
+    background: var(--paper);
     border-bottom: 3px double var(--rule);
     padding: 1.1rem 1.25rem .9rem;
+  }
+  @media (max-width: 640px) {
+    .masthead { padding: .7rem 1rem .55rem; }
+    .masthead-title { font-size: 1.5rem; }
+    .masthead-sub { font-size: .75rem; margin-bottom: .55rem; }
+    nav.mainnav { font-size: .82rem; column-gap: .8rem; }
   }
   .masthead-inner { max-width: var(--container); margin: 0 auto; }
   .masthead-title {
