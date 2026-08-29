@@ -62,7 +62,7 @@
   nav.mainnav a:hover { text-decoration: underline; }
   nav.mainnav a.nav-disabled { color: var(--rule-lt); pointer-events: none; }
   nav.mainnav .sep { color: var(--rule-lt); }
-  .update-note {
+  .version-alert {
     display: block; text-align: center; font-size: .82rem; font-weight: bold;
     margin-top: .5rem;
   }
@@ -173,7 +173,7 @@
       <a href="/whitepaper">Whitepaper</a>
     </nav>
     {% if update_checker and update_checker.severity %}
-    <a class="update-note" href="{{ update_checker.releases_url }}" target="_blank" rel="noopener"
+    <a class="version-alert" href="{{ update_checker.releases_url }}" target="_blank" rel="noopener"
        title="Current: {{ update_checker.local_version }}  Latest: {{ update_checker.latest_version }}">
       {{ {'protocol': 'Protocol update required', 'critical': 'Critical update available', 'minor': 'New version available'}[update_checker.severity] }}
     </a>

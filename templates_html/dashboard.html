@@ -70,9 +70,9 @@
         (info.total_minted / SUPPLY_CAP * 100).toFixed(4) + "% of 21M cap";
       document.getElementById("live-reward").textContent = "+" + fmtBalance(info.block_reward);
 
-      statusEl.textContent = "updated " + new Date().toLocaleTimeString();
+      statusEl.textContent = "refreshed " + new Date().toLocaleTimeString();
     } catch (e) {
-      statusEl.textContent = "live updates paused (connection lost)";
+      statusEl.textContent = "live refresh paused (connection lost)";
     }
   }
 

@@ -119,9 +119,9 @@
 
       document.getElementById("peers-count").textContent =
         data.peers.length + " known peer" + (data.peers.length !== 1 ? "s" : "");
-      statusEl.textContent = "updated " + new Date().toLocaleTimeString();
+      statusEl.textContent = "refreshed " + new Date().toLocaleTimeString();
     } catch (e) {
-      statusEl.textContent = "live updates paused (connection lost)";
+      statusEl.textContent = "live refresh paused (connection lost)";
     }
   }
 
