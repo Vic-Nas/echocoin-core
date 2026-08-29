@@ -356,6 +356,21 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     # ---- JSON API (read-only) --------------------------------------------
 
+    @app.route("/api/peers", endpoint=pfx+"api_peers")
+    def api_peers():
+        rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
+        self_height = node.view.chain[-1].get("height", 0)
+        return jsonify({
+            "self": {"wallet": node.addr, "height": self_height,
+                     "version": LOCAL_VERSION},
+            "peers": [
+                {"address": addr, "last_seen": last_seen, "active": active,
+                 "height": height, "wallet": wallet,
+                 "inferred_wallet": inferred_wallet, "version": version}
+                for addr, last_seen, active, height, wallet, inferred_wallet, version in rows
+            ],
+        })
+
     @app.route("/api/info", endpoint=pfx+"api_info")
     def api_info():
         return jsonify(node.get_info())
@@ -439,7 +454,8 @@ def _base_dir():
 def create_app(node, pool, private_port=8334, public_port=8333, update_checker=None):
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
-    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse)
+    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
+                                 TICKS_PER_LAPSE=TICKS_PER_LAPSE)
     app.logger.setLevel(logging.WARNING)
     logging.getLogger("werkzeug").setLevel(logging.INFO)
 
@@ -471,7 +487,8 @@ def create_private_app(node, pool, private_port=8334, public_port=8333, update_c
     """Full-featured app for local use. Never expose via Funnel or public port."""
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
-    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse)
+    app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
+                                 TICKS_PER_LAPSE=TICKS_PER_LAPSE)
     app.logger.setLevel(logging.WARNING)
 
     limiter = Limiter(get_remote_address, app=app, default_limits=[],

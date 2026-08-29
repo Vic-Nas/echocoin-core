@@ -2,11 +2,11 @@
 {% block content %}
 <h2>Peers</h2>
 <div class="card">
-  <div class="card-title">{{ rows | length }} known peer{{ "s" if rows | length != 1 }}</div>
+  <div class="card-title" id="peers-count">{{ rows | length }} known peer{{ "s" if rows | length != 1 }}</div>
   <div class="table-wrap">
   <table>
     <thead><tr><th>Address</th><th>Wallet</th><th>Height</th><th>Version</th><th>Last seen</th><th>Status</th></tr></thead>
-    <tbody>
+    <tbody id="peers-tbody">
       <tr style="font-weight:600">
         <td>(you)</td>
         <td class="hash-short">{{ self_wallet }}</td>
@@ -42,10 +42,90 @@
   </table>
   </div>
 </div>
+<div style="color:var(--muted);font-size:.75rem;text-align:right" id="live-status"></div>
 <script>
-  document.querySelectorAll(".peer-last-seen").forEach(td => {
-    const ts = parseInt(td.dataset.ts, 10);
-    if (ts) td.textContent = new Date(ts * 1000).toLocaleString();
-  });
+(function () {
+  function fmtTs(ts) {
+    return ts ? new Date(ts * 1000).toLocaleString() : "n/a";
+  }
+
+  function cell(text, opts) {
+    opts = opts || {};
+    const td = document.createElement("td");
+    td.textContent = text;
+    if (opts.cls) td.className = opts.cls;
+    if (opts.color) td.style.color = opts.color;
+    if (opts.italic) td.style.fontStyle = "italic";
+    if (opts.title) td.title = opts.title;
+    return td;
+  }
+
+  function buildRow(p) {
+    const tr = document.createElement("tr");
+    tr.appendChild(cell(p.address, {cls: "hash-short"}));
+
+    if (p.wallet) {
+      tr.appendChild(cell(p.wallet, {cls: "hash-short"}));
+    } else if (p.inferred_wallet) {
+      tr.appendChild(cell(p.inferred_wallet + " (unconfirmed)", {
+        cls: "hash-short", color: "var(--accent)", italic: true,
+        title: "Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly",
+      }));
+    } else {
+      tr.appendChild(cell("unknown", {cls: "hash-short", color: "var(--muted)"}));
+    }
+
+    tr.appendChild(cell(p.height === null || p.height === undefined ? "?" : p.height));
+    tr.appendChild(cell(p.version || "unknown", {color: p.version ? null : "var(--muted)"}));
+    tr.appendChild(cell(fmtTs(p.last_seen)));
+    tr.appendChild(cell(p.active ? "active" : "cooldown", {color: p.active ? "var(--green)" : "var(--muted)"}));
+    return tr;
+  }
+
+  function buildSelfRow(self) {
+    const tr = document.createElement("tr");
+    tr.style.fontWeight = "600";
+    tr.appendChild(cell("(you)"));
+    tr.appendChild(cell(self.wallet, {cls: "hash-short"}));
+    tr.appendChild(cell(self.height));
+    tr.appendChild(cell(self.version));
+    tr.appendChild(cell("n/a"));
+    tr.appendChild(cell("n/a"));
+    return tr;
+  }
+
+  const statusEl = document.getElementById("live-status");
+
+  async function refresh() {
+    try {
+      const res = await fetch("/api/peers", {cache: "no-store"});
+      if (!res.ok) throw new Error("bad status " + res.status);
+      const data = await res.json();
+
+      const tbody = document.getElementById("peers-tbody");
+      tbody.innerHTML = "";
+      tbody.appendChild(buildSelfRow(data.self));
+
+      if (data.peers.length) {
+        data.peers.forEach(p => tbody.appendChild(buildRow(p)));
+      } else {
+        const tr = document.createElement("tr");
+        const td = cell("No peers yet", {color: "var(--muted)"});
+        td.colSpan = 6;
+        td.style.textAlign = "center";
+        tr.appendChild(td);
+        tbody.appendChild(tr);
+      }
+
+      document.getElementById("peers-count").textContent =
+        data.peers.length + " known peer" + (data.peers.length !== 1 ? "s" : "");
+      statusEl.textContent = "updated " + new Date().toLocaleTimeString();
+    } catch (e) {
+      statusEl.textContent = "live updates paused (connection lost)";
+    }
+  }
+
+  setInterval(refresh, 8000);
+})();
 </script>
 {% endblock %}
