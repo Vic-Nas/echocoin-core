@@ -80,12 +80,6 @@
   h2 { font-size: 1.35rem; font-weight: bold; margin-bottom: 1rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .3rem; }
   h3 { font-size: 1.02rem; font-weight: bold; margin-bottom: .5rem; }
 
-  footer { border-top: 3px double var(--rule); padding: 1rem 1.25rem 1.5rem; margin-top: auto; }
-  .footer-inner {
-    max-width: var(--container); margin: 0 auto; text-align: center; font-size: .82rem; color: var(--ink-dim);
-  }
-  .footer-links a { color: var(--ink-dim); margin: 0 .5rem; }
-
   /* ===================================================== components ===== */
   .card {
     border: 1px solid var(--rule); padding: 1rem 1.15rem; margin-bottom: 1.15rem; background: var(--paper);
@@ -204,7 +198,8 @@
       <a href="/explorer">Explorer</a><span class="sep">&middot;</span>
       <a href="/address">Balance</a><span class="sep">&middot;</span>
       <a href="/peers">Peers</a><span class="sep">&middot;</span>
-      <a href="/whitepaper">Whitepaper</a>
+      <a href="/whitepaper">Whitepaper</a><span class="sep">&middot;</span>
+      <a href="https://github.com/Vic-Nas/lapsecoin-core" target="_blank" rel="noopener">Source</a>
     </nav>
     {% if update_checker and update_checker.severity %}
     <a class="version-alert" href="{{ update_checker.releases_url }}" target="_blank" rel="noopener"
@@ -217,15 +212,5 @@
 <div class="page">
 {% block content %}{% endblock %}
 </div>
-<footer>
-  <div class="footer-inner">
-    <div class="footer-links">
-      <a href="/whitepaper">Whitepaper</a>
-      <a href="/explorer">Explorer</a>
-      <a href="/peers">Peers</a>
-      <a href="https://github.com/Vic-Nas/lapsecoin-core" target="_blank" rel="noopener">Source</a>
-    </div>
-  </div>
-</footer>
 </body>
 </html>
