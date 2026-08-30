@@ -8,6 +8,7 @@
   [![Release](https://img.shields.io/github/v/release/Vic-Nas/scorchcoin-core)](https://github.com/Vic-Nas/scorchcoin-core/releases)
   [![Live node](https://img.shields.io/badge/node-lapsenode.cyprus--draco.ts.net-2ea44f)](https://lapsenode.cyprus-draco.ts.net/)
   [![Whitepaper](https://img.shields.io/badge/docs-whitepaper-blue)](docs/whitepaper.md)
+  [![Donate BTC](https://img.shields.io/badge/donate-BTC-f7931a)](#support)
 </div>
 
 ## Quick start
@@ -97,7 +98,7 @@ There is no `--passphrase` flag, since it was removed because it leaked into `ps
 
 ---
 
-<div align="center">
+<div align="center" id="support">
 
 **Support the project:** BTC `bc1q8qxvr5zuws78650wz9rgzpqxfx7dqzl38rdtsw`
 
