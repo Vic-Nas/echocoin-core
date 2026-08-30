@@ -9,7 +9,10 @@
   [![Live node](https://img.shields.io/badge/node-lapsenode.cyprus--draco.ts.net-2ea44f)](https://lapsenode.cyprus-draco.ts.net/)
   [![Whitepaper](https://img.shields.io/badge/docs-whitepaper-blue)](docs/whitepaper.md)
   [![Donate BTC](https://img.shields.io/badge/donate-BTC-f7931a)](#support)
+  [![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/HPAve7CRXK)
 </div>
+
+Join the [Discord](https://discord.gg/HPAve7CRXK) for discussions, news, and trades with other coins.
 
 ## Quick start
 
@@ -95,6 +98,12 @@ There is no `--passphrase` flag, since it was removed because it leaked into `ps
 - liboqs-python (FALCON-512 signatures)
 - See `requirements.txt` for the full list
 </details>
+
+## Exchanges
+
+No LAPSE exchange listings yet.
+
+In the meantime, [Discord](https://discord.gg/HPAve7CRXK) hosts direct trades: 1 LAPSE for 100 SATOX. SATOX (Satoxcoin) is listed on the exchanges linked from the [satoxcoin repo](https://github.com/satoverse/satoxcoin).
 
 ---
 
