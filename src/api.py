@@ -420,12 +420,13 @@ def _shared_read_only_routes(app, node, pool, limiter,
         start = (page - 1) * PEERS_PER_PAGE
         end   = start + PEERS_PER_PAGE
         self_height = node.view.chain[-1].get("height", 0)
+        self_addr = getattr(node.gossip.udp, "our_external_addr", None)
         return render_template("peers.html", title="Peers", rows=all_rows[start:end],
                                peer_count=len(all_rows), page=page, total_pages=total_pages,
                                page_window=_pagination_window(page, total_pages),
                                has_prev=page > 1, has_next=end < len(all_rows),
                                self_height=self_height, self_wallet=node.addr,
-                               self_version=LOCAL_VERSION)
+                               self_version=LOCAL_VERSION, self_addr=self_addr)
 
     # ---- JSON API (read-only) --------------------------------------------
 
@@ -438,9 +439,10 @@ def _shared_read_only_routes(app, node, pool, limiter,
         end   = start + PEERS_PER_PAGE
         rows = all_rows[start:end]
         self_height = node.view.chain[-1].get("height", 0)
+        self_addr = getattr(node.gossip.udp, "our_external_addr", None)
         return jsonify({
             "self": {"wallet": node.addr, "height": self_height,
-                     "version": LOCAL_VERSION},
+                     "version": LOCAL_VERSION, "addr": self_addr},
             "peer_count": len(all_rows),
             "peers": [
                 {"address": addr, "last_seen": int(last_seen), "active": active,

@@ -13,7 +13,8 @@
     --ink-dim:  #4a4638;
     --rule:     #1c1a14;
     --rule-lt:  #b9b29b;
-    --link:     #1c1a14;
+    --accent:   #b35a0c;
+    --link:     var(--accent);
     --gain:     #2f5c33;
     --loss:     #7a2222;
     --live:     #2f4f6c;
@@ -23,7 +24,6 @@
 
     /* aliases kept so the per-page templates (unchanged) still resolve */
     --muted:  var(--ink-dim);
-    --accent: var(--ink);
     --green:  var(--gain);
     --red:    var(--loss);
     --warn:   var(--loss);
@@ -59,17 +59,22 @@
   }
   .masthead-inner { max-width: var(--container); margin: 0 auto; position: relative; }
   .masthead-title {
+    display: flex; align-items: center; justify-content: center; gap: .45rem;
     font-size: 1.3rem; font-weight: bold; letter-spacing: .02em; text-align: center;
     margin-bottom: .25rem;
   }
+  .masthead-title img { height: 1.35em; width: auto; }
   nav.mainnav {
     display: flex; flex-wrap: wrap; justify-content: center; column-gap: 1.1rem; row-gap: .3rem;
     font-size: .92rem;
   }
-  nav.mainnav a { text-decoration: none; padding-bottom: .2rem; border-bottom: 2px solid transparent; }
+  nav.mainnav a {
+    color: var(--ink); text-decoration: none; padding-bottom: .2rem;
+    border-bottom: 2px solid transparent;
+  }
   nav.mainnav a:hover { text-decoration: underline; }
   nav.mainnav a.nav-disabled { color: var(--rule-lt); pointer-events: none; }
-  nav.mainnav a.active { font-weight: bold; border-bottom-color: var(--ink); }
+  nav.mainnav a.active { font-weight: bold; border-bottom-color: var(--accent); }
   nav.mainnav .sep { color: var(--rule-lt); align-self: flex-start; }
   .version-alert {
     display: table; margin: .35rem auto 0; padding: .15rem .65rem;
@@ -230,7 +235,7 @@
 <header class="masthead">
   <div class="masthead-inner">
     <div class="live-status" id="live-status"></div>
-    <div class="masthead-title">LapseCoin</div>
+    <div class="masthead-title"><img src="/favicon.svg" alt="" width="24" height="24">LapseCoin</div>
     <nav class="mainnav">
       <a href="/" class="{{ 'active' if nav_active == 'dashboard' }}">Dashboard</a><span class="sep">&middot;</span>
       {% if is_private %}
