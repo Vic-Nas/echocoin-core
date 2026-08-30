@@ -45,31 +45,26 @@
     position: sticky; top: 0; z-index: 100;
     background: var(--paper);
     border-bottom: 3px double var(--rule);
-    padding: 1.1rem 1.25rem .9rem;
+    padding: .55rem 1.25rem .45rem;
   }
   @media (max-width: 640px) {
-    .masthead { padding: .7rem 1rem .55rem; }
-    .masthead-title { font-size: 1.5rem; }
-    .masthead-sub { font-size: .75rem; margin-bottom: .55rem; }
+    .masthead { padding: .45rem 1rem .35rem; }
+    .masthead-title { font-size: 1.3rem; }
     nav.mainnav { font-size: .82rem; column-gap: .8rem; }
   }
   .masthead-inner { max-width: var(--container); margin: 0 auto; }
   .masthead-title {
-    font-size: 2.1rem; font-weight: bold; letter-spacing: .02em; text-align: center;
-    margin-bottom: .2rem;
-  }
-  .masthead-sub {
-    text-align: center; font-style: italic; font-size: .85rem; color: var(--ink-dim);
-    margin-bottom: .85rem;
+    font-size: 1.5rem; font-weight: bold; letter-spacing: .02em; text-align: center;
+    margin-bottom: .35rem;
   }
   nav.mainnav {
     display: flex; flex-wrap: wrap; justify-content: center; column-gap: 1.1rem; row-gap: .3rem;
-    border-top: 1px solid var(--rule-lt); padding-top: .6rem;
     font-size: .92rem;
   }
   nav.mainnav a { text-decoration: none; }
   nav.mainnav a:hover { text-decoration: underline; }
   nav.mainnav a.nav-disabled { color: var(--rule-lt); pointer-events: none; }
+  nav.mainnav a.active { font-weight: bold; text-decoration: underline; text-underline-offset: .2em; }
   nav.mainnav .sep { color: var(--rule-lt); }
   .version-alert {
     display: table; margin: .6rem auto 0; padding: .25rem .75rem;
@@ -79,22 +74,22 @@
   .version-alert:hover { text-decoration: none; background: var(--paper-2); }
 
   /* ===================================================== layout ========= */
-  .page { flex: 1; width: 100%; max-width: var(--container); margin: 0 auto; padding: 1.5rem 1.25rem 2.5rem; }
-  h2 { font-size: 1.35rem; font-weight: bold; margin-bottom: 1rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .3rem; }
+  .page { flex: 1; width: 100%; max-width: var(--container); margin: 0 auto; padding: 1rem 1.25rem 2rem; }
+  h2 { font-size: 1.2rem; font-weight: bold; margin-bottom: .7rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .25rem; }
   h3 { font-size: 1.02rem; font-weight: bold; margin-bottom: .5rem; }
 
   /* ===================================================== components ===== */
   .card {
-    border: 1px solid var(--rule); padding: 1rem 1.15rem; margin-bottom: 1.15rem; background: var(--paper);
+    border: 1px solid var(--rule); padding: .8rem 1.15rem; margin-bottom: .85rem; background: var(--paper);
   }
   .card-title {
     font-size: .78rem; font-weight: bold; letter-spacing: .04em; text-transform: uppercase;
-    color: var(--ink-dim); margin-bottom: .65rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .3rem;
+    color: var(--ink-dim); margin-bottom: .5rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .25rem;
   }
 
-  .stats { display: flex; flex-wrap: wrap; border: 1px solid var(--rule); margin-bottom: 1.15rem; }
+  .stats { display: flex; flex-wrap: wrap; border: 1px solid var(--rule); margin-bottom: .85rem; }
   .stat {
-    flex: 1 1 150px; min-width: 130px; padding: .75rem 1rem; border-right: 1px solid var(--rule-lt);
+    flex: 1 1 150px; min-width: 130px; padding: .55rem 1rem; border-right: 1px solid var(--rule-lt);
     border-bottom: 1px solid var(--rule-lt);
   }
   .stat:last-child { border-right: none; }
@@ -208,7 +203,11 @@
   .pager-current { font-weight: bold; text-decoration: underline; }
   .pager-ellipsis { color: var(--rule-lt); }
 
-  .wp { max-width: 100%; line-height: 1.65; }
+  /* Narrower than the site's general 900px container: optimal line
+     length for sustained reading is ~65-75 characters, and the
+     whitepaper is the one page meant to be read start to end rather
+     than scanned like a table. */
+  .wp { max-width: 640px; margin: 0 auto; line-height: 1.65; }
   .wp h1 { font-size: 1.9rem; font-weight: bold; margin: 0 0 .5rem; text-align: center; }
   .wp h2 { font-size: 1.25rem; font-weight: bold; margin: 1.75rem 0 .55rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .3rem; }
   .wp h3 { font-size: 1.05rem; font-weight: bold; margin: 1.1rem 0 .3rem; }
@@ -226,19 +225,15 @@
 <header class="masthead">
   <div class="masthead-inner">
     <div class="masthead-title">LapseCoin</div>
-    <div class="masthead-sub">A Peer-to-Peer Electronic Cash System</div>
     <nav class="mainnav">
-      <a href="/">Dashboard</a><span class="sep">&middot;</span>
+      <a href="/" class="{{ 'active' if nav_active == 'dashboard' }}">Dashboard</a><span class="sep">&middot;</span>
       {% if is_private %}
-      <a href="/send">Send</a>
-      {% else %}
-      <a class="nav-disabled" title="Only available on localhost:{{ private_port }}">Send</a>
+      <a href="/send" class="{{ 'active' if nav_active == 'send' }}">Send</a><span class="sep">&middot;</span>
       {% endif %}
-      <span class="sep">&middot;</span>
-      <a href="/explorer">Explorer</a><span class="sep">&middot;</span>
-      <a href="/address">Balance</a><span class="sep">&middot;</span>
-      <a href="/peers">Peers</a><span class="sep">&middot;</span>
-      <a href="/whitepaper">Whitepaper</a><span class="sep">&middot;</span>
+      <a href="/explorer" class="{{ 'active' if nav_active == 'explorer' }}">Explorer</a><span class="sep">&middot;</span>
+      <a href="/address" class="{{ 'active' if nav_active == 'address' }}">Balance</a><span class="sep">&middot;</span>
+      <a href="/peers" class="{{ 'active' if nav_active == 'peers' }}">Peers</a><span class="sep">&middot;</span>
+      <a href="/whitepaper" class="{{ 'active' if nav_active == 'whitepaper' }}">Whitepaper</a><span class="sep">&middot;</span>
       <a href="https://github.com/Vic-Nas/lapsecoin-core" target="_blank" rel="noopener">Source</a>
     </nav>
     {% if update_checker and update_checker.severity %}

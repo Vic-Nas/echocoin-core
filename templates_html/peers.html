@@ -12,7 +12,7 @@
     <thead><tr><th>Address</th><th>Wallet</th><th>Height</th><th>Version</th><th>Last seen</th><th>Status</th></tr></thead>
     <tbody id="peers-tbody">
       <tr style="font-weight:600">
-        <td data-label="Address">(you)</td>
+        <td data-label="Address">self</td>
         <td data-label="Wallet" class="hash-short" title="{{ self_wallet }}">{{ self_wallet[:14] }}&hellip;</td>
         <td data-label="Height">{{ self_height }}</td>
         <td data-label="Version">{{ self_version }}</td>
@@ -126,7 +126,7 @@
   function buildSelfRow(self) {
     const tr = document.createElement("tr");
     tr.style.fontWeight = "600";
-    tr.appendChild(cell("Address", "(you)"));
+    tr.appendChild(cell("Address", "self"));
     tr.appendChild(cell("Wallet", self.wallet.slice(0, 14) + "…", {cls: "hash-short", title: self.wallet}));
     tr.appendChild(cell("Height", self.height));
     tr.appendChild(cell("Version", self.version));

@@ -68,7 +68,7 @@ log = logging.getLogger("ec.api")
 
 # Nodes keep full history, so both the block list and an address's
 # transaction history are paginated rather than truncated to "recent N".
-BLOCKS_PER_PAGE  = 12
+BLOCKS_PER_PAGE  = 8
 HISTORY_PER_PAGE = 3
 
 
@@ -273,10 +273,21 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.context_processor
     def inject_ctx():
+        endpoint = (request.endpoint or "").split(".")[-1]
+        for prefix in ("pub_", "priv_"):
+            if endpoint.startswith(prefix):
+                endpoint = endpoint[len(prefix):]
+        nav_active = {
+            "dashboard": "dashboard", "explorer": "explorer",
+            "block_detail": "explorer", "tx_detail": "explorer",
+            "address_lookup": "address", "peers": "peers",
+            "whitepaper": "whitepaper", "send": "send",
+        }.get(endpoint)
         return {"is_private": is_private,
                 "private_port": private_port,
                 "public_port": public_port,
-                "update_checker": update_checker}
+                "update_checker": update_checker,
+                "nav_active": nav_active}
 
     @app.route("/favicon.svg", endpoint=pfx+"favicon")
     def favicon():
