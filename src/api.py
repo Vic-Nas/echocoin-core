@@ -459,12 +459,12 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/api/peers/download", endpoint=pfx+"api_peers_download")
     def api_peers_download():
-        all_rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
-        resp = jsonify({
-            "self": _self_info(),
-            "peer_count": len(all_rows),
-            "peers": _peer_dicts(all_rows),
-        })
+        # Same shape discovery.py's own PEER_CACHE_FILE reads and writes
+        # (a flat list of "ip:port" strings, pool.all_addrs()) -- this is
+        # meant to be saved as lapsecoin_peers.json in a new node's working
+        # directory so it bootstraps from it on startup, not just a data
+        # export for humans to read.
+        resp = jsonify(pool.all_addrs())
         resp.headers["Content-Disposition"] = 'attachment; filename="lapsecoin_peers.json"'
         return resp
 
