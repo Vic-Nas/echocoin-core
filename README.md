@@ -6,7 +6,7 @@ See [docs/whitepaper.md](docs/whitepaper.md) for the full protocol specification
 
 ## Installation
 
-**Recommended: use a pre-built release.** Building from source requires native libraries (liboqs, chiavdf) that involve complex C/C++ compilation and can produce DLL or shared library errors depending on your platform. The release binaries on the [releases page](https://github.com/Vic-Nas/scorchcoin-core/releases) are self-contained and require no dependencies.
+**Recommended: use a pre-built release.** Building from source requires native libraries (liboqs, chiavdf) that involve complex C/C++ compilation and can produce DLL or shared library errors depending on your platform. The release binaries on the [releases page](https://github.com/Vic-Nas/lapsecoin/releases) are self-contained and require no dependencies.
 
 Download the binary for your platform and run it directly:
 

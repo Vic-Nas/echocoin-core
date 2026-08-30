@@ -22,8 +22,8 @@ import time
 
 log = logging.getLogger("ec.update")
 
-DEFAULT_VERSION_URL  = "https://raw.githubusercontent.com/Vic-Nas/lapsecoin-core/main/VERSION"
-DEFAULT_RELEASES_URL = "https://github.com/Vic-Nas/lapsecoin-core/releases"
+DEFAULT_VERSION_URL  = "https://raw.githubusercontent.com/Vic-Nas/lapsecoin/main/VERSION"
+DEFAULT_RELEASES_URL = "https://github.com/Vic-Nas/lapsecoin/releases"
 
 # A version bump is a rare event; this just keeps latency to noticing one
 # low without polling anything unnecessarily.
