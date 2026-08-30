@@ -1,10 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
 <h2>Balance</h2>
+{% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
+<div class="card">
+  <form method="GET">
+    <div class="form-group">
+      <label>Address (twelve dot-separated words)</label>
+      <input name="addr" value="{{ addr }}" placeholder="word1.word2.word3...">
+    </div>
+    <button type="submit">Look up</button>
+  </form>
+</div>
 {% if holder_count %}
 <div class="card wealth">
   <div class="card-title">Wealth distribution ({{ holder_count }} holder{{ 's' if holder_count != 1 }})</div>
-  <h3>Holders by balance</h3>
   <div class="histo">
   {% for label, count in histogram %}
   <div class="histo-row">
@@ -19,32 +28,21 @@
   <div class="wealth-caption">balance buckets in whole LAPSE, log-scaled</div>
 </div>
 <style>
-  .wealth h3 { margin-bottom:.6rem }
-  .wealth-caption { font-size:.7rem; color:var(--muted); margin-top:.6rem }
+  .wealth-caption { font-size:.68rem; color:var(--muted); margin-top:.4rem }
 
-  .histo { display:flex; flex-direction:column; gap:.35rem }
-  .histo-row { display:grid; grid-template-columns:8rem 1fr 2.75rem; align-items:center; gap:.6rem; font-size:.8rem }
-  .histo-label { color:var(--muted); font-family:var(--mono); text-align:right }
-  .histo-track { background:var(--paper-2); border:1px solid var(--rule-lt); overflow:hidden; height:1.15rem }
+  .histo { display:flex; flex-direction:column; gap:.22rem }
+  .histo-row { display:grid; grid-template-columns:11rem 1fr 2.5rem; align-items:center; gap:.6rem; font-size:.74rem }
+  .histo-label { color:var(--muted); font-family:var(--mono); text-align:right; white-space:nowrap }
+  .histo-track { background:var(--paper-2); border:1px solid var(--rule-lt); overflow:hidden; height:.95rem }
   .histo-bar { height:100%; min-width:3px; background:var(--ink); }
   .histo-count { text-align:right; font-family:var(--mono); color:var(--ink) }
 
   @media (max-width: 640px) {
-    .histo-row { grid-template-columns:5.5rem 1fr 2.25rem }
+    .histo-row { grid-template-columns:6.5rem 1fr 2.25rem; font-size:.7rem }
+    .histo-label { white-space:normal }
   }
 </style>
 {% endif %}
-<h2>Address Lookup</h2>
-{% if alert_err %}<div class="alert alert-err">{{ alert_err }}</div>{% endif %}
-<div class="card">
-  <form method="GET">
-    <div class="form-group">
-      <label>Address (twelve dot-separated words)</label>
-      <input name="addr" value="{{ addr }}" placeholder="word1.word2.word3...">
-    </div>
-    <button type="submit">Look up</button>
-  </form>
-</div>
 {% if history is not none %}
 <div class="stats">
   <div class="stat"><div class="stat-label">Balance</div><div class="stat-value" style="color:var(--green)">{{ fmt_balance(balance) }}</div></div>
