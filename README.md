@@ -1,85 +1,52 @@
-# LapseCoin
+<div align="center">
+  <img src="lapsecoin.svg" width="120" alt="LapseCoin logo" />
 
-A peer-to-peer electronic cash system. Most cumulative proven work wins, first valid block received: Bitcoin-style consensus. Block timing is enforced by a Verifiable Delay Function anchored to real elapsed time, which is believed to have a much smaller hardware-advantage gap than proof-of-work mining. Transactions are ordinary and plaintext, with sender-bid fees, much like Bitcoin's own. Signatures are quantum-resistant (FALCON-512).
+  # LapseCoin
 
-See [docs/whitepaper.md](docs/whitepaper.md) for the full protocol specification.
+  Peer-to-peer electronic cash, secured by a Verifiable Delay Function instead of proof-of-work mining, with quantum-resistant signatures.
 
-## Installation
+  [![Release](https://img.shields.io/github/v/release/Vic-Nas/lapsecoin)](https://github.com/Vic-Nas/lapsecoin/releases)
+  [![Live node](https://img.shields.io/badge/node-lapsenode.cyprus--draco.ts.net-2ea44f)](https://lapsenode.cyprus-draco.ts.net/)
+  [![Whitepaper](https://img.shields.io/badge/docs-whitepaper-blue)](docs/whitepaper.md)
+  [![Donate BTC](https://img.shields.io/badge/donate-BTC-f7931a)](#support)
+  [![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/HPAve7CRXK)
+</div>
 
 **Recommended: use a pre-built release.** Building from source requires native libraries (liboqs, chiavdf) that involve complex C/C++ compilation and can produce DLL or shared library errors depending on your platform. The release binaries on the [releases page](https://github.com/Vic-Nas/lapsecoin/releases) are self-contained and require no dependencies.
 
-Download the binary for your platform and run it directly:
+Join the [Discord](https://discord.gg/HPAve7CRXK) for discussions, news, and trades with other coins.
+
+## Quick start
+
+Grab a binary from the [releases page](https://github.com/Vic-Nas/lapsecoin/releases), self-contained with no dependencies.
 
 ```
-# Linux
-chmod +x lapsecoin
+# Linux                    # Windows
+chmod +x lapsecoin         lapsecoin.exe
 ./lapsecoin
-
-# Windows
-lapsecoin.exe
 ```
 
-### Running from source
+You'll be prompted for a signing passphrase, then the wallet is at `http://localhost:8335` and the block explorer at `http://localhost:8333`.
 
-If you need to run from source, Python 3.11+ is required along with the native build dependencies for your platform.
+<details>
+<summary>How consensus works</summary>
+
+Most cumulative proven work wins, first valid block received: Bitcoin-style consensus. Block timing is enforced by a VDF anchored to real elapsed time, believed to have a much smaller hardware-advantage gap than proof-of-work. Transactions are ordinary and plaintext, with sender-bid fees, much like Bitcoin's own. Signatures are FALCON-512 (quantum-resistant). Full spec in [docs/whitepaper.md](docs/whitepaper.md).
+</details>
+
+<details>
+<summary>Running from source</summary>
+
+Requires Python 3.11+ and native build dependencies for your platform (liboqs, chiavdf).
 
 ```
 pip install -r requirements.txt
 python main.py
 ```
+</details>
 
-## Ports
-
-LapseCoin runs two HTTP servers:
-
-| Port | Interface | Purpose |
-|---|---|---|
-| `8333` (or `--port`) | `0.0.0.0` | Public node UI and peer API. Safe to expose. Send is disabled. |
-| `port+2` (or `--private-port`) | `127.0.0.1` | Private wallet UI. Never expose this. Full access including Send. |
-
-Open `http://localhost:8335` for your personal wallet interface. Open `http://localhost:8333` (or your public address) for the block explorer. The private port is always two above the public port unless overridden with `--private-port`.
-
-Note: port+3 is reserved by the DHT subsystem (libtorrent) for its internal use. Do not bind other services to it.
-
-## Passphrase
-
-The signing passphrase is required to start the node. Two ways to supply it:
-
-**Interactive** (default): you are prompted via `getpass` on startup. Nothing is stored in shell history or visible to `ps`.
-
-**Non-interactive** (Docker, systemd, CI): set the `LAPSECOIN_PASSPHRASE` environment variable before starting the process.
-
-```bash
-export LAPSECOIN_PASSPHRASE="your passphrase"
-python main.py
-```
-
-Or inline with systemd:
-
-```ini
-[Service]
-Environment=LAPSECOIN_PASSPHRASE=your passphrase
-ExecStart=/usr/local/bin/lapsecoin
-```
-
-The `--passphrase` CLI flag has been removed. It was visible in process listings (`ps aux`) and shell history, making it unsafe for any deployment.
-
-## CLI options
-
-| Option | Default | Description |
-|---|---|---|
-| `--host` | `0.0.0.0` | Interface to bind for the public port |
-| `--port` | `8333` | Public port for HTTP API and peer connections |
-| `--private-port` | `port+2` | Private port for wallet UI. Always bound to 127.0.0.1. |
-| `--keyfile` | `lapsecoin_key.json` | Path to encrypted keypair |
-| `--db` | `lapsecoin_chain.db` | Path to SQLite chain database |
-| `--peer host:port` | - | Bootstrap peer (repeatable) |
-| `--max-peers` | `125` | Hard cap on peer table size |
-| `--log-level` | `INFO` | Verbosity: DEBUG, INFO, WARNING, ERROR |
-
-## Building from source
-
-Pre-built releases are strongly preferred. If you must build from source:
+<details>
+<summary>Building the binary yourself</summary>
 
 ```
 pip install pyinstaller cairosvg Pillow
@@ -87,11 +54,63 @@ make linux    # on Linux
 make windows  # on Windows
 ```
 
-Produces a self-contained binary in `dist/`. Building requires cmake, ninja, and a C compiler for the native dependencies. On Windows, liboqs and MSVC redistributables must be present.
+Produces a self-contained binary in `dist/`. Requires cmake, ninja, and a C compiler (on Windows, also liboqs and MSVC redistributables).
+</details>
 
-## Requirements
+<details>
+<summary>Ports and passphrase</summary>
+
+| | Port | Interface | Purpose |
+|---|---|---|---|
+| Public | `8333` (`--port`) | `0.0.0.0` | Node UI + peer API. Safe to expose. Send disabled. |
+| Private | `port+2` (`--private-port`) | `127.0.0.1` | Wallet UI. **Never expose.** Full access, including Send. |
+
+`port+3` is reserved for the DHT subsystem (libtorrent), so don't bind other services to it.
+
+The passphrase is required to start the node. By default you're prompted via `getpass` (nothing touches shell history or `ps`). For Docker/systemd/CI, set it non-interactively instead:
+
+```bash
+export LAPSECOIN_PASSPHRASE="your passphrase"
+python main.py
+```
+
+There is no `--passphrase` flag, since it was removed because it leaked into `ps aux` and shell history.
+</details>
+
+<details>
+<summary>All CLI options</summary>
+
+| Option | Default | Description |
+|---|---|---|
+| `--host` | `0.0.0.0` | Interface to bind for the public port |
+| `--port` | `8333` | Public port for HTTP API and peer connections |
+| `--private-port` | `port+2` | Private port for wallet UI, always bound to 127.0.0.1 |
+| `--keyfile` | `lapsecoin_key.json` | Path to encrypted keypair |
+| `--db` | `lapsecoin_chain.db` | Path to SQLite chain database |
+| `--peer host:port` | - | Bootstrap peer (repeatable) |
+| `--max-peers` | `125` | Hard cap on peer table size |
+| `--log-level` | `INFO` | Verbosity: DEBUG, INFO, WARNING, ERROR |
+</details>
+
+<details>
+<summary>Requirements</summary>
 
 - Python 3.11+
 - chiavdf (VDF computation and verification)
 - liboqs-python (FALCON-512 signatures)
 - See `requirements.txt` for the full list
+</details>
+
+## Exchanges
+
+No LAPSE exchange listings yet.
+
+In the meantime, [Discord](https://discord.gg/HPAve7CRXK) hosts direct trades: 1 LAPSE for 100 SATOX. SATOX (Satoxcoin) is listed on the exchanges linked from the [satoxcoin repo](https://github.com/satoverse/satoxcoin).
+
+---
+
+<div align="center" id="support">
+
+**Support the project:** BTC `bc1q8qxvr5zuws78650wz9rgzpqxfx7dqzl38rdtsw`
+
+</div>
