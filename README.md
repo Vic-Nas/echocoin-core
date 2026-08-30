@@ -12,7 +12,7 @@
 
 ## Quick start
 
-Grab a binary from the [releases page](https://github.com/Vic-Nas/scorchcoin-core/releases) — self-contained, no dependencies.
+Grab a binary from the [releases page](https://github.com/Vic-Nas/scorchcoin-core/releases), self-contained with no dependencies.
 
 ```
 # Linux                    # Windows
@@ -59,7 +59,7 @@ Produces a self-contained binary in `dist/`. Requires cmake, ninja, and a C comp
 | Public | `8333` (`--port`) | `0.0.0.0` | Node UI + peer API. Safe to expose. Send disabled. |
 | Private | `port+2` (`--private-port`) | `127.0.0.1` | Wallet UI. **Never expose.** Full access, including Send. |
 
-`port+3` is reserved for the DHT subsystem (libtorrent) — don't bind other services to it.
+`port+3` is reserved for the DHT subsystem (libtorrent), so don't bind other services to it.
 
 The passphrase is required to start the node. By default you're prompted via `getpass` (nothing touches shell history or `ps`). For Docker/systemd/CI, set it non-interactively instead:
 
@@ -68,7 +68,7 @@ export LAPSECOIN_PASSPHRASE="your passphrase"
 python main.py
 ```
 
-There is no `--passphrase` flag — it was removed because it leaked into `ps aux` and shell history.
+There is no `--passphrase` flag, since it was removed because it leaked into `ps aux` and shell history.
 </details>
 
 <details>
