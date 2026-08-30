@@ -10,11 +10,9 @@
   [![Whitepaper](https://img.shields.io/badge/docs-whitepaper-blue)](docs/whitepaper.md)
 </div>
 
-Most cumulative proven work wins, first valid block received: Bitcoin-style consensus. Block timing is enforced by a VDF anchored to real elapsed time, believed to have a much smaller hardware-advantage gap than proof-of-work. Transactions are ordinary and plaintext, with sender-bid fees, much like Bitcoin's own. Signatures are FALCON-512 (quantum-resistant). Full spec in [docs/whitepaper.md](docs/whitepaper.md).
+## Quick start
 
-## Install
-
-**Recommended: pre-built release** — no dependencies needed. Building from source requires native libraries (liboqs, chiavdf) with complex C/C++ compilation.
+Grab a binary from the [releases page](https://github.com/Vic-Nas/scorchcoin-core/releases) — self-contained, no dependencies.
 
 ```
 # Linux                    # Windows
@@ -22,12 +20,18 @@ chmod +x lapsecoin         lapsecoin.exe
 ./lapsecoin
 ```
 
-Grab a binary from the [releases page](https://github.com/Vic-Nas/scorchcoin-core/releases).
+You'll be prompted for a signing passphrase, then the wallet is at `http://localhost:8335` and the block explorer at `http://localhost:8333`.
 
 <details>
-<summary><b>Running from source</b></summary>
+<summary>How consensus works</summary>
 
-Requires Python 3.11+ and native build dependencies for your platform.
+Most cumulative proven work wins, first valid block received: Bitcoin-style consensus. Block timing is enforced by a VDF anchored to real elapsed time, believed to have a much smaller hardware-advantage gap than proof-of-work. Transactions are ordinary and plaintext, with sender-bid fees, much like Bitcoin's own. Signatures are FALCON-512 (quantum-resistant). Full spec in [docs/whitepaper.md](docs/whitepaper.md).
+</details>
+
+<details>
+<summary>Running from source</summary>
+
+Requires Python 3.11+ and native build dependencies for your platform (liboqs, chiavdf).
 
 ```
 pip install -r requirements.txt
@@ -36,7 +40,7 @@ python main.py
 </details>
 
 <details>
-<summary><b>Building the binary yourself</b></summary>
+<summary>Building the binary yourself</summary>
 
 ```
 pip install pyinstaller cairosvg Pillow
@@ -47,16 +51,17 @@ make windows  # on Windows
 Produces a self-contained binary in `dist/`. Requires cmake, ninja, and a C compiler (on Windows, also liboqs and MSVC redistributables).
 </details>
 
-## Running a node
+<details>
+<summary>Ports and passphrase</summary>
 
 | | Port | Interface | Purpose |
 |---|---|---|---|
 | Public | `8333` (`--port`) | `0.0.0.0` | Node UI + peer API. Safe to expose. Send disabled. |
 | Private | `port+2` (`--private-port`) | `127.0.0.1` | Wallet UI. **Never expose.** Full access, including Send. |
 
-Open `http://localhost:8333` for the block explorer, `http://localhost:8335` for your wallet. `port+3` is reserved for the DHT subsystem (libtorrent) — don't bind other services to it.
+`port+3` is reserved for the DHT subsystem (libtorrent) — don't bind other services to it.
 
-**Passphrase:** required to start the node. By default you're prompted via `getpass` (nothing touches shell history or `ps`). For Docker/systemd/CI, set it non-interactively instead:
+The passphrase is required to start the node. By default you're prompted via `getpass` (nothing touches shell history or `ps`). For Docker/systemd/CI, set it non-interactively instead:
 
 ```bash
 export LAPSECOIN_PASSPHRASE="your passphrase"
@@ -64,9 +69,10 @@ python main.py
 ```
 
 There is no `--passphrase` flag — it was removed because it leaked into `ps aux` and shell history.
+</details>
 
 <details>
-<summary><b>All CLI options</b></summary>
+<summary>All CLI options</summary>
 
 | Option | Default | Description |
 |---|---|---|
@@ -81,7 +87,7 @@ There is no `--passphrase` flag — it was removed because it leaked into `ps au
 </details>
 
 <details>
-<summary><b>Requirements</b></summary>
+<summary>Requirements</summary>
 
 - Python 3.11+
 - chiavdf (VDF computation and verification)
