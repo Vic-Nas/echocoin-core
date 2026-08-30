@@ -69,6 +69,7 @@ log = logging.getLogger("ec.api")
 # Nodes keep full history, so both the block list and an address's
 # transaction history are paginated rather than truncated to "recent N".
 BLOCKS_PER_PAGE  = 8
+PEERS_PER_PAGE   = 8
 HISTORY_PER_PAGE = 3
 
 
@@ -413,9 +414,16 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/peers", endpoint=pfx+"peers")
     def peers():
-        rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
+        all_rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
+        total_pages = max(-(-len(all_rows) // PEERS_PER_PAGE), 1)
+        page  = min(max(request.args.get("page", 1, type=int) or 1, 1), total_pages)
+        start = (page - 1) * PEERS_PER_PAGE
+        end   = start + PEERS_PER_PAGE
         self_height = node.view.chain[-1].get("height", 0)
-        return render_template("peers.html", title="Peers", rows=rows,
+        return render_template("peers.html", title="Peers", rows=all_rows[start:end],
+                               peer_count=len(all_rows), page=page, total_pages=total_pages,
+                               page_window=_pagination_window(page, total_pages),
+                               has_prev=page > 1, has_next=end < len(all_rows),
                                self_height=self_height, self_wallet=node.addr,
                                self_version=LOCAL_VERSION)
 
@@ -423,11 +431,17 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/api/peers", endpoint=pfx+"api_peers")
     def api_peers():
-        rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
+        all_rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
+        total_pages = max(-(-len(all_rows) // PEERS_PER_PAGE), 1)
+        page  = min(max(request.args.get("page", 1, type=int) or 1, 1), total_pages)
+        start = (page - 1) * PEERS_PER_PAGE
+        end   = start + PEERS_PER_PAGE
+        rows = all_rows[start:end]
         self_height = node.view.chain[-1].get("height", 0)
         return jsonify({
             "self": {"wallet": node.addr, "height": self_height,
                      "version": LOCAL_VERSION},
+            "peer_count": len(all_rows),
             "peers": [
                 {"address": addr, "last_seen": int(last_seen), "active": active,
                  "height": height, "wallet": wallet,

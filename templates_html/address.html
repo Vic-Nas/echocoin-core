@@ -25,9 +25,9 @@
   .histo { display:flex; flex-direction:column; gap:.5rem }
   .histo-row { display:grid; grid-template-columns:8rem 1fr 2.75rem; align-items:center; gap:.6rem; font-size:.8rem }
   .histo-label { color:var(--muted); font-family:var(--mono); text-align:right }
-  .histo-track { background:#0a0c11; border-radius:5px; overflow:hidden; height:1.15rem }
-  .histo-bar { height:100%; min-width:3px; border-radius:5px; background:linear-gradient(90deg, #2f6690, var(--accent)); }
-  .histo-count { text-align:right; font-family:var(--mono); color:var(--text) }
+  .histo-track { background:var(--paper-2); border:1px solid var(--rule-lt); overflow:hidden; height:1.15rem }
+  .histo-bar { height:100%; min-width:3px; background:var(--ink); }
+  .histo-count { text-align:right; font-family:var(--mono); color:var(--ink) }
 
   @media (max-width: 640px) {
     .histo-row { grid-template-columns:5.5rem 1fr 2.25rem }

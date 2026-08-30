@@ -2,7 +2,7 @@
 {% block content %}
 <h2>Peers</h2>
 <div class="card">
-  <div class="card-title" id="peers-count">{{ rows | length }} known peer{{ "s" if rows | length != 1 }}</div>
+  <div class="card-title" id="peers-count">{{ peer_count }} known peer{{ "s" if peer_count != 1 }}</div>
   <div class="table-wrap">
   <table class="stacked-wide">
     <colgroup>
@@ -51,9 +51,21 @@
   </table>
   </div>
 </div>
-<div style="color:var(--muted);font-size:.75rem;text-align:right" id="live-status"></div>
+{% if total_pages > 1 %}
+<nav class="pager" aria-label="Pagination">
+  {% if has_prev %}<a href="/peers?page={{ page - 1 }}">Prev</a>{% endif %}
+  {% for p in page_window %}
+    {% if p is none %}<span class="pager-ellipsis">&hellip;</span>
+    {% elif p == page %}<span class="pager-current">{{ p }}</span>
+    {% else %}<a href="/peers?page={{ p }}">{{ p }}</a>
+    {% endif %}
+  {% endfor %}
+  {% if has_next %}<a href="/peers?page={{ page + 1 }}">Next</a>{% endif %}
+</nav>
+{% endif %}
 <script>
 (function () {
+  const PAGE = {{ page }};
   function fmtTs(ts) {
     if (!ts) return "n/a";
     // last_seen can arrive as a float (time.time() on the server); floor
@@ -139,7 +151,7 @@
 
   async function refresh() {
     try {
-      const res = await fetch("/api/peers", {cache: "no-store"});
+      const res = await fetch("/api/peers?page=" + PAGE, {cache: "no-store"});
       if (!res.ok) throw new Error("bad status " + res.status);
       const data = await res.json();
 
@@ -160,7 +172,7 @@
       }
 
       document.getElementById("peers-count").textContent =
-        data.peers.length + " known peer" + (data.peers.length !== 1 ? "s" : "");
+        data.peer_count + " known peer" + (data.peer_count !== 1 ? "s" : "");
       statusEl.textContent = "refreshed " + new Date().toLocaleTimeString();
     } catch (e) {
       statusEl.textContent = "live refresh paused (connection lost)";

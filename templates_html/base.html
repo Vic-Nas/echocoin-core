@@ -47,12 +47,17 @@
     border-bottom: 3px double var(--rule);
     padding: .55rem 1.25rem .45rem;
   }
+  .live-status {
+    position: absolute; top: .1rem; right: 0;
+    color: var(--ink-dim); font-size: .68rem; font-style: italic;
+  }
+  @media (max-width: 640px) { .live-status { display: none; } }
   @media (max-width: 640px) {
     .masthead { padding: .45rem 1rem .35rem; }
     .masthead-title { font-size: 1.3rem; }
     nav.mainnav { font-size: .82rem; column-gap: .8rem; }
   }
-  .masthead-inner { max-width: var(--container); margin: 0 auto; }
+  .masthead-inner { max-width: var(--container); margin: 0 auto; position: relative; }
   .masthead-title {
     font-size: 1.5rem; font-weight: bold; letter-spacing: .02em; text-align: center;
     margin-bottom: .35rem;
@@ -61,11 +66,11 @@
     display: flex; flex-wrap: wrap; justify-content: center; column-gap: 1.1rem; row-gap: .3rem;
     font-size: .92rem;
   }
-  nav.mainnav a { text-decoration: none; }
+  nav.mainnav a { text-decoration: none; padding-bottom: .2rem; border-bottom: 2px solid transparent; }
   nav.mainnav a:hover { text-decoration: underline; }
   nav.mainnav a.nav-disabled { color: var(--rule-lt); pointer-events: none; }
-  nav.mainnav a.active { font-weight: bold; text-decoration: underline; text-underline-offset: .2em; }
-  nav.mainnav .sep { color: var(--rule-lt); }
+  nav.mainnav a.active { font-weight: bold; border-bottom-color: var(--ink); }
+  nav.mainnav .sep { color: var(--rule-lt); align-self: flex-start; }
   .version-alert {
     display: table; margin: .6rem auto 0; padding: .25rem .75rem;
     border: 1px solid currentcolor; font-size: .78rem; font-weight: bold;
@@ -224,6 +229,7 @@
 <body>
 <header class="masthead">
   <div class="masthead-inner">
+    <div class="live-status" id="live-status"></div>
     <div class="masthead-title">LapseCoin</div>
     <nav class="mainnav">
       <a href="/" class="{{ 'active' if nav_active == 'dashboard' }}">Dashboard</a><span class="sep">&middot;</span>
