@@ -86,35 +86,35 @@
   /* ===================================================== layout ========= */
   .page { flex: 1; width: 100%; max-width: var(--container); margin: 0 auto; padding: .65rem 1.25rem 1rem; }
   .page > *:last-child { margin-bottom: 0; }
-  h2 { font-size: 1.1rem; font-weight: bold; margin-bottom: .5rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .2rem; }
+  h2 { font-size: 1.05rem; font-weight: bold; margin-bottom: .4rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .15rem; }
   h3 { font-size: 1.02rem; font-weight: bold; margin-bottom: .5rem; }
 
   /* ===================================================== components ===== */
   .card {
-    border: 1px solid var(--rule); padding: .65rem 1.1rem; margin-bottom: .65rem; background: var(--paper);
+    border: 1px solid var(--rule); padding: .55rem 1rem; margin-bottom: .5rem; background: var(--paper);
   }
   .card-title {
     font-size: .78rem; font-weight: bold; letter-spacing: .04em; text-transform: uppercase;
-    color: var(--ink-dim); margin-bottom: .4rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .2rem;
+    color: var(--ink-dim); margin-bottom: .3rem; border-bottom: 1px solid var(--rule-lt); padding-bottom: .15rem;
   }
 
-  .stats { display: flex; flex-wrap: wrap; border: 1px solid var(--rule); margin-bottom: .65rem; }
+  .stats { display: flex; flex-wrap: wrap; border: 1px solid var(--rule); margin-bottom: .5rem; }
   .stat {
-    flex: 1 1 150px; min-width: 130px; padding: .45rem 1rem; border-right: 1px solid var(--rule-lt);
+    flex: 1 1 150px; min-width: 130px; padding: .35rem 1rem; border-right: 1px solid var(--rule-lt);
     border-bottom: 1px solid var(--rule-lt);
   }
   .stat:last-child { border-right: none; }
-  .stat-label { font-size: .72rem; color: var(--ink-dim); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .3rem; }
-  .stat-value { font-size: 1.2rem; font-weight: bold; font-family: var(--mono); overflow-wrap: break-word; }
-  .stat-sub { color: var(--ink-dim); font-size: .78rem; margin-top: .25rem; }
+  .stat-label { font-size: .72rem; color: var(--ink-dim); text-transform: uppercase; letter-spacing: .05em; margin-bottom: .2rem; }
+  .stat-value { font-size: 1.1rem; font-weight: bold; font-family: var(--mono); overflow-wrap: break-word; }
+  .stat-sub { color: var(--ink-dim); font-size: .78rem; margin-top: .2rem; }
 
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 0 -1.15rem; padding: 0 1.15rem; }
   table { width: 100%; min-width: 460px; border-collapse: collapse; font-size: .92rem; }
   th {
-    text-align: left; padding: .4rem .6rem; font-weight: bold; font-size: .78rem;
+    text-align: left; padding: .3rem .6rem; font-weight: bold; font-size: .78rem;
     letter-spacing: .03em; text-transform: uppercase; border-bottom: 2px solid var(--rule); white-space: nowrap;
   }
-  td { padding: .5rem .6rem; border-bottom: 1px solid var(--rule-lt); font-family: var(--mono); white-space: nowrap; }
+  td { padding: .38rem .6rem; border-bottom: 1px solid var(--rule-lt); font-family: var(--mono); white-space: nowrap; }
   tr:last-child td { border-bottom: none; }
 
   /* Fixed layout plus an explicit colgroup (in peers.html) stops the
@@ -185,7 +185,7 @@
     table.stacked-wide td[colspan]::before { content: none; }
   }
 
-  .form-group { margin-bottom: .65rem; }
+  .form-group { margin-bottom: .5rem; }
   label { display: block; font-size: .85rem; margin-bottom: .25rem; }
   input, textarea {
     width: 100%; background: #fff; border: 1px solid var(--rule); color: var(--ink);
@@ -196,7 +196,7 @@
 
   button {
     background: var(--ink); color: var(--paper); border: 1px solid var(--ink);
-    padding: .55rem 1.3rem; font-size: .9rem; font-family: var(--serif); font-weight: bold; cursor: pointer;
+    padding: .42rem 1.2rem; font-size: .9rem; font-family: var(--serif); font-weight: bold; cursor: pointer;
   }
   button:hover { background: var(--ink-dim); }
   .btn-ghost { background: var(--paper); color: var(--ink); }
