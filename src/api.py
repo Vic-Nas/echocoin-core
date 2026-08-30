@@ -430,6 +430,20 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     # ---- JSON API (read-only) --------------------------------------------
 
+    def _peer_dicts(rows):
+        return [
+            {"address": addr, "last_seen": int(last_seen), "active": active,
+             "height": height, "wallet": wallet,
+             "inferred_wallet": inferred_wallet, "version": version,
+             "http_reachable": http_reachable}
+            for addr, last_seen, active, height, wallet, inferred_wallet, version, http_reachable in rows
+        ]
+
+    def _self_info():
+        return {"wallet": node.addr, "height": node.view.chain[-1].get("height", 0),
+                "version": LOCAL_VERSION,
+                "addr": getattr(node.gossip.udp, "our_external_addr", None)}
+
     @app.route("/api/peers", endpoint=pfx+"api_peers")
     def api_peers():
         all_rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
@@ -437,21 +451,22 @@ def _shared_read_only_routes(app, node, pool, limiter,
         page  = min(max(request.args.get("page", 1, type=int) or 1, 1), total_pages)
         start = (page - 1) * PEERS_PER_PAGE
         end   = start + PEERS_PER_PAGE
-        rows = all_rows[start:end]
-        self_height = node.view.chain[-1].get("height", 0)
-        self_addr = getattr(node.gossip.udp, "our_external_addr", None)
         return jsonify({
-            "self": {"wallet": node.addr, "height": self_height,
-                     "version": LOCAL_VERSION, "addr": self_addr},
+            "self": _self_info(),
             "peer_count": len(all_rows),
-            "peers": [
-                {"address": addr, "last_seen": int(last_seen), "active": active,
-                 "height": height, "wallet": wallet,
-                 "inferred_wallet": inferred_wallet, "version": version,
-                 "http_reachable": http_reachable}
-                for addr, last_seen, active, height, wallet, inferred_wallet, version, http_reachable in rows
-            ],
+            "peers": _peer_dicts(all_rows[start:end]),
         })
+
+    @app.route("/api/peers/download", endpoint=pfx+"api_peers_download")
+    def api_peers_download():
+        all_rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
+        resp = jsonify({
+            "self": _self_info(),
+            "peer_count": len(all_rows),
+            "peers": _peer_dicts(all_rows),
+        })
+        resp.headers["Content-Disposition"] = 'attachment; filename="lapsecoin_peers.json"'
+        return resp
 
     @app.route("/api/info", endpoint=pfx+"api_info")
     def api_info():
