@@ -412,23 +412,15 @@ def _shared_read_only_routes(app, node, pool, limiter,
         return render_template("whitepaper.html", title="Whitepaper",
                                rendered=rendered)
 
-    @app.route("/peers", endpoint=pfx+"peers")
-    def peers():
-        all_rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
-        total_pages = max(-(-len(all_rows) // PEERS_PER_PAGE), 1)
-        page  = min(max(request.args.get("page", 1, type=int) or 1, 1), total_pages)
-        start = (page - 1) * PEERS_PER_PAGE
-        end   = start + PEERS_PER_PAGE
-        self_height = node.view.chain[-1].get("height", 0)
-        self_addr = getattr(node.gossip.udp, "our_external_addr", None)
-        return render_template("peers.html", title="Peers", rows=all_rows[start:end],
-                               peer_count=len(all_rows), page=page, total_pages=total_pages,
-                               page_window=_pagination_window(page, total_pages),
-                               has_prev=page > 1, has_next=end < len(all_rows),
-                               self_height=self_height, self_wallet=node.addr,
-                               self_version=LOCAL_VERSION, self_addr=self_addr)
-
-    # ---- JSON API (read-only) --------------------------------------------
+    def _self_external_addr():
+        # node.gossip (and its .udp) may not exist on every node object this
+        # is called with -- e.g. lightweight test doubles -- and plain
+        # getattr(node.gossip.udp, ...) still evaluates node.gossip first,
+        # so it can't catch a missing .gossip itself. Walk it defensively.
+        try:
+            return node.gossip.udp.our_external_addr
+        except AttributeError:
+            return None
 
     def _peer_dicts(rows):
         return [
@@ -441,8 +433,24 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     def _self_info():
         return {"wallet": node.addr, "height": node.view.chain[-1].get("height", 0),
-                "version": LOCAL_VERSION,
-                "addr": getattr(node.gossip.udp, "our_external_addr", None)}
+                "version": LOCAL_VERSION, "addr": _self_external_addr()}
+
+    @app.route("/peers", endpoint=pfx+"peers")
+    def peers():
+        all_rows = sorted(pool.snapshot(), key=lambda r: r[1], reverse=True)
+        total_pages = max(-(-len(all_rows) // PEERS_PER_PAGE), 1)
+        page  = min(max(request.args.get("page", 1, type=int) or 1, 1), total_pages)
+        start = (page - 1) * PEERS_PER_PAGE
+        end   = start + PEERS_PER_PAGE
+        self_height = node.view.chain[-1].get("height", 0)
+        return render_template("peers.html", title="Peers", rows=all_rows[start:end],
+                               peer_count=len(all_rows), page=page, total_pages=total_pages,
+                               page_window=_pagination_window(page, total_pages),
+                               has_prev=page > 1, has_next=end < len(all_rows),
+                               self_height=self_height, self_wallet=node.addr,
+                               self_version=LOCAL_VERSION, self_addr=_self_external_addr())
+
+    # ---- JSON API (read-only) --------------------------------------------
 
     @app.route("/api/peers", endpoint=pfx+"api_peers")
     def api_peers():

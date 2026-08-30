@@ -118,7 +118,7 @@ class TestPeersPage:
 
     def test_peers_page_shows_self_and_peer_data(self):
         html = self._client().get("/peers").get_data(as_text=True)
-        assert "(you)" in html
+        assert ">self<" in html  # falls back to "self" when own external addr is unknown
         assert "1.2.3.4:9000" in html
         assert "peer.wallet.addr" in html
         assert "5.6.7.8:9000" in html
