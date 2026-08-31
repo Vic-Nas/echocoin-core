@@ -120,7 +120,13 @@ def get_active_peer_wallets():
 
 
 def get_balance_ticks(addr):
+    """None if addr isn't a well-formed address, rather than raising -- addr
+    ultimately traces back to a peer's self-reported, unvalidated wallet
+    string (see get_active_peer_wallets), so a malformed one here is
+    expected input to handle, not a crash."""
     r = requests.get(f"{PUBLIC_URL}/api/address/{addr}/balance", timeout=10)
+    if r.status_code == 400:
+        return None
     r.raise_for_status()
     return r.json()["balance_ticks"]
 
@@ -183,10 +189,14 @@ def main():
     wallet_balance = get_balance_ticks(reward_addr)
 
     candidates = get_active_peer_wallets() - {reward_addr}
-    eligible = [
-        addr for addr in candidates
-        if get_balance_ticks(addr) < BALANCE_CAP_LAPSE * TICKS_PER_LAPSE
-    ]
+    eligible = []
+    for addr in candidates:
+        balance = get_balance_ticks(addr)
+        if balance is None:
+            print(f"skipping malformed peer-reported wallet: {addr!r}", file=sys.stderr)
+            continue
+        if balance < BALANCE_CAP_LAPSE * TICKS_PER_LAPSE:
+            eligible.append(addr)
     if not eligible:
         print("no eligible peers this hour")
         return 0
