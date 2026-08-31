@@ -235,7 +235,12 @@ class Node:
                 continue
             if now - self._local_pending[h] >= self.RELAY_RETRY_SECONDS:
                 log.info("[tx] re-flooding stuck local tx  hash=%s", h[:12])
-                self.gossip.dandelion_send(tx_dict, 0)
+                # Straight to the UDP layer, bypassing gossip's seen-tx
+                # dedup cache -- the first send already marked this hash
+                # seen (that's what stopped it looping as a fluff storm),
+                # which would otherwise make dandelion_send() silently
+                # no-op on exactly the resend we're trying to force here.
+                self.gossip.udp.send_tx(tx_dict, remaining_hops=0)
                 self._local_pending[h] = now
 
     def submit_tx_from_api(self, tx_dict, timeout=5):
