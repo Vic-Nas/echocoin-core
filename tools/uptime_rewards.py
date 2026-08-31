@@ -25,9 +25,11 @@ Each run:
      itself fails (e.g. node briefly unreachable), the run stops here rather
      than risking a second payout stacking on an unresolved one.
   3. Snapshots peers currently active (seen within the last hour).
-  4. Drops any peer whose balance is not lower than the reward wallet's own
-     current balance, so the budget goes to nodes that actually need it
-     rather than topping up ones already doing fine on their own.
+  4. Drops the builder of the current tip block -- it just mined successfully,
+     so it isn't one of the non-mining nodes this exists for -- and any peer
+     whose balance is not lower than the reward wallet's own current balance,
+     so the budget goes to nodes that actually need it rather than topping
+     up ones already doing fine on their own.
   5. Splits pool_amount = remaining_ticks * (1 - 0.5 ** (1 / HALFLIFE_HOURS))
      evenly across the survivors, so the payout decays with the tracked
      budget and approaches zero as it's spent, with no hard cutoff to manage.
@@ -185,10 +187,14 @@ def main():
         print("budget exhausted, nothing to pay out")
         return 0
 
-    reward_addr = requests.get(f"{PUBLIC_URL}/api/info", timeout=10).json()["address"]
+    info = requests.get(f"{PUBLIC_URL}/api/info", timeout=10).json()
+    reward_addr = info["address"]
     wallet_balance = get_balance_ticks(reward_addr)
 
-    candidates = get_active_peer_wallets() - {reward_addr}
+    tip = requests.get(f"{PUBLIC_URL}/api/block/{info['height']}", timeout=10).json()
+    last_builder = tip.get("builder") or None
+
+    candidates = get_active_peer_wallets() - {reward_addr, last_builder}
     eligible = []
     for addr in candidates:
         balance = get_balance_ticks(addr)
