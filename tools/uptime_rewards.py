@@ -28,9 +28,9 @@ Each run:
   4. Drops any peer that won more blocks than the reward node itself over
      the last RECENT_BLOCKS_WINDOW blocks (a real mining-activity signal,
      not just whoever happened to build the single most recent block), and
-     any peer whose balance is not lower than the reward wallet's own
-     current balance -- so the budget goes to nodes that actually need it
-     rather than topping up ones already doing fine on their own.
+     any peer whose balance is not lower than the tracked budget
+     (remaining_ticks) -- so the budget goes to nodes that actually need
+     it rather than topping up ones already doing fine on their own.
   5. Splits pool_amount = remaining_ticks * (1 - 0.5 ** (1 / HALFLIFE_HOURS))
      evenly across the survivors, so the payout decays with the tracked
      budget and approaches zero as it's spent, with no hard cutoff to manage.
@@ -224,7 +224,7 @@ def main():
         if balance is None:
             print(f"skipping malformed peer-reported wallet: {addr!r}", file=sys.stderr)
             continue
-        if balance < wallet_balance:
+        if balance < remaining_ticks:
             eligible.append(addr)
     if not eligible:
         print("no eligible peers this hour")
