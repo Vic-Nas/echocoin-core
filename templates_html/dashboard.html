@@ -30,7 +30,7 @@
       <tr>
         <td data-label="Height"><a href="/explorer/block/{{ height }}">{{ height }}</a></td>
         <td data-label="Hash" class="hash-short"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
-        <td data-label="From" class="hash-short">{{ t.from[:24] }}…</td>
+        <td data-label="From" class="hash-short">{{ "self" if t.from == info.address else t.from[:24] ~ "…" }}</td>
         <td data-label="Amount">{{ fmt_balance(amount) }}</td>
       </tr>
       {% endfor %}
@@ -45,6 +45,7 @@
 (function () {
   const TICKS_PER_LAPSE = {{ TICKS_PER_LAPSE }};
   const SUPPLY_CAP = {{ supply_cap }};
+  const SELF_ADDRESS = {{ info.address|tojson }};
 
   function fmtBalance(ticks) {
     const lapse = Math.floor(ticks / TICKS_PER_LAPSE);
@@ -76,7 +77,9 @@
           return "<tr>" +
             "<td data-label=\"Height\"><a href=\"/explorer/block/" + tx.height + "\">" + tx.height + "</a></td>" +
             "<td data-label=\"Hash\" class=\"hash-short\"><a href=\"/explorer/tx/" + tx.hash + "\">" + tx.hash.slice(0, 20) + "…</a></td>" +
-            "<td data-label=\"From\" class=\"hash-short\">" + tx.from.slice(0, 24) + "…</td>" +
+            "<td data-label=\"From\" class=\"hash-short\">" +
+              (tx.from === SELF_ADDRESS ? "self" : tx.from.slice(0, 24) + "…") +
+              "</td>" +
             "<td data-label=\"Amount\">" + fmtBalance(tx.amount) + "</td>" +
             "</tr>";
         }).join("");
