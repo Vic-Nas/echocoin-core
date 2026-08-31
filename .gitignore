@@ -19,3 +19,7 @@ scorchcoin_chain.db
 scorchcoin_chain.db-shm
 scorchcoin_chain.db-wal
 scorchcoin_key.json
+
+# Uptime-reward payout secrets (real passphrase, not the .example template)
+tools/uptime_rewards.env
+tools/uptime_rewards.log
