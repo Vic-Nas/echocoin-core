@@ -306,7 +306,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         chain = node.view.chain
         return render_template("dashboard.html", title="Dashboard",
             info=info, supply_cap=SUPPLY_CAP,
-            recent_txs=_recent_committed_txs(chain, limit=10))
+            recent_txs=_recent_committed_txs(chain, limit=6))
 
     @app.route("/explorer", endpoint=pfx+"explorer")
     def explorer():
@@ -482,7 +482,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         chain = node.view.chain
         info["recent_txs"] = [
             {"height": height, "hash": h, "from": t.get("from", ""), "amount": amount}
-            for height, h, t, amount in _recent_committed_txs(chain, limit=10)
+            for height, h, t, amount in _recent_committed_txs(chain, limit=6)
         ]
         return jsonify(info)
 
