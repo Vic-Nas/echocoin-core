@@ -114,6 +114,13 @@ class Node:
         self._kek         = None
         self._loop_thread = None
         self._cycle_count = 0
+        # tx_hash -> monotonic time of the last (re)relay, for txs this node
+        # itself originated. The private stem hop is a single UDP datagram
+        # with no retry (see gossip.py), so a dropped packet silently kills
+        # propagation with no visible symptom until the tx expires from the
+        # mempool unconfirmed. _retry_stuck_local_txs() re-floods our own
+        # submissions that are still pending after RELAY_RETRY_SECONDS.
+        self._local_pending = {}
 
         self.cs   = self._load_cs()
         self.view = NodeView(self.cs)
@@ -210,9 +217,26 @@ class Node:
                       tx_dict.get("from", "?")[:24])
             return False, h
         self.gossip.relay_tx(tx_dict)
+        self._local_pending[h] = time.monotonic()
         log.info("[tx] accepted  hash=%s  from=%s", h[:12],
                  tx_dict.get("from", "?")[:24])
         return True, h
+
+    RELAY_RETRY_SECONDS = 180  # ~1.5x the VDF block target
+
+    def _retry_stuck_local_txs(self):
+        """Re-flood (skipping the stem phase) any tx we originated that's
+        still pending after RELAY_RETRY_SECONDS -- see _local_pending."""
+        now = time.monotonic()
+        for h in list(self._local_pending):
+            tx_dict = self.mempool.get(h)
+            if tx_dict is None:
+                del self._local_pending[h]  # confirmed or pruned
+                continue
+            if now - self._local_pending[h] >= self.RELAY_RETRY_SECONDS:
+                log.info("[tx] re-flooding stuck local tx  hash=%s", h[:12])
+                self.gossip.dandelion_send(tx_dict, 0)
+                self._local_pending[h] = now
 
     def submit_tx_from_api(self, tx_dict, timeout=5):
         """Thread-safe bridge: enqueue tx, block until the loop replies."""
@@ -246,6 +270,7 @@ class Node:
     def _run_cycle(self):
         self._cycle_count += 1
         self._drain_queue()
+        self._retry_stuck_local_txs()
 
         if self._cycle_count % SYNC_EVERY_N_CYCLES == 0:
             self.syncer.check_and_sync(
