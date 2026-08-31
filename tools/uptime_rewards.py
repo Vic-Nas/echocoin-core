@@ -38,7 +38,7 @@ import time
 import requests
 
 PUBLIC_URL  = os.environ.get("LAPSECOIN_PUBLIC_URL", "http://127.0.0.1:8333")
-PRIVATE_URL = os.environ.get("LAPSECOIN_PRIVATE_URL", "http://127.0.0.1:8334")
+PRIVATE_URL = os.environ.get("LAPSECOIN_PRIVATE_URL", "http://127.0.0.1:8335")
 PASSPHRASE  = os.environ.get("LAPSECOIN_PASSPHRASE", "")
 
 TICKS_PER_LAPSE   = 100_000_000
