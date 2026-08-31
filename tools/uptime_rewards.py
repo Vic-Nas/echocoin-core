@@ -25,11 +25,12 @@ Each run:
      itself fails (e.g. node briefly unreachable), the run stops here rather
      than risking a second payout stacking on an unresolved one.
   3. Snapshots peers currently active (seen within the last hour).
-  4. Drops the builder of the current tip block -- it just mined successfully,
-     so it isn't one of the non-mining nodes this exists for -- and any peer
-     whose balance is not lower than the reward wallet's own current balance,
-     so the budget goes to nodes that actually need it rather than topping
-     up ones already doing fine on their own.
+  4. Drops any peer that won more blocks than the reward node itself over
+     the last RECENT_BLOCKS_WINDOW blocks (a real mining-activity signal,
+     not just whoever happened to build the single most recent block), and
+     any peer whose balance is not lower than the reward wallet's own
+     current balance -- so the budget goes to nodes that actually need it
+     rather than topping up ones already doing fine on their own.
   5. Splits pool_amount = remaining_ticks * (1 - 0.5 ** (1 / HALFLIFE_HOURS))
      evenly across the survivors, so the payout decays with the tracked
      budget and approaches zero as it's spent, with no hard cutoff to manage.
@@ -99,6 +100,26 @@ def tx_confirmed(tx_hash):
         return False
     print(f"unexpected status {r.status_code} checking pending tx {tx_hash}", file=sys.stderr)
     return None
+
+
+RECENT_BLOCKS_WINDOW = int(os.environ.get("LAPSECOIN_REWARD_RECENT_BLOCKS", "30"))
+
+
+def get_recent_block_win_counts(tip_height):
+    """{builder_addr: blocks won} over the last RECENT_BLOCKS_WINDOW blocks
+    (inclusive of the tip). One node's block-win share over a real window is
+    a sturdier "is this node actually mining" signal than just the last
+    block's builder -- a lone win 29 blocks ago among peers who never win
+    otherwise still shows up here, not just the most recent one."""
+    counts = {}
+    start = max(0, tip_height - RECENT_BLOCKS_WINDOW + 1)
+    for h in range(start, tip_height + 1):
+        r = requests.get(f"{PUBLIC_URL}/api/block/{h}", timeout=10)
+        r.raise_for_status()
+        builder = r.json().get("builder")
+        if builder:
+            counts[builder] = counts.get(builder, 0) + 1
+    return counts
 
 
 def get_active_peer_wallets():
@@ -191,12 +212,14 @@ def main():
     reward_addr = info["address"]
     wallet_balance = get_balance_ticks(reward_addr)
 
-    tip = requests.get(f"{PUBLIC_URL}/api/block/{info['height']}", timeout=10).json()
-    last_builder = tip.get("builder") or None
+    win_counts = get_recent_block_win_counts(info["height"])
+    self_wins = win_counts.get(reward_addr, 0)
 
-    candidates = get_active_peer_wallets() - {reward_addr, last_builder}
+    candidates = get_active_peer_wallets() - {reward_addr}
     eligible = []
     for addr in candidates:
+        if win_counts.get(addr, 0) > self_wins:
+            continue  # winning more than us over the window: can mine fine on its own
         balance = get_balance_ticks(addr)
         if balance is None:
             print(f"skipping malformed peer-reported wallet: {addr!r}", file=sys.stderr)
