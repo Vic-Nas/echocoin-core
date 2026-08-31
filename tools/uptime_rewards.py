@@ -25,8 +25,9 @@ Each run:
      itself fails (e.g. node briefly unreachable), the run stops here rather
      than risking a second payout stacking on an unresolved one.
   3. Snapshots peers currently active (seen within the last hour).
-  4. Drops any peer already holding >= BALANCE_CAP_LAPSE, so the budget goes
-     to nodes that actually need it rather than topping up existing holders.
+  4. Drops any peer whose balance is not lower than the reward wallet's own
+     current balance, so the budget goes to nodes that actually need it
+     rather than topping up ones already doing fine on their own.
   5. Splits pool_amount = remaining_ticks * (1 - 0.5 ** (1 / HALFLIFE_HOURS))
      evenly across the survivors, so the payout decays with the tracked
      budget and approaches zero as it's spent, with no hard cutoff to manage.
@@ -55,7 +56,6 @@ PASSPHRASE  = os.environ.get("LAPSECOIN_PASSPHRASE", "")
 TICKS_PER_LAPSE   = 100_000_000
 BUDGET_LAPSE      = float(os.environ.get("LAPSECOIN_REWARD_BUDGET_LAPSE", "1430"))
 HALFLIFE_HOURS    = int(os.environ.get("LAPSECOIN_REWARD_HALFLIFE_HOURS", str(24 * 30)))
-BALANCE_CAP_LAPSE = float(os.environ.get("LAPSECOIN_REWARD_BALANCE_CAP_LAPSE", "20"))
 ACTIVE_WINDOW_S   = 3600      # "active" = seen within the last hour
 
 STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
@@ -195,7 +195,7 @@ def main():
         if balance is None:
             print(f"skipping malformed peer-reported wallet: {addr!r}", file=sys.stderr)
             continue
-        if balance < BALANCE_CAP_LAPSE * TICKS_PER_LAPSE:
+        if balance < wallet_balance:
             eligible.append(addr)
     if not eligible:
         print("no eligible peers this hour")
