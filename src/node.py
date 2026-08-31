@@ -526,13 +526,18 @@ class Node:
     def _readd_valid_txs(self, txs, exclude_hashes, state):
         """Re-add unconfirmed txs to the mempool, each validated against
         state first -- a stale-nonce or otherwise now-invalid tx must not
-        be silently re-admitted."""
+        be silently re-admitted. Also re-floods each one: it fell out of a
+        reorged-away block, so other nodes on the now-canonical chain may
+        never have seen it at all, and without this it would just sit in
+        our own mempool alone until we mine it ourselves or it expires."""
         for t in txs:
             if tx_mod.tx_hash(t) in exclude_hashes:
                 continue
             ok, _ = tx_mod.validate(t, state)
             if ok:
-                self.mempool.add(t)
+                added, _ = self.mempool.add(t)
+                if added:
+                    self.gossip.dandelion_send(t, 0)
 
     def _salvage_fork_txs(self, fork_point, tail):
         """Re-add unconfirmed, still-valid txs from a rejected fork into the
