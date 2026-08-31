@@ -6,7 +6,7 @@
   Peer-to-peer electronic cash, secured by a Verifiable Delay Function instead of proof-of-work mining, with quantum-resistant signatures.
 
   [![Release](https://img.shields.io/github/v/release/Vic-Nas/lapsecoin)](https://github.com/Vic-Nas/lapsecoin/releases)
-  [![Live node](https://img.shields.io/badge/node-lapsenode.cyprus--draco.ts.net-2ea44f)](https://lapsenode.cyprus-draco.ts.net/)
+  [![Live node](https://img.shields.io/badge/node-lapsenode.vicnas.me-2ea44f)](https://lapsenode.vicnas.me/)
   [![Whitepaper](https://img.shields.io/badge/docs-whitepaper-blue)](docs/whitepaper.md)
   [![Donate BTC](https://img.shields.io/badge/donate-BTC-f7931a)](#support)
   [![Discord](https://img.shields.io/badge/discord-join-5865F2?logo=discord&logoColor=white)](https://discord.gg/FP2d8JmK6r)
