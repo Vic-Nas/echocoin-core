@@ -478,7 +478,13 @@ def _shared_read_only_routes(app, node, pool, limiter,
 
     @app.route("/api/info", endpoint=pfx+"api_info")
     def api_info():
-        return jsonify(node.get_info())
+        info = dict(node.get_info())
+        chain = node.view.chain
+        info["recent_txs"] = [
+            {"height": height, "hash": h, "from": t.get("from", ""), "amount": amount}
+            for height, h, t, amount in _recent_committed_txs(chain, limit=10)
+        ]
+        return jsonify(info)
 
     @app.route("/api/block/<int:height>", endpoint=pfx+"api_block")
     def api_block(height):

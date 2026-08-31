@@ -24,7 +24,7 @@
   <div class="table-wrap">
   <table class="stacked">
     <thead><tr><th>Height</th><th>Hash</th><th>From</th><th>Amount</th></tr></thead>
-    <tbody>
+    <tbody id="live-recent-txs">
     {% if recent_txs %}
       {% for height, h, t, amount in recent_txs %}
       <tr>
@@ -68,6 +68,21 @@
       document.getElementById("live-circulating-pct").textContent =
         (info.total_minted / SUPPLY_CAP * 100).toFixed(4) + "% of 21M cap";
       document.getElementById("live-reward").textContent = "+" + fmtBalance(info.block_reward);
+
+      const txBody = document.getElementById("live-recent-txs");
+      const txs = info.recent_txs || [];
+      if (txs.length) {
+        txBody.innerHTML = txs.map(function (tx) {
+          return "<tr>" +
+            "<td data-label=\"Height\"><a href=\"/explorer/block/" + tx.height + "\">" + tx.height + "</a></td>" +
+            "<td data-label=\"Hash\" class=\"hash-short\"><a href=\"/explorer/tx/" + tx.hash + "\">" + tx.hash.slice(0, 20) + "…</a></td>" +
+            "<td data-label=\"From\" class=\"hash-short\">" + tx.from.slice(0, 24) + "…</td>" +
+            "<td data-label=\"Amount\">" + fmtBalance(tx.amount) + "</td>" +
+            "</tr>";
+        }).join("");
+      } else {
+        txBody.innerHTML = "<tr><td colspan=\"4\" style=\"color:var(--muted);text-align:center\">No transactions yet</td></tr>";
+      }
 
       statusEl.textContent = "refreshed " + new Date().toLocaleTimeString();
     } catch (e) {
