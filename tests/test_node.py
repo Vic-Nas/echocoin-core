@@ -475,13 +475,19 @@ class TestHandleInboundTx:
         assert node.mempool.size() == 0
 
     def test_fluff_valid_tx_relayed(self, node_env):
+        """A validated fluff continues flooding via dandelion_send(tx, 0),
+        not relay_tx() -- relay_tx() would re-decide stem-vs-flood from this
+        node's own peer count, which on a well-connected relay silently
+        pulls an already-public tx back into a fresh private stem instead
+        of flooding it onward. See node.py's _handle_inbound_tx."""
         node, _, __, gossip, *_ = node_env
         node.cs.state.credit(address(0), 100 * TICKS_PER_LAPSE)
         node.cs.state.total_minted += 100 * TICKS_PER_LAPSE
         t = make_tx(0, 1, TICKS_PER_LAPSE, node.cs.state)
         msg = {"tx": t, "relay_type": "tx_fluff", "remaining_hops": 0}
         node._handle_inbound_tx(msg)
-        gossip.relay_tx.assert_called_once()
+        gossip.relay_tx.assert_not_called()
+        gossip.dandelion_send.assert_called_once_with(t, 0)
 
 
 # ---------------------------------------------------------------------------
