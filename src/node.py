@@ -461,7 +461,17 @@ class Node:
         added, h_or_err = self.mempool.add(tx_dict)
         if added:
             log.debug("[tx] inbound accepted  hash=%s  from=%s", h_or_err[:12], sender)
-            self.gossip.relay_tx(tx_dict)
+            # Continue the fluff, never re-stem: this tx already reached the
+            # public phase (either it arrived tagged tx_fluff, or as the
+            # stem's last hop -- see the tx_stem branch above), so privacy
+            # is already spent and there's nothing left to gain from a fresh
+            # private stem here. relay_tx() would re-roll stem-vs-flood from
+            # this node's own peer count, which on a well-connected node
+            # (>= MIN_PEERS_FOR_STEM) silently turns one flood step into
+            # another single-hop, zero-retry private relay -- exactly the
+            # failure mode this is meant to avoid. dandelion_send(tx, 0)
+            # floods to all peers (deduped via the seen-tx cache).
+            self.gossip.dandelion_send(tx_dict, 0)
         else:
             log.debug("[tx] inbound duplicate  from=%s", sender)
 

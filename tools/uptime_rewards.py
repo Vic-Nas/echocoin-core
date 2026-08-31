@@ -8,22 +8,33 @@ or node code changes, and it isn't part of the PyInstaller build.
 The budget is tracked explicitly in a small local state file, separate from
 whatever the reward wallet's real on-chain balance happens to be (mining
 income, other transfers, etc. don't inflate or shrink it). It starts at
-BUDGET_LAPSE the first time this runs and is decremented by whatever it
-actually pays out each hour.
+BUDGET_LAPSE the first time this runs and is decremented only once a payout
+is confirmed to have actually landed on chain -- see the pending-tx check
+below, which exists because a tx accepted into the local mempool can still
+silently fail to propagate (Dandelion's stem hop is fire-and-forget with no
+retry) and expire unconfirmed 30 minutes later with nothing to show for it.
 
 Each run:
-  1. Loads remaining_ticks from the state file (seeds it at BUDGET_LAPSE if
-     the file doesn't exist yet).
-  2. Snapshots peers currently active (seen within the last hour).
-  3. Drops any peer already holding >= BALANCE_CAP_LAPSE, so the budget goes
+  1. Loads state (remaining_ticks, and an optional pending {tx_hash, amount}
+     left over from the previous run).
+  2. If there's a pending tx from last run: by now (>= 1h later, well past
+     the mempool's 30-minute TTL) it must be either confirmed or gone.
+     Checks /api/tx/<hash> -- 404 means it never confirmed, so its amount is
+     refunded back into remaining_ticks; 200 means it landed, so the earlier
+     debit stands. Either way the pending marker is cleared. If this check
+     itself fails (e.g. node briefly unreachable), the run stops here rather
+     than risking a second payout stacking on an unresolved one.
+  3. Snapshots peers currently active (seen within the last hour).
+  4. Drops any peer already holding >= BALANCE_CAP_LAPSE, so the budget goes
      to nodes that actually need it rather than topping up existing holders.
-  4. Splits pool_amount = remaining_ticks * (1 - 0.5 ** (1 / HALFLIFE_HOURS))
+  5. Splits pool_amount = remaining_ticks * (1 - 0.5 ** (1 / HALFLIFE_HOURS))
      evenly across the survivors, so the payout decays with the tracked
      budget and approaches zero as it's spent, with no hard cutoff to manage.
-  5. Clamps pool_amount to the reward wallet's actual current balance too,
+  6. Clamps pool_amount to the reward wallet's actual current balance too,
      as a safety net in case the two ever drift.
-  6. Sends each its share at fee 0 via the private wallet's /send form, then
-     subtracts what was actually sent from remaining_ticks and saves it.
+  7. Sends each its share at fee 0 via the private wallet's /send form,
+     debits remaining_ticks, and records the new tx as pending for next
+     run's confirmation check.
 
 Requires LAPSECOIN_PASSPHRASE set to the same passphrase the node itself
 uses (needed to sign the payout transaction).
@@ -51,22 +62,41 @@ STATE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "uptime_rewards_state.json")
 
 CSRF_RE = re.compile(r'name="csrf_token" value="([0-9a-f]+)"')
+TX_HASH_RE = re.compile(r'class="hash">([0-9a-f]+)</span>')
 
 
-def load_remaining_ticks():
+def load_state():
     if os.path.exists(STATE_FILE):
         with open(STATE_FILE) as f:
-            return json.load(f)["remaining_ticks"]
-    remaining = int(BUDGET_LAPSE * TICKS_PER_LAPSE)
-    save_remaining_ticks(remaining)
-    return remaining
+            state = json.load(f)
+        state.setdefault("pending", None)
+        return state
+    state = {"remaining_ticks": int(BUDGET_LAPSE * TICKS_PER_LAPSE), "pending": None}
+    save_state(state)
+    return state
 
 
-def save_remaining_ticks(remaining_ticks):
+def save_state(state):
     tmp = STATE_FILE + ".tmp"
     with open(tmp, "w") as f:
-        json.dump({"remaining_ticks": remaining_ticks}, f)
+        json.dump(state, f)
     os.replace(tmp, STATE_FILE)
+
+
+def tx_confirmed(tx_hash):
+    """True if the tx is known to the node (mempool or chain), False if it's
+    gone (never confirmed, pruned after TTL), None if the check itself failed."""
+    try:
+        r = requests.get(f"{PUBLIC_URL}/api/tx/{tx_hash}", timeout=10)
+    except requests.RequestException as e:
+        print(f"could not check pending tx {tx_hash}: {e}", file=sys.stderr)
+        return None
+    if r.status_code == 200:
+        return True
+    if r.status_code == 404:
+        return False
+    print(f"unexpected status {r.status_code} checking pending tx {tx_hash}", file=sys.stderr)
+    return None
 
 
 def get_active_peer_wallets():
@@ -96,13 +126,14 @@ def get_balance_ticks(addr):
 
 
 def send_payout(outputs_csv):
-    """outputs_csv: 'addr,ticks\\n...'. Uses the private /send form (fee 0)."""
+    """outputs_csv: 'addr,ticks\\n...'. Uses the private /send form (fee 0).
+    Returns the tx hash on success, None on failure."""
     get = requests.get(f"{PRIVATE_URL}/send", timeout=10)
     get.raise_for_status()
     m = CSRF_RE.search(get.text)
     if not m:
         print("could not find csrf token on /send page", file=sys.stderr)
-        return False
+        return None
     resp = requests.post(f"{PRIVATE_URL}/send", data={
         "csrf_token": m.group(1),
         "outputs": outputs_csv,
@@ -110,10 +141,14 @@ def send_payout(outputs_csv):
         "passphrase": PASSPHRASE,
     }, timeout=15)
     resp.raise_for_status()
-    ok = 'class="alert alert-err"' not in resp.text
-    if not ok:
+    if 'class="alert alert-err"' in resp.text:
         print("send failed, response did not confirm success", file=sys.stderr)
-    return ok
+        return None
+    m = TX_HASH_RE.search(resp.text)
+    if not m:
+        print("send appeared to succeed but no tx hash found in response", file=sys.stderr)
+        return None
+    return m.group(1)
 
 
 def main():
@@ -121,7 +156,25 @@ def main():
         print("LAPSECOIN_PASSPHRASE not set", file=sys.stderr)
         return 1
 
-    remaining_ticks = load_remaining_ticks()
+    state = load_state()
+
+    if state["pending"]:
+        pending = state["pending"]
+        confirmed = tx_confirmed(pending["tx_hash"])
+        if confirmed is None:
+            print("could not resolve previous run's pending tx, skipping this run")
+            return 1
+        if confirmed:
+            print(f"previous payout {pending['tx_hash']} confirmed, "
+                  f"debit of {pending['amount'] / TICKS_PER_LAPSE:.4f} LAPSE stands")
+        else:
+            state["remaining_ticks"] += pending["amount"]
+            print(f"previous payout {pending['tx_hash']} never confirmed, "
+                  f"refunded {pending['amount'] / TICKS_PER_LAPSE:.4f} LAPSE to budget")
+        state["pending"] = None
+        save_state(state)
+
+    remaining_ticks = state["remaining_ticks"]
     if remaining_ticks <= 0:
         print("budget exhausted, nothing to pay out")
         return 0
@@ -150,12 +203,15 @@ def main():
         return 0
 
     outputs_csv = "\n".join(f"{addr},{share}" for addr in eligible)
-    if send_payout(outputs_csv):
+    tx_hash = send_payout(outputs_csv)
+    if tx_hash:
         sent = share * len(eligible)
-        remaining_ticks -= sent
-        save_remaining_ticks(remaining_ticks)
-        print(f"paid {share / TICKS_PER_LAPSE:.4f} LAPSE to {len(eligible)} peer(s), "
-              f"budget remaining {remaining_ticks / TICKS_PER_LAPSE:.4f} LAPSE")
+        state["remaining_ticks"] = remaining_ticks - sent
+        state["pending"] = {"tx_hash": tx_hash, "amount": sent}
+        save_state(state)
+        print(f"sent {share / TICKS_PER_LAPSE:.4f} LAPSE to {len(eligible)} peer(s) "
+              f"(tx {tx_hash}, pending confirmation next run), "
+              f"budget remaining {state['remaining_ticks'] / TICKS_PER_LAPSE:.4f} LAPSE")
         return 0
     return 1
 
