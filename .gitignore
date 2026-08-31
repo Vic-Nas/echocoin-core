@@ -20,5 +20,6 @@ scorchcoin_chain.db-shm
 scorchcoin_chain.db-wal
 scorchcoin_key.json
 
-# Uptime-reward payout log
+# Uptime-reward payout log and tracked-budget state
 tools/uptime_rewards.log
+tools/uptime_rewards_state.json
