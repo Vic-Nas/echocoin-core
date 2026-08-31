@@ -15,16 +15,20 @@ import threading
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from gossip import Gossip
+from gossip import Gossip, MIN_PEERS_FOR_STEM
 import state as state_mod
 from tests.fixtures import make_tx, seed_balance
 from params import TICKS_PER_LAPSE
 
 
-def make_gossip(peers=None):
+def make_gossip(peers=None, peer_count=None):
     pool = MagicMock()
     pool.get_all.return_value = peers or []
     pool.random.return_value = peers[0] if peers else None
+    # Default to a peer count comfortably above MIN_PEERS_FOR_STEM so
+    # existing stem-path tests aren't affected by the small-network
+    # flood-immediately behavior unless a test opts into it explicitly.
+    pool.count.return_value = peer_count if peer_count is not None else 100
     udp = MagicMock()
     gossip = Gossip(pool=pool, udp=udp)
     return gossip, pool, udp
@@ -105,6 +109,25 @@ class TestRelayTx:
             g.relay_tx(t1)
             g.relay_tx(t2)
             assert mock_send.call_count == 2
+
+    def test_relay_tx_stems_when_enough_peers(self):
+        g, pool, udp = make_gossip(peers=["1.2.3.4:9000"], peer_count=MIN_PEERS_FOR_STEM)
+        t = sample_tx()
+        with patch.object(g, "dandelion_send") as mock_send:
+            g.relay_tx(t)
+            hops = mock_send.call_args[0][1]
+            assert hops > 0
+
+    def test_relay_tx_floods_immediately_when_too_few_peers(self):
+        """Below MIN_PEERS_FOR_STEM known peers, Dandelion's anonymity set is
+        too small to be worth the stem phase's liveness risk (a single
+        dropped stem hop silently kills the relay forever), so it should
+        flood immediately instead."""
+        g, pool, udp = make_gossip(peers=["1.2.3.4:9000"], peer_count=MIN_PEERS_FOR_STEM - 1)
+        t = sample_tx()
+        with patch.object(g, "dandelion_send") as mock_send:
+            g.relay_tx(t)
+            mock_send.assert_called_once_with(t, 0)
 
 
 # ---------------------------------------------------------------------------

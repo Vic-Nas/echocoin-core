@@ -17,6 +17,14 @@ SEEN_TX_CACHE_SIZE = 50_000
 STEM_HOPS_MIN      = 2
 STEM_HOPS_MAX      = 8
 
+# Below this many known peers, Dandelion's anonymity set is too small to hide
+# a tx's origin anyway (there's nowhere real to blend in), while the stem
+# phase still carries a real liveness cost: each hop is a single UDP
+# datagram with no retry, so one dropped packet silently kills the relay
+# forever with no visible symptom. Not worth paying that cost for privacy
+# that isn't there, so skip straight to flooding.
+MIN_PEERS_FOR_STEM = STEM_HOPS_MAX
+
 
 class Gossip:
 
@@ -32,7 +40,14 @@ class Gossip:
         self.udp.send_block(block)
 
     def relay_tx(self, tx_dict):
-        """Start a fresh Dandelion relay for a locally-submitted or fluffed tx."""
+        """Start a fresh Dandelion relay for a locally-submitted or fluffed tx.
+
+        Skips the private stem phase entirely below MIN_PEERS_FOR_STEM known
+        peers and floods immediately instead -- see MIN_PEERS_FOR_STEM.
+        """
+        if self.pool.count() < MIN_PEERS_FOR_STEM:
+            self.dandelion_send(tx_dict, 0)
+            return
         hops = random.randint(STEM_HOPS_MIN, STEM_HOPS_MAX)
         self.dandelion_send(tx_dict, hops)
 
