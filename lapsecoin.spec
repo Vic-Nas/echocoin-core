@@ -108,7 +108,7 @@ if sys.platform == "win32":
         strip=False,
         upx=True,
         upx_exclude=[],
-        console=True,
+        console=False,
         icon="favicon.ico",
         bootloader_ignore_signals=False,
         disable_windowed_traceback=False,

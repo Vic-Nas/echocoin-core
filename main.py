@@ -32,10 +32,33 @@ from version import LOCAL_VERSION
 
 LOG_FILE = "lapsecoin.log"
 
+# The Windows build is console=False (no console window for the default GUI
+# double-click experience). That leaves two things to handle before any
+# logging or output happens: sys.stdout/stderr can be None for a windowed
+# app with no console attached at all (a documented PyInstaller/Windows
+# behavior, not a bug), which would crash a bare StreamHandler() on first
+# write; and if the app *was* launched from an existing terminal (someone
+# explicitly running --no-gui from cmd/PowerShell), attaching to that
+# console is what makes prompts and log lines actually show up there
+# instead of going nowhere.
+if sys.platform.startswith("win"):
+    try:
+        import ctypes
+        if ctypes.windll.kernel32.AttachConsole(-1):  # -1 = ATTACH_PARENT_PROCESS
+            sys.stdout = open("CONOUT$", "w")
+            sys.stderr = open("CONOUT$", "w")
+            sys.stdin = open("CONIN$", "r")
+    except Exception:
+        pass  # no parent console (double-clicked) or attach failed either way
+
+_log_handlers = [logging.FileHandler(LOG_FILE)]
+if sys.stderr is not None:
+    _log_handlers.append(logging.StreamHandler())
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
-    handlers=[logging.StreamHandler(), logging.FileHandler(LOG_FILE)],
+    handlers=_log_handlers,
 )
 logging.getLogger("ec").setLevel(logging.INFO)
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -272,5 +295,52 @@ def _prompt_new_passphrase(first=None):
         print("Passphrases do not match.")
 
 
+def _show_fatal_error(exc):
+    """Last-resort visibility for a crash that happens before (or instead
+    of) the GUI window ever appears -- with console=False on Windows,
+    there's no console to print a traceback to, so silence here would mean
+    the app just vanishes with zero explanation. Always logged to LOG_FILE
+    first (that part can't fail silently), then tries progressively more
+    primitive ways to actually show something on screen."""
+    import traceback
+    tb = traceback.format_exc()
+    try:
+        logging.getLogger("ec.main").error("[fatal] unhandled exception:\n%s", tb)
+    except Exception:
+        pass
+
+    message = f"LapseCoin failed to start.\n\n{exc}\n\nFull details in {LOG_FILE}."
+    try:
+        import tkinter as tk
+        from tkinter import messagebox
+        root = tk.Tk()
+        root.withdraw()
+        messagebox.showerror("LapseCoin - Error", message)
+        root.destroy()
+        return
+    except Exception:
+        pass
+
+    if sys.platform.startswith("win"):
+        try:
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(0, message, "LapseCoin - Error", 0x10)
+            return
+        except Exception:
+            pass
+
+    # Console/no-gui path, or every other fallback above failed: a normal
+    # traceback on stderr is the expected and sufficient behavior there.
+    print(tb, file=sys.stderr)
+
+
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        pass
+    except SystemExit:
+        raise
+    except Exception as e:
+        _show_fatal_error(e)
+        sys.exit(1)
