@@ -90,7 +90,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=["hook_oqs.py"],
-    excludes=["pytest", "unittest", "tkinter"],
+    excludes=["pytest", "unittest"],
     noarchive=False,
 )
 
