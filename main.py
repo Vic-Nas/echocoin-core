@@ -30,9 +30,12 @@ from syncer import Syncer
 from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
 from version import LOCAL_VERSION
 
+LOG_FILE = "lapsecoin.log"
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+    handlers=[logging.StreamHandler(), logging.FileHandler(LOG_FILE)],
 )
 logging.getLogger("ec").setLevel(logging.INFO)
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
@@ -118,11 +121,31 @@ def main():
         "--no-update-check", action="store_true",
         help="Disable the periodic check for newer releases entirely.",
     )
+    parser.add_argument(
+        "--no-gui", action="store_true",
+        help="Always use the console (passphrase prompt, Ctrl+C to stop) "
+             "instead of the desktop status window. Implied automatically "
+             "when LAPSECOIN_PASSPHRASE is set (headless/server runs).",
+    )
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
     logging.getLogger("ec").setLevel(getattr(logging, args.log_level))
 
-    pk, kek = _load_or_create_key(args.keyfile)
+    use_gui = not args.no_gui and not os.environ.get("LAPSECOIN_PASSPHRASE")
+    gui = None
+    if use_gui:
+        try:
+            import gui
+        except ImportError as e:
+            # tkinter isn't guaranteed present on every Python (e.g. Ubuntu's
+            # system python3 needs python3-tk installed separately) -- fall
+            # back to the console rather than failing to start at all.
+            log.warning("[startup] GUI unavailable (%s), falling back to console", e)
+            use_gui = False
+    if use_gui:
+        pk, kek = gui.load_or_create_key_gui(args.keyfile)
+    else:
+        pk, kek = _load_or_create_key(args.keyfile)
     genesis  = block_mod.create_genesis()
     pk_hex   = pk.hex()
 
@@ -224,12 +247,16 @@ def main():
             lambda chain: node.apply_better_chain(chain)[0],
         )
 
-    try:
-        node.start(kek=kek)
-    except KeyboardInterrupt:
-        log.info("[shutdown] stopped")
-        node.stop()
-        udp.stop()
+    if use_gui:
+        threading.Thread(target=node.start, kwargs={"kek": kek}, daemon=True).start()
+        gui.run_status_window(node, udp, private_port, LOG_FILE)
+    else:
+        try:
+            node.start(kek=kek)
+        except KeyboardInterrupt:
+            log.info("[shutdown] stopped")
+            node.stop()
+            udp.stop()
 
 
 def _prompt_new_passphrase(first=None):
