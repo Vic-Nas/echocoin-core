@@ -11,7 +11,16 @@ import logging
 
 log = logging.getLogger("ec.syncer")
 
-FETCH_CHUNK = 20    # blocks per GETSYNC request (keep UDP responses small)
+FETCH_CHUNK = 5     # blocks per GETSYNC request (keep UDP responses small)
+# Small on purpose: SYNC responses have no chunk-level retransmission (see
+# peer_udp.py), so a single dropped UDP datagram silently fails the whole
+# page. FALCON-512 signatures are large enough that 20 blocks of real
+# transaction activity could span dozens of chunks, making any nontrivial
+# packet loss rate likely to kill a page outright -- fewer blocks per
+# request means fewer chunks per response, which is the direct lever on
+# that failure probability. Costs more round trips for a long initial
+# sync, which is the right trade for a new node that would otherwise
+# appear stuck at height 0 indefinitely.
 
 # Extra attempts before treating an outright timeout/decode-failure (resp is
 # None) as authoritative. The UDP transport has no chunk-level retransmission
