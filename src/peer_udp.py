@@ -13,14 +13,22 @@ One UDP socket per node handles everything:
 Reliability layer
 -----------------
 Large messages (SYNC, full block) are chunked into MAX_CHUNK_SIZE UDP datagrams.
-Each chunk is numbered and the receiver reassembles them; there is no
-chunk-level ACK or retransmission (MT_ACK is defined but unused). A message
-that loses even one chunk is silently dropped once its reassembly buffer
-goes stale (_Reassembler.evict_stale). Recovery relies on the caller's own
-retry cadence -- the periodic syncer re-poll and gossip re-broadcast to
-other peers -- rather than retransmission of the same transfer.
-Small messages (PING, PEERS, TX, small blocks) fit in one datagram and are
-fire-and-forget with application-level retry handled by the caller.
+Each chunk is numbered; for a genuinely multi-chunk message (chunk_total > 1),
+the receiver ACKs its current chunk holdings (MT_ACK) after every chunk it
+gets, and the sender resends only what's still missing, for up to
+CHUNK_ACK_MAX_ROUNDS rounds (see _send_chunked / _retransmit_until_acked /
+_handle_ack). A message still stuck incomplete after that -- or one whose
+reassembly buffer just goes stale from real inactivity -- is dropped
+(_Reassembler.evict_stale), same as before. Talking to a peer too old to
+know MT_ACK exists degrades safely to exactly that prior behavior: no ACK
+ever arrives, every round resends the whole message (wasteful but harmless,
+chunks are idempotent to re-receive), and it's abandoned once
+CHUNK_ACK_MAX_ROUNDS is exhausted rather than hanging. The caller's own
+retry cadence (periodic syncer re-poll, gossip re-broadcast) is still the
+backstop above this layer, same as always.
+Small messages (PING, PEERS, TX, small blocks) fit in one datagram, stay
+pure fire-and-forget (no ACK tracking overhead), with application-level
+retry handled by the caller.
 
 Wire format
 -----------
@@ -86,8 +94,22 @@ MAX_CHUNK_TOTAL   = 2000   # ~2.8MB reassembled, well above any real message
 RATE_LIMIT_PER_SEC = 50
 RATE_LIMIT_BURST    = 100
 
+# Chunk-level ACK/retransmit for multi-chunk sends (chunk_total > 1 only --
+# most messages fit in one datagram and stay pure fire-and-forget). The
+# receiver ACKs its current chunk holdings after every chunk it gets; the
+# sender resends only what's still missing, a few times, then gives up.
+# Against a peer too old to know MT_ACK exists, no ACK ever arrives, so
+# every round resends the whole message -- wasteful but harmless (chunks
+# are idempotent to re-receive) and still bounded by CHUNK_ACK_MAX_ROUNDS,
+# degrading to exactly today's one-shot fire-and-forget behavior once
+# exhausted, never hanging.
+CHUNK_ACK_TIMEOUT    = 1.5   # seconds to wait for acks before a retransmit round
+CHUNK_ACK_MAX_ROUNDS = 4
+
 # Header: 1 (type) + 4 (msg_id) + 2 (chunk_idx) + 2 (chunk_total) = 9 bytes
-HDR_FMT  = "!BIHh"  # note: chunk_total signed so -1 = ACK special
+HDR_FMT  = "!BIHh"  # chunk_total is signed, but MT_ACK is what actually
+# distinguishes an ack datagram (see _handle_ack) -- it's just an ordinary
+# single-chunk (chunk_total=1) message of that type, no sentinel value needed.
 HDR_SIZE = struct.calcsize(HDR_FMT)
 
 
@@ -162,6 +184,18 @@ class _Reassembler:
             for k in stale:
                 del self._pending[k]
 
+    def held_chunks(self, addr, msg_id):
+        """Chunk indices currently held for (addr, msg_id), for ACKing.
+        Returns [] once the message has completed (feed() already deleted
+        the entry) -- callers must special-case the completing feed() call
+        themselves if they need to ACK all indices in that case."""
+        key = (addr, msg_id)
+        with self._lock:
+            rec = self._pending.get(key)
+            if rec is None:
+                return []
+            return [k for k in rec if isinstance(k, int)]
+
 
 class _PendingSync:
     """Collects SYNC chunks for a specific GETSYNC request."""
@@ -201,6 +235,13 @@ class UDPTransport:
         self._reassembler = _Reassembler()
         self._pending_sync: dict[int, _PendingSync] = {}  # msg_id -> _PendingSync
         self._sync_lock   = threading.Lock()
+        # (target_addr, msg_id) -> {"chunks": {idx: bytes}, "acked": set(),
+        # "msg_type": int, "event": Event}. Keyed by target too, not just
+        # msg_id, because a broadcast (send_block, _rebroadcast) reuses one
+        # msg_id across many targets -- keying by msg_id alone would let
+        # concurrent targets clobber each other's ack tracking.
+        self._pending_chunked_sends: dict[tuple, dict] = {}
+        self._chunk_lock  = threading.Lock()
         self._pong_events: dict[int, threading.Event] = {}
         self._pong_addrs: dict[int, str] = {}  # msg_id -> observed addr
         self._pong_lock   = threading.Lock()
@@ -446,12 +487,23 @@ class UDPTransport:
                 pending = self._pending_sync.get(msg_id)
             if pending:
                 pending.feed(chunk_idx, chunk_total, payload_bytes)
+                if chunk_total > 1:
+                    self._send_one(MT_ACK, self._new_msg_id(),
+                                   {"acked_msg_id": msg_id,
+                                    "acked_chunks": list(pending.chunks.keys())},
+                                   sender)
             return
 
         # For everything else, reassemble then dispatch
         complete = self._reassembler.feed(
             sender, msg_id, chunk_idx, chunk_total, payload_bytes
         )
+        if chunk_total > 1:
+            held = (list(range(chunk_total)) if complete is not None
+                    else self._reassembler.held_chunks(sender, msg_id))
+            self._send_one(MT_ACK, self._new_msg_id(),
+                           {"acked_msg_id": msg_id, "acked_chunks": held},
+                           sender)
         if complete is None:
             return
 
@@ -567,6 +619,9 @@ class UDPTransport:
                     }
                     self._info_events[msg_id].set()
 
+        elif msg_type == MT_ACK:
+            self._handle_ack(data, sender)
+
     def _handle_getsync(self, msg_id: int, data: dict, sender: tuple):
         """Serve a chain segment request. Calls back on_sync_request if set."""
         sender_addr = f"{sender[0]}:{sender[1]}"
@@ -611,7 +666,17 @@ class UDPTransport:
                       payload: bytes, target: tuple):
         chunks = _split(payload)
         total  = len(chunks)
-        for i, chunk in enumerate(chunks):
+        chunk_map = dict(enumerate(chunks))
+
+        if total > 1:
+            key = (target, msg_id)
+            with self._chunk_lock:
+                self._pending_chunked_sends[key] = {
+                    "chunks": chunk_map, "acked": set(),
+                    "msg_type": msg_type, "event": threading.Event(),
+                }
+
+        for i, chunk in chunk_map.items():
             pkt = _pack(msg_type, msg_id, i, total, chunk)
             try:
                 self._sock.sendto(pkt, target)
@@ -620,6 +685,51 @@ class UDPTransport:
                 break
             if total > 1:
                 time.sleep(0.005)  # pacing to avoid drops on NAT/internet paths
+
+        if total > 1:
+            self._executor.submit(self._retransmit_until_acked, target, msg_id, total)
+
+    def _retransmit_until_acked(self, target: tuple, msg_id: int, total: int):
+        """Resend only the chunks a peer hasn't ACKed yet, a bounded number
+        of times, then give up and stop tracking -- see CHUNK_ACK_* above
+        for why this degrades safely against a peer that never ACKs."""
+        key = (target, msg_id)
+        for _round in range(CHUNK_ACK_MAX_ROUNDS):
+            with self._chunk_lock:
+                state = self._pending_chunked_sends.get(key)
+            if state is None:
+                return  # already cleaned up (fully acked, or evicted)
+            if state["event"].wait(CHUNK_ACK_TIMEOUT):
+                break  # fully acked -- _handle_ack set this
+            with self._chunk_lock:
+                state = self._pending_chunked_sends.get(key)
+                if state is None:
+                    return
+                missing = {i: c for i, c in state["chunks"].items()
+                          if i not in state["acked"]}
+            for i, chunk in missing.items():
+                pkt = _pack(state["msg_type"], msg_id, i, total, chunk)
+                try:
+                    self._sock.sendto(pkt, target)
+                except Exception as e:
+                    log.debug("[udp] retransmit error to %s: %s", target, e)
+                time.sleep(0.005)
+        with self._chunk_lock:
+            self._pending_chunked_sends.pop(key, None)
+
+    def _handle_ack(self, data: dict, sender: tuple):
+        acked_msg_id = data.get("acked_msg_id")
+        acked_chunks = data.get("acked_chunks")
+        if not isinstance(acked_msg_id, int) or not isinstance(acked_chunks, list):
+            return
+        key = (sender, acked_msg_id)
+        with self._chunk_lock:
+            state = self._pending_chunked_sends.get(key)
+            if state is None:
+                return
+            state["acked"].update(i for i in acked_chunks if isinstance(i, int))
+            if state["acked"] >= set(state["chunks"]):
+                state["event"].set()
 
     def _rebroadcast(self, msg_type: int, msg_id: int,
                      data: dict, exclude: str):
