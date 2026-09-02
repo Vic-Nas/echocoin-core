@@ -28,6 +28,7 @@ from peer_udp import UDPTransport
 from peerpool import PeerPool
 from syncer import Syncer
 from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
+from uptime_rewarder import UptimeRewarder
 from version import LOCAL_VERSION
 
 LOG_FILE = "lapsecoin.log"
@@ -242,13 +243,21 @@ def main():
     )
     update_checker.start()
 
+    # Off by default; toggled and its budget edited from the private
+    # dashboard's /rewards page. Its background thread sleeps a full cycle
+    # (an hour, by default) before its first run, so it's never racing
+    # node.start() below for the signing key -- that's always up first.
+    rewarder = UptimeRewarder(node, pool)
+    rewarder.start()
+
     # ------------------------------------------------------------------
     # HTTP servers: browser UI only, no peer routes
     # ------------------------------------------------------------------
     private_port = args.private_port if args.private_port else args.port + 2
 
     app = create_app(node, pool, private_port=private_port,
-                     public_port=args.port, update_checker=update_checker)
+                     public_port=args.port, update_checker=update_checker,
+                     rewarder=rewarder)
     threading.Thread(
         target=lambda: app.run(host=args.host, port=args.port, threaded=True),
         daemon=True,
@@ -256,7 +265,8 @@ def main():
     log.info("[startup] public API on http://%s:%d", args.host, args.port)
 
     private_app = create_private_app(node, pool, private_port=private_port,
-                                     public_port=args.port, update_checker=update_checker)
+                                     public_port=args.port, update_checker=update_checker,
+                                     rewarder=rewarder)
     threading.Thread(
         target=lambda: private_app.run(host="127.0.0.1", port=private_port, threaded=True),
         daemon=True,

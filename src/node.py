@@ -258,14 +258,33 @@ class Node:
         wallet UI should let the user pick a competitive fee)."""
         if not passphrase:
             raise ValueError("passphrase is required to sign a transaction")
-        kek       = crypto.derive_kek(self.keyfile, passphrase)
+        kek = crypto.derive_kek(self.keyfile, passphrase)
+        try:
+            return self._build_and_sign_tx_with_kek(to_outputs, fee, kek)
+        finally:
+            del kek
+
+    def build_and_sign_tx_internal(self, to_outputs, fee=0):
+        """Same as build_and_sign_tx, but for background node-internal
+        callers (e.g. the uptime rewarder) that run inside this same
+        process while the node is up -- reuses the kek already resident in
+        memory from start() instead of asking for the passphrase again,
+        since re-deriving it would need the plaintext passphrase this node
+        never retains past startup. Raises if the node isn't running
+        (is_signing_active() false), same failure mode as a missing
+        passphrase would give the passphrase-based path."""
+        if self._kek is None:
+            raise ValueError("node is not running (no signing key resident)")
+        return self._build_and_sign_tx_with_kek(to_outputs, fee, self._kek)
+
+    def _build_and_sign_tx_with_kek(self, to_outputs, fee, kek):
         v         = self.view
         committed = v.state.get_nonce(self.addr)
         pending   = self.mempool.pending_nonce(self.addr)
         nonce     = max(committed, pending) + 1
         sk = crypto.decrypt_secret_key(self.keyfile, kek=kek)
         t  = tx_mod.create(self.addr, self.pk_hex, to_outputs, nonce, fee, sk)
-        del sk, kek
+        del sk
         return t, fee
 
     # ------------------------------------------------------------------

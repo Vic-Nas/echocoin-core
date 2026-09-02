@@ -267,7 +267,7 @@ def _submit_and_alert(node, outputs, fee, passphrase, ctx):
 
 def _shared_read_only_routes(app, node, pool, limiter,
                               private_port, public_port, is_private,
-                              update_checker=None):
+                              update_checker=None, rewarder=None):
     """Register all read-only UI and API routes on app."""
     # Use a prefix so public and private apps don't collide on endpoint names
     pfx = "priv_" if is_private else "pub_"
@@ -282,12 +282,16 @@ def _shared_read_only_routes(app, node, pool, limiter,
             "dashboard": "dashboard", "explorer": "explorer",
             "block_detail": "explorer", "tx_detail": "explorer",
             "address_lookup": "address", "peers": "peers",
-            "whitepaper": "whitepaper", "send": "send",
+            "whitepaper": "whitepaper", "send": "send", "rewards": "rewards",
         }.get(endpoint)
         return {"is_private": is_private,
                 "private_port": private_port,
                 "public_port": public_port,
                 "update_checker": update_checker,
+                # Just the enabled flag for the masthead badge, visible on
+                # both apps -- the full settings page (/rewards) only
+                # exists on the private one.
+                "rewards_enabled": rewarder.status()["enabled"] if rewarder else False,
                 "nav_active": nav_active}
 
     @app.route("/favicon.svg", endpoint=pfx+"favicon")
@@ -562,7 +566,8 @@ def _base_dir():
 # Public app factory  (port 8333)
 # ---------------------------------------------------------------------------
 
-def create_app(node, pool, private_port=8334, public_port=8333, update_checker=None):
+def create_app(node, pool, private_port=8334, public_port=8333,
+               update_checker=None, rewarder=None):
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
     app.jinja_env.globals.update(fmt_balance=fmt_balance, fmt_lapse=fmt_lapse,
@@ -578,7 +583,7 @@ def create_app(node, pool, private_port=8334, public_port=8333, update_checker=N
 
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=False,
-                             update_checker=update_checker)
+                             update_checker=update_checker, rewarder=rewarder)
 
     # Send disabled on public port; show locked page
     @app.route("/send")
@@ -587,6 +592,13 @@ def create_app(node, pool, private_port=8334, public_port=8333, update_checker=N
             message=f"Send is only available on the local interface "
                     f"(localhost:{private_port})."), 403
 
+    # Rewards settings disabled on public port; show locked page
+    @app.route("/rewards")
+    def rewards_locked():
+        return render_template("error.html", title="Rewards",
+            message=f"Uptime-reward settings are only available on the "
+                    f"local interface (localhost:{private_port})."), 403
+
     return app
 
 
@@ -594,7 +606,8 @@ def create_app(node, pool, private_port=8334, public_port=8333, update_checker=N
 # Private app factory  (port 8334, 127.0.0.1 only)
 # ---------------------------------------------------------------------------
 
-def create_private_app(node, pool, private_port=8334, public_port=8333, update_checker=None):
+def create_private_app(node, pool, private_port=8334, public_port=8333,
+                       update_checker=None, rewarder=None):
     """Full-featured app for local use. Never expose via Funnel or public port."""
     app = Flask(__name__,
                 template_folder=os.path.join(_base_dir(), "templates_html"))
@@ -605,18 +618,51 @@ def create_private_app(node, pool, private_port=8334, public_port=8333, update_c
     limiter = Limiter(get_remote_address, app=app, default_limits=[],
                       storage_uri="memory://")
 
-    # Per-process CSRF token for the /send form. This is a private,
-    # single-user, 127.0.0.1-only app with no session/login, so a
-    # synchronizer token that's fixed for the process lifetime (rather
-    # than per-request) is sufficient: same-origin policy already stops a
-    # cross-site page from reading it out of the rendered page, so all it
-    # needs to do is not be guessable and not travel to another origin --
-    # both hold here since it's rendered in a hidden field, never in a URL.
+    # Per-process CSRF token for the /send form (and /rewards below, same
+    # reasoning applies). This is a private, single-user, 127.0.0.1-only
+    # app with no session/login, so a synchronizer token that's fixed for
+    # the process lifetime (rather than per-request) is sufficient:
+    # same-origin policy already stops a cross-site page from reading it
+    # out of the rendered page, so all it needs to do is not be guessable
+    # and not travel to another origin -- both hold here since it's
+    # rendered in a hidden field, never in a URL.
     csrf_token = secrets.token_hex(32)
 
     _shared_read_only_routes(app, node, pool, limiter,
                              private_port, public_port, is_private=True,
-                             update_checker=update_checker)
+                             update_checker=update_checker, rewarder=rewarder)
+
+    @app.route("/rewards", methods=["GET", "POST"])
+    def rewards():
+        ctx = dict(title="Rewards", csrf_token=csrf_token,
+                   alert_ok="", alert_err="", rewarder_available=rewarder is not None)
+        if rewarder is None:
+            return render_template("rewards.html", **ctx)
+
+        if request.method == "POST":
+            if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
+                ctx["alert_err"] = "Session expired; reload the page and try again."
+            else:
+                rewarder.set_enabled(request.form.get("enabled") == "on")
+                budget_raw = request.form.get("budget_lapse", "").strip()
+                if budget_raw:
+                    try:
+                        new_budget = float(budget_raw)
+                        if new_budget < 0:
+                            raise ValueError
+                        current = rewarder.status()["remaining_ticks"] / TICKS_PER_LAPSE
+                        rewarder.adjust_budget(new_budget - current)
+                        ctx["alert_ok"] = "Settings saved."
+                    except ValueError:
+                        ctx["alert_err"] = "Budget must be a non-negative number."
+                else:
+                    ctx["alert_ok"] = "Settings saved."
+
+        status = rewarder.status()
+        ctx["enabled"] = status["enabled"]
+        ctx["remaining_lapse"] = status["remaining_ticks"] / TICKS_PER_LAPSE
+        ctx["pending"] = status["pending"]
+        return render_template("rewards.html", **ctx)
 
     @app.route("/send", methods=["GET", "POST"])
     def send():
