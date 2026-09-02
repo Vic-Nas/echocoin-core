@@ -16,7 +16,7 @@
     <tbody id="peers-tbody">
       <tr style="font-weight:600">
         <td data-label="Address" class="hash-short" style="color:var(--live)">{{ self_addr or "self" }}</td>
-        <td data-label="Wallet" class="hash-short" title="{{ self_wallet }}">{{ self_wallet[:14] }}&hellip;</td>
+        <td data-label="Wallet" class="hash-short" title="{{ self_wallet }}"><a href="/address?addr={{ self_wallet | urlencode }}">{{ self_wallet[:14] }}&hellip;</a></td>
         <td data-label="Height">{{ self_height }}</td>
         <td data-label="Version">{{ self_version }}</td>
         <td data-label="Last seen">just now</td>
@@ -32,11 +32,11 @@
         <td data-label="Address" class="hash-short">{{ addr }}</td>
         {% endif %}
         {% if wallet %}
-        <td data-label="Wallet" class="hash-short" title="{{ wallet }}">{{ wallet[:14] }}&hellip;</td>
+        <td data-label="Wallet" class="hash-short" title="{{ wallet }}"><a href="/address?addr={{ wallet | urlencode }}">{{ wallet[:14] }}&hellip;</a></td>
         {% elif inferred_wallet %}
         <td data-label="Wallet" class="hash-short" style="color:var(--accent);font-style:italic"
             title="Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly. Full address: {{ inferred_wallet }}">
-          {{ inferred_wallet[:14] }}&hellip;
+          <a href="/address?addr={{ inferred_wallet | urlencode }}" style="color:inherit">{{ inferred_wallet[:14] }}&hellip;</a>
         </td>
         {% else %}
         <td data-label="Wallet" class="hash-short" style="color:var(--muted)">unknown</td>
@@ -114,19 +114,40 @@
     return td;
   }
 
+  function walletCell(addr, opts) {
+    opts = opts || {};
+    const td = document.createElement("td");
+    td.dataset.label = "Wallet";
+    td.className = "hash-short";
+    if (opts.color) td.style.color = opts.color;
+    if (opts.italic) td.style.fontStyle = "italic";
+    if (addr) td.title = opts.title || addr;
+    if (addr) {
+      const a = document.createElement("a");
+      a.href = "/address?addr=" + encodeURIComponent(addr);
+      a.style.color = "inherit";
+      a.textContent = addr.slice(0, 14) + "…";
+      td.appendChild(a);
+    } else {
+      td.textContent = "unknown";
+      td.style.color = "var(--muted)";
+    }
+    return td;
+  }
+
   function buildRow(p) {
     const tr = document.createElement("tr");
     tr.appendChild(addressCell(p));
 
     if (p.wallet) {
-      tr.appendChild(cell("Wallet", p.wallet.slice(0, 14) + "…", {cls: "hash-short", title: p.wallet}));
+      tr.appendChild(walletCell(p.wallet));
     } else if (p.inferred_wallet) {
-      tr.appendChild(cell("Wallet", p.inferred_wallet.slice(0, 14) + "…", {
-        cls: "hash-short", color: "var(--accent)", italic: true,
+      tr.appendChild(walletCell(p.inferred_wallet, {
+        color: "var(--accent)", italic: true,
         title: "Unconfirmed: inferred from a block this peer relayed, not reported by the peer directly. Full address: " + p.inferred_wallet,
       }));
     } else {
-      tr.appendChild(cell("Wallet", "unknown", {cls: "hash-short", color: "var(--muted)"}));
+      tr.appendChild(walletCell(null));
     }
 
     tr.appendChild(cell("Height", p.height === null || p.height === undefined ? "?" : p.height));
@@ -142,7 +163,7 @@
     const tr = document.createElement("tr");
     tr.style.fontWeight = "600";
     tr.appendChild(cell("Address", self.addr || "self", {cls: "hash-short", color: "var(--live)"}));
-    tr.appendChild(cell("Wallet", self.wallet.slice(0, 14) + "…", {cls: "hash-short", title: self.wallet}));
+    tr.appendChild(walletCell(self.wallet));
     tr.appendChild(cell("Height", self.height));
     tr.appendChild(cell("Version", self.version));
     tr.appendChild(cell("Last seen", "just now"));
