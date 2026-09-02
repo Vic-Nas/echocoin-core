@@ -288,10 +288,11 @@ def _shared_read_only_routes(app, node, pool, limiter,
                 "private_port": private_port,
                 "public_port": public_port,
                 "update_checker": update_checker,
-                # Just the enabled flag for the masthead badge, visible on
-                # both apps -- the full settings page (/rewards) only
-                # exists on the private one.
-                "rewards_enabled": rewarder.status()["enabled"] if rewarder else False,
+                # Remaining budget for the masthead badge, visible on both
+                # apps -- the full settings page (/rewards) only exists on
+                # the private one. 0 (the default) reads as "off".
+                "rewards_remaining_lapse":
+                    rewarder.status()["remaining_ticks"] / TICKS_PER_LAPSE if rewarder else 0,
                 "nav_active": nav_active}
 
     @app.route("/favicon.svg", endpoint=pfx+"favicon")
@@ -643,23 +644,18 @@ def create_private_app(node, pool, private_port=8334, public_port=8333,
             if not secrets.compare_digest(request.form.get("csrf_token", ""), csrf_token):
                 ctx["alert_err"] = "Session expired; reload the page and try again."
             else:
-                rewarder.set_enabled(request.form.get("enabled") == "on")
                 budget_raw = request.form.get("budget_lapse", "").strip()
-                if budget_raw:
-                    try:
-                        new_budget = float(budget_raw)
-                        if new_budget < 0:
-                            raise ValueError
-                        current = rewarder.status()["remaining_ticks"] / TICKS_PER_LAPSE
-                        rewarder.adjust_budget(new_budget - current)
-                        ctx["alert_ok"] = "Settings saved."
-                    except ValueError:
-                        ctx["alert_err"] = "Budget must be a non-negative number."
-                else:
+                try:
+                    new_budget = float(budget_raw)
+                    if new_budget < 0:
+                        raise ValueError
+                    current = rewarder.status()["remaining_ticks"] / TICKS_PER_LAPSE
+                    rewarder.adjust_budget(new_budget - current)
                     ctx["alert_ok"] = "Settings saved."
+                except ValueError:
+                    ctx["alert_err"] = "Budget must be a non-negative number."
 
         status = rewarder.status()
-        ctx["enabled"] = status["enabled"]
         ctx["remaining_lapse"] = status["remaining_ticks"] / TICKS_PER_LAPSE
         ctx["pending"] = status["pending"]
         return render_template("rewards.html", **ctx)

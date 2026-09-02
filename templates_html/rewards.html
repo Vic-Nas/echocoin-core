@@ -15,8 +15,8 @@
 <div class="stats">
   <div class="stat">
     <div class="stat-label">Status</div>
-    <div class="stat-value" style="font-size:1rem;color:{{ 'var(--green)' if enabled else 'var(--muted)' }}">
-      {{ "Enabled" if enabled else "Disabled" }}
+    <div class="stat-value" style="font-size:1rem;color:{{ 'var(--green)' if remaining_lapse > 0 else 'var(--muted)' }}">
+      {{ "Active" if remaining_lapse > 0 else "Inactive" }}
     </div>
   </div>
   <div class="stat">
@@ -40,15 +40,11 @@
   <div class="stat-label" style="margin-bottom:.75rem">
     Pays currently-active peers that haven't out-mined this node recently and
     hold less than the budget below, once an hour, from this node's own
-    balance. Off by default.
+    balance. Set a budget above zero to turn it on; set it back to 0 to turn
+    it off. 0 by default.
   </div>
   <form method="POST">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="form-group" style="display:flex;align-items:center;gap:.5rem">
-      <input type="checkbox" id="enabled" name="enabled" {{ "checked" if enabled }}
-             style="width:auto;accent-color:var(--accent)">
-      <label for="enabled" style="margin:0">Enable uptime rewards</label>
-    </div>
     <div class="form-group">
       <label for="budget_lapse">Budget (LAPSE remaining)</label>
       <input type="number" id="budget_lapse" name="budget_lapse" min="0" step="any"

@@ -6,8 +6,9 @@ directly in: no HTTP round-trips, no CSRF dance, no re-supplying the
 passphrase every cycle -- signs with the kek already resident in memory
 while the node is running (Node.build_and_sign_tx_internal).
 
-Defaults to disabled. Nothing here runs unless explicitly turned on from
-the private dashboard's /rewards page, which also edits the budget.
+No separate on/off switch: a budget of 0 (the default for a fresh node)
+already means nothing happens, so that's what "disabled" is. Set a real
+budget from the private dashboard's /rewards page to turn it on.
 """
 
 import json
@@ -21,7 +22,7 @@ from params import TICKS_PER_LAPSE
 
 log = logging.getLogger("ec.rewarder")
 
-DEFAULT_BUDGET_LAPSE   = 1430
+DEFAULT_BUDGET_LAPSE   = 0
 DEFAULT_HALFLIFE_HOURS = 24 * 30
 RECENT_BLOCKS_WINDOW   = 30
 ACTIVE_WINDOW_S        = 3600      # "active peer" = seen within the last hour
@@ -32,7 +33,8 @@ STATE_FILE = "lapsecoin_rewards.json"
 
 class UptimeRewarder:
     """One instance per node. .start() spawns its background thread; the
-    loop itself always runs, but does nothing on a tick unless enabled."""
+    loop itself always runs, but does nothing on a tick while the budget
+    is 0 (the default)."""
 
     def __init__(self, node, pool, state_file=STATE_FILE,
                  budget_lapse=DEFAULT_BUDGET_LAPSE,
@@ -49,7 +51,7 @@ class UptimeRewarder:
         self._state = self._load_state(budget_lapse)
 
     # ------------------------------------------------------------------
-    # Persisted state: {"enabled": bool, "remaining_ticks": int,
+    # Persisted state: {"remaining_ticks": int,
     # "pending": {"tx_hash": str, "amount": int} | None}
     # ------------------------------------------------------------------
 
@@ -58,14 +60,13 @@ class UptimeRewarder:
             try:
                 with open(self.state_file) as f:
                     state = json.load(f)
-                state.setdefault("enabled", False)
+                state.pop("enabled", None)  # pre-existing state files, if any
                 state.setdefault("pending", None)
                 if "remaining_ticks" in state:
                     return state
             except Exception:
                 log.warning("[rewarder] state file unreadable, reinitializing", exc_info=True)
-        state = {"enabled": False,
-                 "remaining_ticks": int(default_budget_lapse * TICKS_PER_LAPSE),
+        state = {"remaining_ticks": int(default_budget_lapse * TICKS_PER_LAPSE),
                  "pending": None}
         self._save_state(state)
         return state
@@ -84,11 +85,6 @@ class UptimeRewarder:
     def status(self):
         with self._lock:
             return dict(self._state)
-
-    def set_enabled(self, enabled):
-        with self._lock:
-            self._state["enabled"] = bool(enabled)
-            self._save_state()
 
     def adjust_budget(self, delta_lapse):
         """Change remaining_ticks by delta_lapse LAPSE (+ or -), floored at
@@ -115,14 +111,9 @@ class UptimeRewarder:
                 log.exception("[rewarder] cycle failed")
 
     def run_once(self):
-        """One full cycle: resolve last cycle's pending tx, then (if
-        enabled and budget remains) pay eligible peers. Safe to call
-        directly, e.g. for testing -- not gated on the thread being alive."""
-        with self._lock:
-            enabled = self._state["enabled"]
-        if not enabled:
-            return
-
+        """One full cycle: resolve last cycle's pending tx, then (if budget
+        remains) pay eligible peers. Safe to call directly, e.g. for
+        testing -- not gated on the thread being alive."""
         self._resolve_pending()
 
         with self._lock:
