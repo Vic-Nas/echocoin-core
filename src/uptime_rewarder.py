@@ -1,10 +1,9 @@
 """In-process uptime-reward payout for peers that can't mine yet.
 
-Same idea as tools/uptime_rewards.py (still usable standalone, e.g. for a
-setup that doesn't want this running inside the node process), but wired
-directly in: no HTTP round-trips, no CSRF dance, no re-supplying the
-passphrase every cycle -- signs with the kek already resident in memory
-while the node is running (Node.build_and_sign_tx_internal).
+Runs directly inside the node process: no HTTP round-trips, no CSRF
+dance, no re-supplying the passphrase every cycle -- signs with the kek
+already resident in memory while the node is running
+(Node.build_and_sign_tx_internal).
 
 No separate on/off switch: a budget of 0 (the default for a fresh node)
 already means nothing happens, so that's what "disabled" is. Set a real
@@ -26,7 +25,7 @@ DEFAULT_BUDGET_LAPSE   = 0
 DEFAULT_HALFLIFE_HOURS = 24 * 30
 RECENT_BLOCKS_WINDOW   = 30
 ACTIVE_WINDOW_S        = 3600      # "active peer" = seen within the last hour
-CHECK_INTERVAL_S       = 3600      # hourly, same cadence tools/uptime_rewards.py used via cron
+CHECK_INTERVAL_S       = 3600      # hourly
 
 STATE_FILE = "lapsecoin_rewards.json"
 
