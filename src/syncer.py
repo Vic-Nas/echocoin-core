@@ -11,16 +11,18 @@ import logging
 
 log = logging.getLogger("ec.syncer")
 
-FETCH_CHUNK = 5     # blocks per GETSYNC request (keep UDP responses small)
-# Small on purpose: SYNC responses have no chunk-level retransmission (see
-# peer_udp.py), so a single dropped UDP datagram silently fails the whole
-# page. FALCON-512 signatures are large enough that 20 blocks of real
-# transaction activity could span dozens of chunks, making any nontrivial
-# packet loss rate likely to kill a page outright -- fewer blocks per
-# request means fewer chunks per response, which is the direct lever on
-# that failure probability. Costs more round trips for a long initial
-# sync, which is the right trade for a new node that would otherwise
-# appear stuck at height 0 indefinitely.
+FETCH_CHUNK = 50    # blocks per GETSYNC request
+# peer_udp.py now has real chunk-level ACK/retransmit for multi-chunk UDP
+# messages, so a single dropped datagram no longer silently fails an entire
+# page -- the old rationale for keeping this very small (5) no longer
+# applies. 50 is chosen the way real sync protocols size a batch: well
+# below the hard caps (MAX_SYNC_BLOCKS=500 blocks per request, and
+# MAX_CHUNK_TOTAL=2000 chunks / ~2.8MB per reassembled message in
+# peer_udp.py), not matched to them -- a block would need to average
+# ~56KB for 50 of them to approach that reassembly ceiling even under
+# heavy real transaction load (FALCON-512 signatures run large, but not
+# that large). Fewer round trips than before for a long initial sync,
+# with real recovery underneath if a chunk is still lost along the way.
 
 # Extra attempts before treating an outright timeout/decode-failure (resp is
 # None) as authoritative. The UDP transport has no chunk-level retransmission
