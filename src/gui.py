@@ -84,6 +84,14 @@ class _PassphraseDialog:
             self.pass2 = tk.StringVar()
             ttk.Entry(frame, textvariable=self.pass2, show="*", width=30).pack(anchor="w")
 
+        self.startup_var = None
+        if self.is_new:
+            self.startup_var = tk.BooleanVar(value=True)
+            ttk.Checkbutton(
+                frame, text="Run LapseCoin automatically on startup",
+                variable=self.startup_var,
+            ).pack(anchor="w", pady=(10, 0))
+
         btns = ttk.Frame(frame)
         btns.pack(anchor="e", pady=(12, 0))
         ttk.Button(btns, text="Cancel", command=self._cancel).pack(side="left", padx=(0, 6))
@@ -118,6 +126,12 @@ class _PassphraseDialog:
             except Exception as e:
                 self.error_var.set(f"Could not create key: {e}")
                 return
+
+            if self.startup_var is not None and self.startup_var.get():
+                import startup
+                if not startup.enable():
+                    log.warning("[gui] run-on-startup could not be enabled")
+
             self.result = (pk, kek)
             self.root.destroy()
             return
@@ -164,52 +178,149 @@ def _open_path(path):
         log.warning("[gui] could not open %s: %s", path, e)
 
 
+_BG = "#1c1f26"
+_BG_PANEL = "#242832"
+_FG = "#e7e9ee"
+_FG_DIM = "#9aa1af"
+_ACCENT = "#5b8cff"
+
+
+def _style_dark(root):
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+    root.configure(bg=_BG)
+    style.configure("Dark.TFrame", background=_BG)
+    style.configure("Dark.TLabel", background=_BG, foreground=_FG)
+    style.configure("Dim.TLabel", background=_BG, foreground=_FG_DIM)
+    style.configure(
+        "Accent.TButton", background=_ACCENT, foreground="white",
+        padding=(10, 6), borderwidth=0,
+    )
+    style.map("Accent.TButton", background=[("active", "#4674e0")])
+    style.configure(
+        "Plain.TButton", background=_BG_PANEL, foreground=_FG,
+        padding=(10, 6), borderwidth=0,
+    )
+    style.map("Plain.TButton", background=[("active", "#2e3340")])
+    return style
+
+
+def _make_tray_icon(node, on_open, on_quit):
+    """Build a pystray icon so the window can fully vanish (no taskbar
+    entry) while the node keeps running, with a way back in. Returns None
+    if pystray isn't available/usable on this platform -- callers must
+    fall back to just minimizing instead of hiding in that case, so the
+    user is never left with literally no way to reopen the window."""
+    try:
+        import pystray
+        import cairosvg
+        from PIL import Image
+        import io
+
+        png_bytes = cairosvg.svg2png(url=_ICON_SVG, output_width=64, output_height=64)
+        img = Image.open(io.BytesIO(png_bytes))
+
+        menu = pystray.Menu(
+            pystray.MenuItem("Open LapseCoin", on_open, default=True),
+            pystray.MenuItem("Quit", on_quit),
+        )
+        return pystray.Icon("lapsecoin", img, "LapseCoin", menu)
+    except Exception as e:
+        log.debug("[gui] tray icon unavailable, falling back to minimize: %s", e)
+        return None
+
+
 def run_status_window(node, udp, private_port, log_file):
-    """Small always-present status window: live height/peers/mempool, one
-    button into the local node UI, one to the log file. Closing the window
-    (X or Alt+F4) is the only way to quit -- it must actually end the
-    process, not just this window, so the close handler does a best-effort
-    graceful stop and then unconditionally hard-exits. Several background
-    components (peer_udp's callback pool, discovery's, the periodic HTTP
-    reachability prober) run non-daemon ThreadPoolExecutor workers that can
-    otherwise keep the interpreter alive waiting to join them even after
-    node.stop()/udp.stop() -- os._exit sidesteps that entirely rather than
-    trying to track down and gracefully join every one of them."""
+    """Status window: live height/peers/mempool, a button into the local
+    node UI, one to the log file.
+
+    The X button no longer quits the process -- it hides the window. If a
+    system tray icon is available (pystray), the window disappears from
+    the taskbar entirely and reopens from the tray icon; the node keeps
+    running in the background either way. If pystray isn't usable on this
+    platform, X falls back to a normal minimize so there's always a way
+    back to the window. The only way to actually end the process is the
+    explicit Quit button (or the tray menu's Quit).
+
+    Several background components (peer_udp's callback pool, discovery's,
+    the periodic HTTP reachability prober) run non-daemon ThreadPoolExecutor
+    workers that can otherwise keep the interpreter alive waiting to join
+    them even after node.stop()/udp.stop() -- os._exit sidesteps that
+    entirely rather than trying to track down and gracefully join every
+    one of them.
+    """
     root = tk.Tk()
     root.title("LapseCoin")
-    root.resizable(False, False)
+    root.geometry("420x260")
+    root.minsize(420, 260)
     _apply_icon(root)
+    style = _style_dark(root)
 
-    pad = {"padx": 14, "pady": 8}
-    frame = ttk.Frame(root)
-    frame.pack(fill="both", expand=True, **pad)
+    outer = ttk.Frame(root, style="Dark.TFrame", padding=20)
+    outer.pack(fill="both", expand=True)
 
-    ttk.Label(frame, text="LapseCoin node is running.", font=("", 10, "bold")).pack(anchor="w")
+    header = ttk.Frame(outer, style="Dark.TFrame")
+    header.pack(fill="x")
+    ttk.Label(
+        header, text="LapseCoin", style="Dark.TLabel", font=("", 15, "bold"),
+    ).pack(anchor="w")
+    ttk.Label(
+        header, text="Node is running", style="Dim.TLabel", font=("", 9),
+    ).pack(anchor="w", pady=(0, 16))
 
     status_var = tk.StringVar(value="starting…")
-    ttk.Label(frame, textvariable=status_var).pack(anchor="w", pady=(4, 10))
+    status_panel = ttk.Frame(outer, style="Dark.TFrame")
+    status_panel.pack(fill="x", pady=(0, 20))
+    ttk.Label(
+        status_panel, textvariable=status_var, style="Dark.TLabel", font=("Consolas", 10),
+    ).pack(anchor="w")
 
     def refresh():
         try:
             info = node.get_info()
             status_var.set(
-                f"Height {info['height']}   Peers {info['peer_count']}   "
-                f"Mempool {info['mempool_size']}"
+                f"Height    {info['height']}\n"
+                f"Peers     {info['peer_count']}\n"
+                f"Mempool   {info['mempool_size']}"
             )
         except Exception as e:
             status_var.set(f"(status unavailable: {e})")
         root.after(3000, refresh)
 
-    btns = ttk.Frame(frame)
-    btns.pack(anchor="w")
+    btns = ttk.Frame(outer, style="Dark.TFrame")
+    btns.pack(fill="x", side="bottom")
     ttk.Button(
-        btns, text="Open Node",
+        btns, text="Open Node", style="Accent.TButton",
         command=lambda: webbrowser.open(f"http://127.0.0.1:{private_port}"),
-    ).pack(side="left", padx=(0, 6))
-    ttk.Button(btns, text="Logs", command=lambda: _open_path(log_file)).pack(side="left")
+    ).pack(side="left", padx=(0, 8))
+    ttk.Button(
+        btns, text="Logs", style="Plain.TButton",
+        command=lambda: _open_path(log_file),
+    ).pack(side="left", padx=(0, 8))
+    ttk.Button(
+        btns, text="Quit", style="Plain.TButton", command=lambda: _quit(),
+    ).pack(side="right")
 
-    def on_close():
-        log.info("[shutdown] window closed")
+    tray_icon = None  # set below if available
+
+    def _show():
+        root.deiconify()
+        root.lift()
+        root.focus_force()
+
+    def _hide():
+        root.withdraw()
+
+    def _quit():
+        log.info("[shutdown] quit requested")
+        if tray_icon is not None:
+            try:
+                tray_icon.stop()
+            except Exception:
+                pass
         try:
             node.stop()
         except Exception:
@@ -221,6 +332,23 @@ def run_status_window(node, udp, private_port, log_file):
         root.destroy()
         os._exit(0)
 
-    root.protocol("WM_DELETE_WINDOW", on_close)
+    def _on_tray_open(icon=None, item=None):
+        root.after(0, _show)
+
+    def _on_tray_quit(icon=None, item=None):
+        root.after(0, _quit)
+
+    tray_icon = _make_tray_icon(node, _on_tray_open, _on_tray_quit)
+
+    if tray_icon is not None:
+        import threading
+        threading.Thread(target=tray_icon.run, daemon=True).start()
+        root.protocol("WM_DELETE_WINDOW", _hide)
+    else:
+        # No tray available on this platform/setup -- fall back to a plain
+        # minimize so the user always has a way back to the window rather
+        # than losing it with no path to reopen.
+        root.protocol("WM_DELETE_WINDOW", root.iconify)
+
     refresh()
     root.mainloop()
