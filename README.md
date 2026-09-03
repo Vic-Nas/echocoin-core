@@ -105,7 +105,7 @@ There is no `--passphrase` flag, since it was removed because it leaked into `ps
 
 No LAPSE exchange listings yet.
 
-In the meantime, [Discord](https://discord.gg/FP2d8JmK6r) hosts direct trades: 1 LAPSE for 10 SATOX. SATOX (Satoxcoin) is listed on the exchanges linked from the [satoxcoin repo](https://github.com/satoverse/satoxcoin).
+In the meantime, [Discord](https://discord.gg/FP2d8JmK6r) hosts direct trades: 1 LAPSE for 1 SATOX. SATOX (Satoxcoin) is listed on the exchanges linked from the [satoxcoin repo](https://github.com/satoverse/satoxcoin).
 
 ---
 
