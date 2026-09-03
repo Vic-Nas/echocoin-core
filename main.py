@@ -27,11 +27,13 @@ from params import DB_PATH
 from peer_udp import UDPTransport
 from peerpool import PeerPool
 from syncer import Syncer
+from singleton_lock import SingleInstanceLock
 from update_check import DEFAULT_RELEASES_URL, DEFAULT_VERSION_URL, UpdateChecker
 from uptime_rewarder import UptimeRewarder
 from version import LOCAL_VERSION
 
 LOG_FILE = "lapsecoin.log"
+LOCK_FILE = "lapsecoin.lock"
 
 # The Windows build is console=False (no console window for the default GUI
 # double-click experience). That leaves two things to handle before any
@@ -154,6 +156,42 @@ def main():
     argcomplete.autocomplete(parser)
     args = parser.parse_args()
     logging.getLogger("ec").setLevel(getattr(logging, args.log_level))
+
+    # Single-instance guard, checked before anything else (ports, GUI,
+    # passphrase prompt, tray icon) so a second launch exits fast and
+    # cleanly. Uses an OS-level advisory file lock rather than a PID
+    # file: the OS releases it automatically the instant the owning
+    # process exits for any reason, including a crash, so there's no
+    # stale state to misdetect and nothing to clean up on the way out.
+    # A genuine normal start is never blocked by this: it only refuses
+    # to start while another instance is *actually still alive and
+    # holding the lock*, and if the lock check itself fails for some
+    # unrelated reason (permissions, filesystem quirk), it fails open.
+    instance_lock = SingleInstanceLock(LOCK_FILE)
+    if not instance_lock.acquire():
+        pid = instance_lock.holder_pid()
+        msg = (
+            "LapseCoin is already running"
+            + (f" (pid {pid})" if pid else "")
+            + ".\n\nOnly one instance can run at a time, since it holds "
+              "the same wallet key and chain database. Check your system "
+              "tray, it's likely already there."
+        )
+        print(msg)
+        try:
+            # Best-effort GUI popup if tkinter happens to be available,
+            # so a person who launched a second copy by double-clicking
+            # sees something even without a console attached (relevant
+            # on Windows/macOS app launches).
+            import tkinter as _tk
+            from tkinter import messagebox as _messagebox
+            _root = _tk.Tk()
+            _root.withdraw()
+            _messagebox.showinfo("LapseCoin", msg)
+            _root.destroy()
+        except Exception:
+            pass
+        sys.exit(0)
 
     use_gui = not args.no_gui and not os.environ.get("LAPSECOIN_PASSPHRASE")
     gui = None
