@@ -225,9 +225,16 @@ def _make_tray_icon(node, on_open, on_quit):
         from PIL import Image
         import io
 
-        png_bytes = cairosvg.svg2png(url=_ICON_SVG, output_width=64, output_height=64)
-        img = Image.open(io.BytesIO(png_bytes))
+        # 128px + forced RGBA: some Linux tray backends (AppIndicator/Ayatana)
+        # render a black square if the icon lacks an explicit alpha channel
+        # or is too small for the theme's expected size.
+        png_bytes = cairosvg.svg2png(url=_ICON_SVG, output_width=128, output_height=128)
+        img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
 
+        # Note: AppIndicator/Ayatana-based trays (GNOME/Ubuntu default) don't
+        # have a separate "left click to open" action the way Windows does --
+        # any click always opens this menu. `default=True` only matters on
+        # backends that do support a distinct default click (Windows/macOS).
         menu = pystray.Menu(
             pystray.MenuItem("Open LapseCoin", on_open, default=True),
             pystray.MenuItem("Quit", on_quit),
