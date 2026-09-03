@@ -210,6 +210,17 @@ def _make_tray_icon(node, on_open, on_quit):
     user is never left with literally no way to reopen the window."""
     try:
         import pystray
+    except ImportError:
+        print(
+            "\nSystem tray icon unavailable: the 'pystray' package isn't installed.\n"
+            "Install it with:\n"
+            "  pip install pystray\n"
+            "(or re-run: pip install -r requirements.txt)\n"
+            "The window will minimize to the taskbar instead for now.\n"
+        )
+        return None
+
+    try:
         import cairosvg
         from PIL import Image
         import io
@@ -223,10 +234,9 @@ def _make_tray_icon(node, on_open, on_quit):
         )
         return pystray.Icon("lapsecoin", img, "LapseCoin", menu)
     except Exception as e:
-        # On Linux, pystray needs an actual tray-capable backend (AppIndicator/
-        # GTK) beyond just `pip install pystray` -- print this instead of only
-        # logging at debug, since a silent fallback here is exactly what
-        # looked broken before.
+        # pystray itself is installed, but building/showing the icon failed --
+        # on Linux this is usually a missing tray backend (AppIndicator/GTK),
+        # separate from the pip package.
         print(
             f"\nSystem tray icon unavailable ({e}); the window will minimize "
             "to the taskbar instead.\n"
@@ -258,12 +268,11 @@ def run_status_window(node, udp, private_port, log_file):
     """
     root = tk.Tk()
     root.title("LapseCoin")
-    root.geometry("420x260")
-    root.minsize(420, 260)
+    root.minsize(440, 300)
     _apply_icon(root)
     style = _style_dark(root)
 
-    outer = ttk.Frame(root, style="Dark.TFrame", padding=20)
+    outer = ttk.Frame(root, style="Dark.TFrame", padding=16)
     outer.pack(fill="both", expand=True)
 
     header = ttk.Frame(outer, style="Dark.TFrame")
@@ -273,10 +282,10 @@ def run_status_window(node, udp, private_port, log_file):
     ).pack(anchor="w")
     ttk.Label(
         header, text="Node is running", style="Dim.TLabel", font=("", 9),
-    ).pack(anchor="w", pady=(0, 16))
+    ).pack(anchor="w", pady=(0, 10))
 
     status_frame = ttk.Frame(outer, style="Dark.TFrame")
-    status_frame.pack(fill="x", pady=(0, 20))
+    status_frame.pack(fill="x", pady=(0, 12))
 
     height_var = tk.StringVar(value="—")
     peers_var = tk.StringVar(value="—")
