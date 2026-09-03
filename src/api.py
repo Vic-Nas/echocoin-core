@@ -60,6 +60,7 @@ from flask_limiter.util import get_remote_address
 
 import block as block_mod
 import crypto as crypto_mod
+import state as state_mod
 import tx as tx_mod
 from params import TICKS_PER_LAPSE, SUPPLY_CAP
 from version import LOCAL_VERSION
@@ -169,6 +170,28 @@ def _get_address_history(addr, node):
                     history.append((h_height, h, direction, t))
                     break
     return history
+
+
+def _get_mined_blocks_for_addr(addr, node):
+    """Blocks built by addr, with the reward + fees paid to the builder.
+
+    Mining rewards never go through the mempool/AddrIndex (they're credited
+    directly in chainstate._apply_builder_reward), so they can't be pulled
+    from the same tx index as ordinary transfers. The chain is kept fully
+    in memory though, so we can just walk it once, replaying total_minted
+    the same way the ledger does, to recover the exact historical reward
+    for each block.
+    """
+    mined = []
+    total_minted = 0
+    for height, blk in enumerate(node.view.chain):
+        reward = state_mod.compute_reward(total_minted)
+        if reward >= 1:
+            total_minted += reward
+        if blk.get("builder") == addr:
+            fees = block_mod.block_fees(blk)
+            mined.append((height, blk["hash"], reward + fees))
+    return mined
 
 
 def _parse_csv_outputs(outputs_raw):
@@ -381,7 +404,11 @@ def _shared_read_only_routes(app, node, pool, limiter,
         elif addr:
             ctx["balance"]  = v.state.get_balance(addr)
             ctx["tx_count"] = v.state.get_nonce(addr)
-            newest_first = _get_address_history(addr, node)[::-1]
+            tx_rows = [(h, hsh, direction, t, "tx")
+                       for h, hsh, direction, t in _get_address_history(addr, node)]
+            mined_rows = [(h, hsh, "mined", amount, "block")
+                          for h, hsh, amount in _get_mined_blocks_for_addr(addr, node)]
+            newest_first = sorted(tx_rows + mined_rows, key=lambda r: r[0], reverse=True)
             total_pages = max(-(-len(newest_first) // HISTORY_PER_PAGE), 1)
             page = min(page, total_pages)
             start = (page - 1) * HISTORY_PER_PAGE
