@@ -229,7 +229,16 @@ def _make_tray_icon(node, on_open, on_quit):
         # render a black square if the icon lacks an explicit alpha channel
         # or is too small for the theme's expected size.
         png_bytes = cairosvg.svg2png(url=_ICON_SVG, output_width=128, output_height=128)
-        img = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+        raw = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
+
+        # Some AppIndicator/Ayatana implementations don't composite true
+        # transparency correctly and render it as solid black instead of the
+        # panel's own background. Rather than leaving the icon transparent
+        # and hoping the backend handles it, flatten it onto an opaque
+        # square matching the app's own dark theme -- worst case it's a
+        # small dark square with the logo, not a broken black one.
+        img = Image.new("RGBA", raw.size, _BG)
+        img.paste(raw, (0, 0), raw)
 
         # Note: AppIndicator/Ayatana-based trays (GNOME/Ubuntu default) don't
         # have a separate "left click to open" action the way Windows does --
