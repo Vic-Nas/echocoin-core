@@ -225,9 +225,11 @@ def _make_tray_icon(node, on_open, on_quit):
         from PIL import Image
         import io
 
-        # 128px + forced RGBA: some Linux tray backends (AppIndicator/Ayatana)
-        # render a black square if the icon lacks an explicit alpha channel
-        # or is too small for the theme's expected size.
+        # Render at 128px for a clean source, then downsize ourselves with
+        # high-quality resampling to a real tray-icon size. Handing the OS
+        # a raw 128px image and letting it scale down is what produced the
+        # blurry/pixelated result -- most Linux tray implementations don't
+        # use good downsampling on their own.
         png_bytes = cairosvg.svg2png(url=_ICON_SVG, output_width=128, output_height=128)
         raw = Image.open(io.BytesIO(png_bytes)).convert("RGBA")
 
@@ -237,8 +239,9 @@ def _make_tray_icon(node, on_open, on_quit):
         # and hoping the backend handles it, flatten it onto an opaque
         # square matching the app's own dark theme -- worst case it's a
         # small dark square with the logo, not a broken black one.
-        img = Image.new("RGBA", raw.size, _BG)
-        img.paste(raw, (0, 0), raw)
+        flattened = Image.new("RGBA", raw.size, _BG)
+        flattened.paste(raw, (0, 0), raw)
+        img = flattened.resize((32, 32), Image.LANCZOS)
 
         # Note: AppIndicator/Ayatana-based trays (GNOME/Ubuntu default) don't
         # have a separate "left click to open" action the way Windows does --
