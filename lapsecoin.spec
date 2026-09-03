@@ -79,6 +79,16 @@ _all_hiddenimports = [
     "flask", "werkzeug", "werkzeug.serving", "werkzeug.debug",
     "jinja2", "jinja2.ext", "markdown",
     "argcomplete", "argcomplete.completers",
+    # pystray picks its backend at import time based on the OS
+    # (Gtk/AppIndicator on Linux, win32 on Windows, darwin on macOS).
+    # PyInstaller's static analysis can't see that dynamic import, so
+    # without listing it explicitly the backend -- and sometimes pystray
+    # itself -- gets silently left out of the binary, and the app just
+    # falls back to taskbar-minimize with no visible error.
+    "pystray", "pystray._base",
+    "pystray._gtk", "gi", "gi.repository.Gtk", "gi.repository.AppIndicator3",
+    "pystray._win32",
+    "pystray._darwin",
 ]
 
 a = Analysis(
