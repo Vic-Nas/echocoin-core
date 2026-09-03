@@ -59,35 +59,39 @@ class _PassphraseDialog:
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._cancel)
         _apply_icon(self.root)
+        _style_dark(self.root)
 
-        pad = {"padx": 12, "pady": 6}
-        frame = ttk.Frame(self.root)
-        frame.pack(fill="both", expand=True, **pad)
+        frame = ttk.Frame(self.root, style="Dark.TFrame", padding=18)
+        frame.pack(fill="both", expand=True)
 
         if self.is_new:
             msg = "No key file found. Choose a passphrase for your new wallet."
         else:
             msg = "Enter your wallet passphrase."
-        ttk.Label(frame, text=msg, wraplength=280).pack(anchor="w")
+        ttk.Label(frame, text=msg, style="Dark.TLabel", wraplength=280).pack(anchor="w")
 
         self.error_var = tk.StringVar()
-        ttk.Label(frame, textvariable=self.error_var, foreground="#c0392b").pack(anchor="w")
+        ttk.Label(
+            frame, textvariable=self.error_var, background=_BG, foreground="#ff6b6b",
+        ).pack(anchor="w")
 
-        ttk.Label(frame, text="Passphrase:").pack(anchor="w", pady=(8, 0))
+        ttk.Label(frame, text="Passphrase", style="Dim.TLabel").pack(anchor="w", pady=(10, 2))
         self.pass1 = tk.StringVar()
-        entry1 = ttk.Entry(frame, textvariable=self.pass1, show="*", width=30)
+        entry1 = ttk.Entry(frame, textvariable=self.pass1, show="*", width=30, style="Dark.TEntry")
         entry1.pack(anchor="w")
 
         self.pass2 = None
         if self.is_new:
-            ttk.Label(frame, text="Confirm passphrase:").pack(anchor="w", pady=(8, 0))
+            ttk.Label(frame, text="Confirm passphrase", style="Dim.TLabel").pack(anchor="w", pady=(10, 2))
             self.pass2 = tk.StringVar()
-            ttk.Entry(frame, textvariable=self.pass2, show="*", width=30).pack(anchor="w")
+            ttk.Entry(
+                frame, textvariable=self.pass2, show="*", width=30, style="Dark.TEntry",
+            ).pack(anchor="w")
 
-        btns = ttk.Frame(frame)
-        btns.pack(anchor="e", pady=(12, 0))
-        ttk.Button(btns, text="Cancel", command=self._cancel).pack(side="left", padx=(0, 6))
-        submit = ttk.Button(btns, text="Continue", command=self._submit)
+        btns = ttk.Frame(frame, style="Dark.TFrame")
+        btns.pack(anchor="e", pady=(16, 0))
+        ttk.Button(btns, text="Cancel", style="Plain.TButton", command=self._cancel).pack(side="left", padx=(0, 6))
+        submit = ttk.Button(btns, text="Continue", style="Accent.TButton", command=self._submit)
         submit.pack(side="left")
 
         entry1.bind("<Return>", lambda e: self._submit())
@@ -191,6 +195,10 @@ def _style_dark(root):
         padding=(10, 6), borderwidth=0,
     )
     style.map("Plain.TButton", background=[("active", "#2e3340")])
+    style.configure(
+        "Dark.TEntry", fieldbackground=_BG_PANEL, foreground=_FG,
+        insertcolor=_FG, borderwidth=0, padding=6,
+    )
     return style
 
 
@@ -215,7 +223,17 @@ def _make_tray_icon(node, on_open, on_quit):
         )
         return pystray.Icon("lapsecoin", img, "LapseCoin", menu)
     except Exception as e:
-        log.debug("[gui] tray icon unavailable, falling back to minimize: %s", e)
+        # On Linux, pystray needs an actual tray-capable backend (AppIndicator/
+        # GTK) beyond just `pip install pystray` -- print this instead of only
+        # logging at debug, since a silent fallback here is exactly what
+        # looked broken before.
+        print(
+            f"\nSystem tray icon unavailable ({e}); the window will minimize "
+            "to the taskbar instead.\n"
+            "On Linux this is usually a missing tray backend, try:\n"
+            "  Debian/Ubuntu:  sudo apt install gir1.2-ayatanaappindicator3-0.1\n"
+            "  Fedora:         sudo dnf install libappindicator-gtk3\n"
+        )
         return None
 
 
@@ -257,23 +275,39 @@ def run_status_window(node, udp, private_port, log_file):
         header, text="Node is running", style="Dim.TLabel", font=("", 9),
     ).pack(anchor="w", pady=(0, 16))
 
-    status_var = tk.StringVar(value="starting…")
-    status_panel = ttk.Frame(outer, style="Dark.TFrame")
-    status_panel.pack(fill="x", pady=(0, 20))
-    ttk.Label(
-        status_panel, textvariable=status_var, style="Dark.TLabel", font=("Consolas", 10),
-    ).pack(anchor="w")
+    status_frame = ttk.Frame(outer, style="Dark.TFrame")
+    status_frame.pack(fill="x", pady=(0, 20))
+
+    height_var = tk.StringVar(value="—")
+    peers_var = tk.StringVar(value="—")
+    mempool_var = tk.StringVar(value="—")
+    error_var = tk.StringVar(value="")
+
+    def _stat_row(row, label, var):
+        ttk.Label(status_frame, text=label, style="Dim.TLabel").grid(
+            row=row, column=0, sticky="w", pady=3,
+        )
+        ttk.Label(
+            status_frame, textvariable=var, style="Dark.TLabel", font=("Consolas", 11, "bold"),
+        ).grid(row=row, column=1, sticky="e", padx=(24, 0), pady=3)
+
+    status_frame.columnconfigure(1, weight=1)
+    _stat_row(0, "Height", height_var)
+    _stat_row(1, "Peers", peers_var)
+    _stat_row(2, "Mempool", mempool_var)
+    ttk.Label(status_frame, textvariable=error_var, style="Dim.TLabel", wraplength=360).grid(
+        row=3, column=0, columnspan=2, sticky="w", pady=(6, 0),
+    )
 
     def refresh():
         try:
             info = node.get_info()
-            status_var.set(
-                f"Height    {info['height']}\n"
-                f"Peers     {info['peer_count']}\n"
-                f"Mempool   {info['mempool_size']}"
-            )
+            height_var.set(f"{info['height']:,}")
+            peers_var.set(f"{info['peer_count']:,}")
+            mempool_var.set(f"{info['mempool_size']:,}")
+            error_var.set("")
         except Exception as e:
-            status_var.set(f"(status unavailable: {e})")
+            error_var.set(f"status unavailable: {e}")
         root.after(3000, refresh)
 
     btns = ttk.Frame(outer, style="Dark.TFrame")
@@ -327,9 +361,16 @@ def run_status_window(node, udp, private_port, log_file):
     tray_icon = _make_tray_icon(node, _on_tray_open, _on_tray_quit)
 
     if tray_icon is not None:
-        import threading
-        threading.Thread(target=tray_icon.run, daemon=True).start()
-        root.protocol("WM_DELETE_WINDOW", _hide)
+        # run_detached() lets pystray pick the correct run strategy per
+        # platform (some backends need the main thread) instead of us
+        # forcing a bare background thread that only some backends tolerate.
+        try:
+            tray_icon.run_detached()
+            root.protocol("WM_DELETE_WINDOW", _hide)
+        except Exception as e:
+            print(f"\nCould not start tray icon ({e}); minimizing to taskbar instead.\n")
+            tray_icon = None
+            root.protocol("WM_DELETE_WINDOW", root.iconify)
     else:
         # No tray available on this platform/setup -- fall back to a plain
         # minimize so the user always has a way back to the window rather
