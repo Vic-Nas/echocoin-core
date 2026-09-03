@@ -21,6 +21,28 @@ import crypto
 
 log = logging.getLogger("ec.gui")
 
+_ICON_SVG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lapsecoin.svg")
+
+
+def _apply_icon(root):
+    """Rasterize the repo's lapsecoin.svg in memory and set it as the window
+    icon. No generated asset checked into the repo or written to disk --
+    cairosvg is already a hard dependency (used elsewhere for the app), so
+    this stays a single source of truth for the logo. Failure here should
+    never take down the GUI itself, worst case the window just keeps
+    whatever default icon the OS/tkinter picks."""
+    try:
+        import cairosvg
+        from PIL import Image, ImageTk
+
+        png_bytes = cairosvg.svg2png(url=_ICON_SVG, output_width=64, output_height=64)
+        img = Image.open(__import__("io").BytesIO(png_bytes))
+        photo = ImageTk.PhotoImage(img)
+        root.iconphoto(True, photo)
+        root._icon_photo = photo  # keep a reference; tkinter drops GC'd PhotoImages
+    except Exception as e:
+        log.debug("[gui] could not set window icon: %s", e)
+
 
 class _PassphraseDialog:
     """Blocking passphrase entry with inline retry -- a wrong passphrase or
@@ -36,6 +58,7 @@ class _PassphraseDialog:
         self.root.title("LapseCoin")
         self.root.resizable(False, False)
         self.root.protocol("WM_DELETE_WINDOW", self._cancel)
+        _apply_icon(self.root)
 
         pad = {"padx": 12, "pady": 6}
         frame = ttk.Frame(self.root)
@@ -155,6 +178,7 @@ def run_status_window(node, udp, private_port, log_file):
     root = tk.Tk()
     root.title("LapseCoin")
     root.resizable(False, False)
+    _apply_icon(root)
 
     pad = {"padx": 14, "pady": 8}
     frame = ttk.Frame(root)
