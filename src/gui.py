@@ -21,7 +21,34 @@ import crypto
 
 log = logging.getLogger("ec.gui")
 
-_ICON_SVG = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lapsecoin.svg")
+
+def _resource_dir():
+    """Directory to look for bundled assets in. Tries a few candidate
+    locations rather than assuming one exact layout, since PyInstaller's
+    onedir output layout has changed across versions (6.x moved bundled
+    data into an _internal/ subfolder next to the executable rather than
+    flat alongside it), and the AppImage wrapping step in the Makefile
+    adds another layer on top of that."""
+    candidates = []
+    if getattr(sys, "frozen", False):
+        if hasattr(sys, "_MEIPASS"):
+            candidates.append(sys._MEIPASS)
+        exe_dir = os.path.dirname(os.path.abspath(sys.executable))
+        candidates.append(exe_dir)
+        candidates.append(os.path.join(exe_dir, "_internal"))
+    else:
+        candidates.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    for c in candidates:
+        if os.path.exists(os.path.join(c, "lapsecoin.svg")):
+            return c
+    # Nothing found -- return the first candidate anyway so callers get a
+    # consistent (if wrong) path and _apply_icon's own try/except handles
+    # the resulting failure gracefully rather than crashing here.
+    return candidates[0] if candidates else "."
+
+
+_ICON_SVG = os.path.join(_resource_dir(), "lapsecoin.svg")
 
 
 def _apply_icon(root):
