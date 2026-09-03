@@ -199,7 +199,6 @@ def main():
             else:
                 print("Not installing. Re-run with --no-gui to start headless.")
                 sys.exit(1)
-            use_gui = False
     if use_gui:
         pk, kek = gui.load_or_create_key_gui(args.keyfile)
     else:
