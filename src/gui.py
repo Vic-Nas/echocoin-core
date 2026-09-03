@@ -84,14 +84,6 @@ class _PassphraseDialog:
             self.pass2 = tk.StringVar()
             ttk.Entry(frame, textvariable=self.pass2, show="*", width=30).pack(anchor="w")
 
-        self.startup_var = None
-        if self.is_new:
-            self.startup_var = tk.BooleanVar(value=True)
-            ttk.Checkbutton(
-                frame, text="Run LapseCoin automatically on startup",
-                variable=self.startup_var,
-            ).pack(anchor="w", pady=(10, 0))
-
         btns = ttk.Frame(frame)
         btns.pack(anchor="e", pady=(12, 0))
         ttk.Button(btns, text="Cancel", command=self._cancel).pack(side="left", padx=(0, 6))
@@ -126,12 +118,6 @@ class _PassphraseDialog:
             except Exception as e:
                 self.error_var.set(f"Could not create key: {e}")
                 return
-
-            if self.startup_var is not None and self.startup_var.get():
-                import startup
-                if not startup.enable():
-                    log.warning("[gui] run-on-startup could not be enabled")
-
             self.result = (pk, kek)
             self.root.destroy()
             return
