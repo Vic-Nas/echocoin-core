@@ -65,7 +65,7 @@
         <td data-label="Hash"><a href="/explorer/tx/{{ h }}">{{ h[:20] }}…</a></td>
         {% endif %}
         <td data-label="Direction" style="color:{{ 'var(--ink)' if kind == 'block' else ('var(--red)' if direction == 'sent' else 'var(--green)') }}">{{ direction }}</td>
-        <td data-label="Amount">{{ fmt_balance(payload) if kind == "block" else (payload.outputs | sum(attribute='amount')) }}</td>
+        <td data-label="Amount">{{ payload if kind == "block" else (payload.outputs | sum(attribute='amount')) }}</td>
       </tr>
       {% endfor %}
     {% else %}
