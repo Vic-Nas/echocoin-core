@@ -35,7 +35,7 @@
   </div>
 </div>
 <div class="pager">
-{% if b.height > 0 %}<a href="/explorer/block/{{ b.height - 1 }}">&larr; prev</a>{% endif %}
-{% if has_next %}<a href="/explorer/block/{{ b.height + 1 }}">&rarr; next</a>{% endif %}
+{% if b.height > 0 %}<a href="/explorer/block/{{ b.height - 1 }}">Prev</a>{% endif %}
+{% if has_next %}<a href="/explorer/block/{{ b.height + 1 }}">Next</a>{% endif %}
 </div>
 {% endblock %}
