@@ -15,9 +15,8 @@
     <div style="color:var(--muted);font-size:.75rem">per block</div>
   </div>
   <div class="stat">
-    <div class="stat-label">Difficulty</div>
-    <div class="stat-value" style="font-size:1rem" id="live-difficulty">{{ "{:,}".format(info.vdf_iterations) }}</div>
-    <div style="color:var(--muted);font-size:.75rem" id="live-retarget">retargets at block {{ "{:,}".format(info.next_retarget_height) }}</div>
+    <div class="stat-label">Block time vs median</div>
+    <div class="stat-value" style="font-size:1rem;color:{{ 'var(--red)' if info.block_time_diff > 0 else 'var(--green)' }}" id="live-block-time-diff">{{ "+" if info.block_time_diff > 0 }}{{ "%.0f" | format(info.block_time_diff) }}s</div>
   </div>
 </div>
 <div class="card">
@@ -74,8 +73,9 @@
       document.getElementById("live-circulating-pct").textContent =
         (info.total_minted / SUPPLY_CAP * 100).toFixed(4) + "% of 21M cap";
       document.getElementById("live-reward").textContent = "+" + fmtBalance(info.block_reward);
-      document.getElementById("live-difficulty").textContent = info.vdf_iterations.toLocaleString();
-      document.getElementById("live-retarget").textContent = "retargets at block " + info.next_retarget_height.toLocaleString();
+      const diffEl = document.getElementById("live-block-time-diff");
+      diffEl.textContent = (info.block_time_diff > 0 ? "+" : "") + info.block_time_diff.toFixed(0) + "s";
+      diffEl.style.color = info.block_time_diff > 0 ? "var(--red)" : "var(--green)";
 
       const txBody = document.getElementById("live-recent-txs");
       const txs = info.recent_txs || [];

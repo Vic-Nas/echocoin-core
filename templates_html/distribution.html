@@ -10,7 +10,7 @@
     {% if rows %}
       {% for addr, bal in rows %}
       <tr>
-        <td data-label="Address" class="hash-short"><a href="/address?addr={{ addr }}">{{ addr }}</a></td>
+        <td data-label="Address" class="hash-short"><a href="/address?addr={{ addr }}" title="{{ addr }}">{{ addr[:28] }}…</a></td>
         <td data-label="Balance">{{ fmt_balance(bal) }}</td>
       </tr>
       {% endfor %}

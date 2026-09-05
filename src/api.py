@@ -51,7 +51,6 @@ Private app  (default port 8334, 127.0.0.1 only):
 import logging
 import os
 import secrets
-import statistics
 import sys
 
 import markdown
@@ -165,25 +164,6 @@ def _pagination_window(page, total_pages, radius=2):
         window.append(p)
         prev = p
     return window
-
-
-# Blocks looked at on either side of a given block when computing its
-# "vs median" block time -- a display-only figure, distinct from (and much
-# smaller than) the consensus retarget window in get_vdf_iterations.
-BLOCK_TIME_MEDIAN_WINDOW = 100
-
-
-def _block_time_stats(chain, height):
-    """This block's own time-since-parent vs. the local median, and their
-    difference. None for genesis, which has no parent to measure from."""
-    if height <= 0:
-        return None
-    own = chain[height]["timestamp"] - chain[height - 1]["timestamp"]
-    lo = max(1, height - BLOCK_TIME_MEDIAN_WINDOW)
-    deltas = [chain[h]["timestamp"] - chain[h - 1]["timestamp"]
-              for h in range(lo, height + 1)]
-    median = statistics.median(deltas)
-    return {"own": own, "median": median, "diff": own - median}
 
 
 def _recent_committed_txs(chain, limit):
@@ -401,7 +381,7 @@ def _shared_read_only_routes(app, node, pool, limiter,
         tx_rows = [(tx_mod.tx_hash(t), t, _tx_amount(t)) for t in b["transactions"]]
         return render_template("block_detail.html", title=f"Block {height}",
             b=b, tx_rows=tx_rows, has_next=height + 1 < len(chain),
-            time_stats=_block_time_stats(chain, height))
+            time_stats=block_mod.block_time_stats(chain, height))
 
     @app.route("/explorer/tx/<tx_hash>", endpoint=pfx+"tx_detail")
     def tx_detail(tx_hash):

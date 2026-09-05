@@ -56,6 +56,32 @@ def get_vdf_iterations(chain) -> int:
     return prior_iterations
 
 
+# Blocks looked at on either side of a given block when computing its
+# "vs median" block time for display -- distinct from (and much smaller
+# than) the consensus retarget window in get_vdf_iterations.
+BLOCK_TIME_MEDIAN_WINDOW = 100
+
+
+def block_time_stats(chain, height):
+    """This block's own time-since-parent vs. the local median, and their
+    difference. None for genesis, which has no parent to measure from.
+    Display-only -- not a consensus value."""
+    if height <= 0:
+        return None
+    own = chain[height]["timestamp"] - chain[height - 1]["timestamp"]
+    lo = max(1, height - BLOCK_TIME_MEDIAN_WINDOW)
+    deltas = [chain[h]["timestamp"] - chain[h - 1]["timestamp"]
+              for h in range(lo, height + 1)]
+    median = statistics.median(deltas)
+    return {"own": own, "median": median, "diff": own - median}
+
+
+def tip_block_time_diff(chain):
+    """own - median for the chain's current tip, or 0 for a genesis-only chain."""
+    stats = block_time_stats(chain, len(chain) - 1)
+    return stats["diff"] if stats else 0
+
+
 def vdf_challenge(previous_hash: str, builder: str) -> bytes:
     """Challenge a block's VDF must be evaluated over.
 
