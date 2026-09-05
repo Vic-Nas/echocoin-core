@@ -10,16 +10,6 @@
     <tr><td>Height</td><td>{{ b.height }}</td></tr>
     <tr><td>Transactions</td><td>{{ b.transactions | length }}</td></tr>
     <tr><td>Builder</td><td class="hash-short" style="word-break:break-all">{{ b.builder or "(none)" }}</td></tr>
-    <tr><td>Timestamp</td><td>{{ b.timestamp | int }}</td></tr>
-    <tr><td>Difficulty (VDF iterations)</td><td>{{ "{:,}".format(b.vdf_iterations) if b.vdf_iterations else "-" }}</td></tr>
-    {% if time_stats %}
-    <tr><td>Block time</td><td>{{ time_stats.own }}s</td></tr>
-    <tr><td>Median block time</td><td>{{ "%.1f" | format(time_stats.median) }}s</td></tr>
-    <tr><td>Difference from median</td>
-      <td style="color:{{ 'var(--red)' if time_stats.diff > 0 else 'var(--green)' }}">
-        {{ "+" if time_stats.diff > 0 }}{{ "%.1f" | format(time_stats.diff) }}s
-      </td></tr>
-    {% endif %}
   </table>
 </div>
 <div class="card">

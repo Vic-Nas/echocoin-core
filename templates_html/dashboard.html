@@ -14,11 +14,6 @@
     <div class="stat-value" style="font-size:1rem;color:var(--green)" id="live-reward">+{{ fmt_balance(info.block_reward) }}</div>
     <div style="color:var(--muted);font-size:.75rem">per block</div>
   </div>
-  <div class="stat">
-    <div class="stat-label">Difficulty</div>
-    <div class="stat-value" style="font-size:1rem" id="live-difficulty">{{ "{:,}".format(info.vdf_iterations) }}</div>
-    <div style="color:var(--muted);font-size:.75rem" id="live-retarget">retargets at block {{ "{:,}".format(info.next_retarget_height) }}</div>
-  </div>
 </div>
 <div class="card">
   <div class="card-title">Address</div>
@@ -74,8 +69,6 @@
       document.getElementById("live-circulating-pct").textContent =
         (info.total_minted / SUPPLY_CAP * 100).toFixed(4) + "% of 21M cap";
       document.getElementById("live-reward").textContent = "+" + fmtBalance(info.block_reward);
-      document.getElementById("live-difficulty").textContent = info.vdf_iterations.toLocaleString();
-      document.getElementById("live-retarget").textContent = "retargets at block " + info.next_retarget_height.toLocaleString();
 
       const txBody = document.getElementById("live-recent-txs");
       const txs = info.recent_txs || [];
