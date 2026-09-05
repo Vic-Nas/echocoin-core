@@ -24,13 +24,19 @@ Public app  (default port 8333, externally reachable):
           "block_reward", "block_time_diff"}
 
     GET  /api/block/<height>          full block object or {"error": "not found"}
-    GET  /api/tx/<hash>               transaction object (confirmed or mempool)
+    GET  /api/tx/<hash>               transaction object (confirmed or mempool),
+                                       plus "confirmations": 0 while unconfirmed,
+                                       else current height minus the tx's block
+                                       height, plus 1
 
     GET  /api/address/<addr>/balance
          {"address", "balance_ticks", "balance_lapse"}
 
     GET  /api/address/<addr>/history
          [{"height", "tx_hash", "direction": "sent"|"received", "tx"}, ...]
+
+    GET  /api/address/<addr>/valid
+         {"address", "valid": true|false}
 
     GET  /api/mempool
          {"size": <n>, "transactions": [{"hash", "from", "outputs", "fee"}, ...]}
@@ -47,6 +53,26 @@ Private app  (default port 8334, 127.0.0.1 only):
   All public UI and JSON API endpoints, plus:
     GET/POST /send                    build and sign a send transaction
     POST     /api/peers/add           {"host": <str>, "port": <int>}
+
+Exchange / third-party integration:
+  There is no dedicated integration API; the JSON API above is enough to
+  build one, following the same shape most exchanges already expect from a
+  Bitcoin-Core-style node (getbalance, listtransactions, gettransaction,
+  validateaddress, sendtoaddress):
+    - deposit detection: poll /api/address/<addr>/history for new entries
+    - confirmation depth: the "confirmations" field on /api/tx/<hash>
+    - address format check: /api/address/<addr>/valid
+    - withdrawal: build and sign a tx exactly like tx.py's create() does,
+      then POST it to /api/tx/send. Signing is never done over the network;
+      an integrator holds and signs with their own keys, the same as any
+      Bitcoin-style wallet integration would.
+
+  One real structural difference from Bitcoin: a LapseCoin node has a
+  single wallet address, not per-customer address generation (no
+  getnewaddress equivalent). An integrator wanting one deposit address per
+  customer needs to run one node per customer, or track customers by a
+  memo/tag against a single shared address, the same way exchanges already
+  handle XRP- or Monero-style account-index coins.
 """
 
 import logging
@@ -590,15 +616,20 @@ def _shared_read_only_routes(app, node, pool, limiter,
     def api_get_tx(tx_hash_val):
         t = node.mempool.get(tx_hash_val)
         if t:
-            return jsonify(t)
+            return jsonify(dict(t, confirmations=0))
         height = node.storage.get_tx_height(tx_hash_val)
         if height is not None:
             chain = node.view.chain
             if 0 <= height < len(chain):
                 for t in chain[height]["transactions"]:
                     if tx_mod.tx_hash(t) == tx_hash_val:
-                        return jsonify(t)
+                        confirmations = len(chain) - height
+                        return jsonify(dict(t, confirmations=confirmations))
         return jsonify({"error": "not found"}), 404
+
+    @app.route("/api/address/<addr>/valid", endpoint=pfx+"api_valid_address")
+    def api_valid_address(addr):
+        return jsonify({"address": addr, "valid": crypto_mod.is_valid_address(addr)})
 
     @app.route("/api/address/<addr>/balance", endpoint=pfx+"api_balance")
     def api_balance(addr):
