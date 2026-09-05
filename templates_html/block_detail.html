@@ -10,6 +10,7 @@
     <tr><td>Height</td><td>{{ b.height }}</td></tr>
     <tr><td>Transactions</td><td>{{ b.transactions | length }}</td></tr>
     <tr><td>Builder</td><td class="hash-short" style="word-break:break-all">{{ b.builder or "(none)" }}</td></tr>
+    <tr><td>Reward</td><td style="color:var(--green)">{{ fmt_balance(reward) if b.builder else "-" }}</td></tr>
     {% if time_stats %}
     <tr><td>Block time</td><td>{{ time_stats.own }}s
       <span style="color:{{ 'var(--red)' if time_stats.diff > 0 else 'var(--green)' }}">

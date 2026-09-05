@@ -193,6 +193,19 @@ def _get_address_history(addr, node):
     return history
 
 
+def _block_reward(chain, height):
+    """Mint reward for the block at `height`, replaying total_minted from
+    genesis the same way _get_mined_blocks_for_addr and the real ledger do,
+    so this always agrees with what the address page shows for the same
+    block. 0 for genesis (no builder, nothing minted)."""
+    total_minted = 0
+    for h in range(height):
+        r = state_mod.compute_reward(total_minted)
+        if r >= 1:
+            total_minted += r
+    return state_mod.compute_reward(total_minted)
+
+
 def _get_mined_blocks_for_addr(addr, node):
     """Blocks built by addr, with the reward + fees paid to the builder.
 
@@ -379,9 +392,11 @@ def _shared_read_only_routes(app, node, pool, limiter,
                 message="Block not found."), 404
         b = chain[height]
         tx_rows = [(tx_mod.tx_hash(t), t, _tx_amount(t)) for t in b["transactions"]]
+        reward = (_block_reward(chain, height) + block_mod.block_fees(b)
+                  if b.get("builder") else 0)
         return render_template("block_detail.html", title=f"Block {height}",
             b=b, tx_rows=tx_rows, has_next=height + 1 < len(chain),
-            time_stats=block_mod.block_time_stats(chain, height))
+            time_stats=block_mod.block_time_stats(chain, height), reward=reward)
 
     @app.route("/explorer/tx/<tx_hash>", endpoint=pfx+"tx_detail")
     def tx_detail(tx_hash):
