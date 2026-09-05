@@ -51,6 +51,7 @@ Private app  (default port 8334, 127.0.0.1 only):
 import logging
 import os
 import secrets
+import statistics
 import sys
 
 import markdown
@@ -116,6 +117,27 @@ def compute_holder_histogram(balances):
     return list(zip(labels, counts))
 
 
+def bucket_index_for_lapse(lapse_amt):
+    """Which HOLDER_BUCKET_EDGES bucket a whole-LAPSE amount falls into.
+    Mirrors the bucketing loop in compute_holder_histogram exactly, so a
+    balance always lands in the same bucket as its own histogram bar."""
+    edges = HOLDER_BUCKET_EDGES
+    i = 0
+    while i < len(edges) and lapse_amt >= edges[i]:
+        i += 1
+    return i
+
+
+def bucket_label(i):
+    """Label for bucket index i, matching compute_holder_histogram's labels."""
+    edges = HOLDER_BUCKET_EDGES
+    if i == 0:
+        return f"<{edges[0]:,}"
+    if i == len(edges):
+        return f"{edges[-1]:,}+"
+    return f"{edges[i - 1]:,}-{edges[i]:,}"
+
+
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
@@ -143,6 +165,25 @@ def _pagination_window(page, total_pages, radius=2):
         window.append(p)
         prev = p
     return window
+
+
+# Blocks looked at on either side of a given block when computing its
+# "vs median" block time -- a display-only figure, distinct from (and much
+# smaller than) the consensus retarget window in get_vdf_iterations.
+BLOCK_TIME_MEDIAN_WINDOW = 100
+
+
+def _block_time_stats(chain, height):
+    """This block's own time-since-parent vs. the local median, and their
+    difference. None for genesis, which has no parent to measure from."""
+    if height <= 0:
+        return None
+    own = chain[height]["timestamp"] - chain[height - 1]["timestamp"]
+    lo = max(1, height - BLOCK_TIME_MEDIAN_WINDOW)
+    deltas = [chain[h]["timestamp"] - chain[h - 1]["timestamp"]
+              for h in range(lo, height + 1)]
+    median = statistics.median(deltas)
+    return {"own": own, "median": median, "diff": own - median}
 
 
 def _recent_committed_txs(chain, limit):
@@ -304,7 +345,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
         nav_active = {
             "dashboard": "dashboard", "explorer": "explorer",
             "block_detail": "explorer", "tx_detail": "explorer",
-            "address_lookup": "address", "peers": "peers",
+            "address_lookup": "address", "distribution_bucket": "address",
+            "peers": "peers",
             "whitepaper": "whitepaper", "send": "send", "rewards": "rewards",
         }.get(endpoint)
         return {"is_private": is_private,
@@ -358,7 +400,8 @@ def _shared_read_only_routes(app, node, pool, limiter,
         b = chain[height]
         tx_rows = [(tx_mod.tx_hash(t), t, _tx_amount(t)) for t in b["transactions"]]
         return render_template("block_detail.html", title=f"Block {height}",
-            b=b, tx_rows=tx_rows, has_next=height + 1 < len(chain))
+            b=b, tx_rows=tx_rows, has_next=height + 1 < len(chain),
+            time_stats=_block_time_stats(chain, height))
 
     @app.route("/explorer/tx/<tx_hash>", endpoint=pfx+"tx_detail")
     def tx_detail(tx_hash):
@@ -420,6 +463,28 @@ def _shared_read_only_routes(app, node, pool, limiter,
             ctx["has_prev"] = page > 1
             ctx["has_next"] = end < len(newest_first)
         return render_template("address.html", **ctx)
+
+    @app.route("/address/distribution/<int:bucket>", endpoint=pfx+"distribution_bucket")
+    def distribution_bucket(bucket):
+        edges = HOLDER_BUCKET_EDGES
+        if bucket < 0 or bucket > len(edges):
+            return render_template("error.html", title="Not found",
+                message="No such distribution bucket."), 404
+        v = node.view
+        rows = sorted(
+            ((addr, bal) for addr, bal in v.state.all_balances().items()
+             if bucket_index_for_lapse(bal // TICKS_PER_LAPSE) == bucket),
+            key=lambda r: r[1], reverse=True)
+        total = len(rows)
+        total_pages = max(-(-total // BLOCKS_PER_PAGE), 1)
+        page = min(max(request.args.get("page", 1, type=int) or 1, 1), total_pages)
+        start = (page - 1) * BLOCKS_PER_PAGE
+        end = start + BLOCKS_PER_PAGE
+        return render_template("distribution.html", title="Distribution",
+            label=bucket_label(bucket), bucket=bucket, rows=rows[start:end], total=total,
+            page=page, total_pages=total_pages,
+            page_window=_pagination_window(page, total_pages),
+            has_prev=page > 1, has_next=end < total)
 
     @app.route("/whitepaper", endpoint=pfx+"whitepaper")
     def whitepaper():

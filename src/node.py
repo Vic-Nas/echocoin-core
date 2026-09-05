@@ -27,7 +27,7 @@ import mempool as mempool_mod
 import tx as tx_mod
 import vdf as vdf_mod
 from chainstate import ChainState
-from params import DB_PATH
+from params import DB_PATH, VDF_ADJUST_INTERVAL
 from storage import Storage
 
 log = logging.getLogger("ec.node")
@@ -166,16 +166,19 @@ class Node:
 
     def get_info(self):
         v = self.view
+        next_retarget = ((v.height // VDF_ADJUST_INTERVAL) + 1) * VDF_ADJUST_INTERVAL
         return {
-            "height":       v.height,
-            "tip_hash":     v.tip["hash"],
-            "genesis_hash": v.genesis_hash,
-            "mempool_size": self.mempool.size(),
-            "address":      self.addr,
-            "peer_count":   self.pool.count(),
-            "total_minted": v.state.total_minted,
-            "can_mint":     v.state.compute_can_mint(),
-            "block_reward": v.state.compute_block_reward(),
+            "height":              v.height,
+            "tip_hash":            v.tip["hash"],
+            "genesis_hash":        v.genesis_hash,
+            "mempool_size":        self.mempool.size(),
+            "address":             self.addr,
+            "peer_count":          self.pool.count(),
+            "total_minted":        v.state.total_minted,
+            "can_mint":            v.state.compute_can_mint(),
+            "block_reward":        v.state.compute_block_reward(),
+            "vdf_iterations":      block_mod.get_vdf_iterations(v.chain),
+            "next_retarget_height": next_retarget,
         }
 
     def start(self, kek):
