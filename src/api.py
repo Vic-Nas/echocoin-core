@@ -12,6 +12,7 @@ Public app  (default port 8333, externally reachable):
     GET  /explorer/block/<height>     block detail
     GET  /explorer/tx/<hash>          transaction detail
     GET  /address?addr=<addr>         address balance and history
+    GET  /address/distribution/<n>    addresses in wealth-distribution bucket n
     GET  /whitepaper                  protocol whitepaper
     GET  /peers                       connected peer list
     GET  /send                        403 (local interface only)
@@ -20,7 +21,7 @@ Public app  (default port 8333, externally reachable):
     GET  /api/info
          {"height", "tip_hash", "genesis_hash", "mempool_size",
           "address", "peer_count", "total_minted", "can_mint",
-          "block_reward"}
+          "block_reward", "block_time_diff"}
 
     GET  /api/block/<height>          full block object or {"error": "not found"}
     GET  /api/tx/<hash>               transaction object (confirmed or mempool)
