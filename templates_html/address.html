@@ -16,13 +16,13 @@
   <div class="card-title">Wealth distribution ({{ holder_count }} holder{{ 's' if holder_count != 1 }})</div>
   <div class="histo">
   {% for label, count in histogram %}
-  <div class="histo-row">
+  <a class="histo-row" href="/address/distribution/{{ loop.index0 }}">
     <span class="histo-label">{{ label }}</span>
     <div class="histo-track">
       <div class="histo-bar" style="width:{{ '%.2f' % (count / histogram_max * 100 if histogram_max else 0) }}%"></div>
     </div>
     <span class="histo-count">{{ count }}</span>
-  </div>
+  </a>
   {% endfor %}
   </div>
   <div class="wealth-caption">balance buckets in whole LAPSE, log-scaled</div>
@@ -31,7 +31,8 @@
   .wealth-caption { font-size:.68rem; color:var(--muted); margin-top:.4rem }
 
   .histo { display:flex; flex-direction:column; gap:.22rem }
-  .histo-row { display:grid; grid-template-columns:11rem 1fr 2.5rem; align-items:center; gap:.6rem; font-size:.74rem }
+  .histo-row { display:grid; grid-template-columns:11rem 1fr 2.5rem; align-items:center; gap:.6rem; font-size:.74rem; text-decoration:none; color:inherit }
+  .histo-row:hover .histo-bar { background:var(--green) }
   .histo-label { color:var(--muted); font-family:var(--mono); text-align:right; white-space:nowrap }
   .histo-track { background:var(--paper-2); border:1px solid var(--rule-lt); overflow:hidden; height:.95rem }
   .histo-bar { height:100%; min-width:3px; background:var(--ink); }
