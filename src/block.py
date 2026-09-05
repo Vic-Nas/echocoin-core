@@ -69,7 +69,7 @@ def block_time_stats(chain, height):
     if height <= 0:
         return None
     own = chain[height]["timestamp"] - chain[height - 1]["timestamp"]
-    lo = max(1, height - BLOCK_TIME_MEDIAN_WINDOW)
+    lo = max(1, height - BLOCK_TIME_MEDIAN_WINDOW + 1)
     deltas = [chain[h]["timestamp"] - chain[h - 1]["timestamp"]
               for h in range(lo, height + 1)]
     median = statistics.median(deltas)
