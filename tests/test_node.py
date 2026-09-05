@@ -229,14 +229,30 @@ class TestSimpleAccessors:
         node, *_ = node_env
         assert node.get_info()["block_time_diff"] is None
 
-    def test_block_time_diff_compares_against_own_build_history_only(self, node_env):
-        """own_block_time_diff must reflect this node's own real VDF times,
-        not chain timestamps -- so it has to pick up a discarded attempt
-        (never appended to the chain) the same as a committed one."""
+    def test_block_time_diff_is_none_with_only_genesis_even_if_own_builds_exist(self, node_env):
+        """No chain-side median is possible with just genesis (no block-to-
+        block delta exists yet), so the comparison has nothing to compare
+        against even though this node has real build history."""
         node, *_ = node_env
-        for seconds in [150.0] * 29 + [168.0]:
+        node._own_build_seconds.append(130.0)
+        assert node.get_info()["block_time_diff"] is None
+
+    def test_block_time_diff_compares_own_median_to_chain_median(self, node_env):
+        """block_time_diff must be this node's own median build time minus
+        the chain's own recent median block-to-block time -- not this
+        node's latest build vs its own history, and not tied to whichever
+        node happened to build the current tip."""
+        node, *_ = node_env
+        cs = ChainState.from_genesis()
+        for h in range(1, 6):
+            # 150s real gap at every height (120 base + 30*h offset).
+            blk = make_block(h, cs.tip["hash"], [], timestamp_offset=30 * h)
+            cs = cs.apply_block(blk)
+        node.cs = cs
+        node.view = NodeView(cs)
+        for seconds in [130.0] * 10:
             node._own_build_seconds.append(seconds)
-        assert node.get_info()["block_time_diff"] == pytest.approx(18.0)
+        assert node.get_info()["block_time_diff"] == pytest.approx(130.0 - 150.0)
 
     def test_block_time_diff_window_caps_at_30(self, node_env):
         node, *_ = node_env
