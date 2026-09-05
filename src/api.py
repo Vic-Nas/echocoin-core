@@ -49,7 +49,7 @@ Public app  (default port 8333, externally reachable):
            {"ok": true,  "tx_hash": <hex>}
            {"ok": false, "error": <string>}
 
-Private app  (default port 8334, 127.0.0.1 only):
+Private app  (default port 8335 or public port +2, 127.0.0.1 only):
   All public UI and JSON API endpoints, plus:
     GET/POST /send                    build and sign a send transaction
     POST     /api/peers/add           {"host": <str>, "port": <int>}
