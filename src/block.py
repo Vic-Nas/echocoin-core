@@ -76,12 +76,6 @@ def block_time_stats(chain, height):
     return {"own": own, "median": median, "diff": own - median}
 
 
-def tip_block_time_diff(chain):
-    """own - median for the chain's current tip, or 0 for a genesis-only chain."""
-    stats = block_time_stats(chain, len(chain) - 1)
-    return stats["diff"] if stats else 0
-
-
 def vdf_challenge(previous_hash: str, builder: str) -> bytes:
     """Challenge a block's VDF must be evaluated over.
 

@@ -14,8 +14,10 @@ Flask threads read node.view (a NodeView snapshot). The node loop is the
 sole writer; every mutation publishes a new snapshot atomically.
 """
 
+import collections
 import logging
 import queue
+import statistics
 import secrets as _secrets
 import state as state_mod
 import threading
@@ -122,6 +124,16 @@ class Node:
         # submissions that are still pending after RELAY_RETRY_SECONDS.
         self._local_pending = {}
 
+        # Real wall-clock seconds this node itself spent on its last 30 VDF
+        # evaluations -- recorded the moment each one finishes, regardless of
+        # whether the resulting candidate goes on to win its fork race. The
+        # chain only ever holds whichever block won each height, so deriving
+        # "this machine's build time" from chain timestamps would silently
+        # drop every attempt that lost a race and skew toward other builders'
+        # numbers entirely. This is local, in-memory, per-node knowledge --
+        # nothing else has it, so it can't be reconstructed from chain data.
+        self._own_build_seconds = collections.deque(maxlen=30)
+
         self.cs   = self._load_cs()
         self.view = NodeView(self.cs)
 
@@ -164,6 +176,17 @@ class Node:
     def mark_tx_seen(self, tx_hash):
         return self.gossip.mark_seen(tx_hash)
 
+    def own_block_time_diff(self):
+        """This node's most recent VDF build time vs. the median of its last
+        30 (own_build_seconds includes attempts that never made it into the
+        chain -- see the field's docstring). None until this node has
+        completed at least one VDF evaluation."""
+        if not self._own_build_seconds:
+            return None
+        own = self._own_build_seconds[-1]
+        median = statistics.median(self._own_build_seconds)
+        return own - median
+
     def get_info(self):
         v = self.view
         return {
@@ -176,7 +199,7 @@ class Node:
             "total_minted": v.state.total_minted,
             "can_mint":     v.state.compute_can_mint(),
             "block_reward": v.state.compute_block_reward(),
-            "block_time_diff": block_mod.tip_block_time_diff(v.chain),
+            "block_time_diff": self.own_block_time_diff(),
         }
 
     def start(self, kek):
@@ -335,6 +358,7 @@ class Node:
             vdf_out, vdf_proof, vdf_seconds = _fut.result()
         log.info("[vdf] proof ready  height=%d  seconds=%.1f  iterations=%d",
                  cs.height + 1, vdf_seconds, iterations)
+        self._own_build_seconds.append(vdf_seconds)
 
         if self.cs is not cs:
             # A mid-wait sync check adopted a better chain out from under us.

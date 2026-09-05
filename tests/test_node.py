@@ -225,6 +225,25 @@ class TestSimpleAccessors:
         node, *_ = node_env
         assert node.get_info()["height"] == 0
 
+    def test_block_time_diff_is_none_before_any_build(self, node_env):
+        node, *_ = node_env
+        assert node.get_info()["block_time_diff"] is None
+
+    def test_block_time_diff_compares_against_own_build_history_only(self, node_env):
+        """own_block_time_diff must reflect this node's own real VDF times,
+        not chain timestamps -- so it has to pick up a discarded attempt
+        (never appended to the chain) the same as a committed one."""
+        node, *_ = node_env
+        for seconds in [150.0] * 29 + [168.0]:
+            node._own_build_seconds.append(seconds)
+        assert node.get_info()["block_time_diff"] == pytest.approx(18.0)
+
+    def test_block_time_diff_window_caps_at_30(self, node_env):
+        node, *_ = node_env
+        for seconds in [100.0] * 40:
+            node._own_build_seconds.append(seconds)
+        assert len(node._own_build_seconds) == 30
+
 
 # ---------------------------------------------------------------------------
 # 5. submit_tx
