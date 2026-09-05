@@ -59,7 +59,7 @@ def get_vdf_iterations(chain) -> int:
 # Blocks looked at on either side of a given block when computing its
 # "vs median" block time for display -- distinct from (and much smaller
 # than) the consensus retarget window in get_vdf_iterations.
-BLOCK_TIME_MEDIAN_WINDOW = 100
+BLOCK_TIME_MEDIAN_WINDOW = 30
 
 
 def block_time_stats(chain, height):
